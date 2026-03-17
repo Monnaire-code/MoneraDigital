@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"monera-digital/internal/models"
 	"monera-digital/internal/repository"
+	"monera-digital/internal/utils"
 )
 
 type ISafeheronService interface {
@@ -68,7 +68,7 @@ func (s *WithdrawalService) CreateWithdrawal(ctx context.Context, userID int, re
 }
 
 // withdrawWithTransaction handles the DB operations in a transaction
-func (s *WithdrawalService) withdrawWithTransaction(ctx context.Context, userID int, amount float64, address *models.WithdrawalAddress, req models.CreateWithdrawalRequest, shResp *SafeheronWithdrawalResponse, orderPtr **models.WithdrawalOrder) error {
+func (s *WithdrawalService) withdrawWithTransaction(ctx context.Context, userID int, amount string, address *models.WithdrawalAddress, req models.CreateWithdrawalRequest, shResp *SafeheronWithdrawalResponse, orderPtr **models.WithdrawalOrder) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -81,33 +81,33 @@ func (s *WithdrawalService) withdrawWithTransaction(ctx context.Context, userID 
 
 	// Execute all DB operations using the transaction
 
-	// 1. Freeze Balance
+	// 1. Freeze Balance - use CAST for precision
 	_, err = tx.ExecContext(ctx,
-		`UPDATE account SET frozen_balance = frozen_balance + $1, version = version + 1, updated_at = $3 WHERE user_id = $2`,
+		`UPDATE account SET frozen_balance = frozen_balance + CAST($1 AS NUMERIC(65,8)), version = version + 1, updated_at = $3 WHERE user_id = $2`,
 		amount, userID, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to freeze balance: %w", err)
 	}
 
-	// 2. Deduct Balance
+	// 2. Deduct Balance - use CAST for precision
 	result, err := tx.ExecContext(ctx,
-		`UPDATE account SET frozen_balance = frozen_balance - $1, balance = balance - $1, version = version + 1, updated_at = $3 WHERE user_id = $2 AND frozen_balance >= $1`,
+		`UPDATE account SET frozen_balance = frozen_balance - CAST($1 AS NUMERIC(65,8)), balance = balance - CAST($1 AS NUMERIC(65,8)), version = version + 1, updated_at = $3 WHERE user_id = $2 AND balance >= CAST($1 AS NUMERIC(65,8))`,
 		amount, userID, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to deduct balance: %w", err)
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		return fmt.Errorf("failed to deduct balance: account not found or insufficient frozen balance")
+		return fmt.Errorf("failed to deduct balance: account not found or insufficient balance")
 	}
 
 	// 3. Create Order
 	order := &models.WithdrawalOrder{
 		UserID:           userID,
-		Amount:           req.Amount,
+		Amount:           amount,
 		NetworkFee:       shResp.NetworkFee,
 		PlatformFee:      "0",
-		ActualAmount:     req.Amount,
+		ActualAmount:     amount,
 		ChainType:        address.ChainType,
 		CoinType:         req.Asset,
 		ToAddress:        address.WalletAddress,
@@ -141,38 +141,44 @@ func (s *WithdrawalService) withdrawWithTransaction(ctx context.Context, userID 
 }
 
 // validateWithdrawalRequest validates the withdrawal request and returns required resources
-func (s *WithdrawalService) validateWithdrawalRequest(ctx context.Context, userID int, req models.CreateWithdrawalRequest) (float64, *models.WithdrawalAddress, error) {
-	// Validate amount
-	amount, err := strconv.ParseFloat(req.Amount, 64)
-	if err != nil || amount <= 0 {
-		return 0, nil, errors.New("invalid amount")
+func (s *WithdrawalService) validateWithdrawalRequest(ctx context.Context, userID int, req models.CreateWithdrawalRequest) (string, *models.WithdrawalAddress, error) {
+	// Validate amount using decimal utils
+	if !utils.IsValidAmount(req.Amount) {
+		return "", nil, errors.New("invalid amount")
+	}
+
+	// Normalize amount to 8 decimal places
+	normalizedAmount, err := utils.NormalizeString(req.Amount)
+	if err != nil {
+		return "", nil, errors.New("invalid amount format")
 	}
 
 	// Get Account
 	account, err := s.repo.Account.GetByUserIDAndType(ctx, userID, "WEALTH")
 	if err != nil {
 		if err == repository.ErrNotFound {
-			return 0, nil, errors.New("account not found")
+			return "", nil, errors.New("account not found")
 		}
-		return 0, nil, err
+		return "", nil, err
 	}
 
-	// Check balance
-	available := account.Balance - account.FrozenBalance
-	if available < amount {
-		return 0, nil, errors.New("insufficient balance")
+	// Check balance using decimal utils (account.Balance and FrozenBalance are now strings)
+	availableBalance, _ := utils.Sub(account.Balance, account.FrozenBalance)
+	isSufficient, _ := utils.GTE(availableBalance, normalizedAmount)
+	if !isSufficient {
+		return "", nil, errors.New("insufficient balance")
 	}
 
 	// Get Address
 	address, err := s.repo.Address.GetAddressByID(ctx, req.AddressID)
 	if err != nil {
-		return 0, nil, errors.New("address not found")
+		return "", nil, errors.New("address not found")
 	}
 	if address.UserID != userID {
-		return 0, nil, errors.New("address does not belong to user")
+		return "", nil, errors.New("address does not belong to user")
 	}
 
-	return amount, address, nil
+	return normalizedAmount, address, nil
 }
 
 // GetWithdrawalHistory returns the withdrawal history for a user
@@ -192,27 +198,25 @@ func (s *WithdrawalService) GetWithdrawalByID(ctx context.Context, userID int, i
 }
 
 func (s *WithdrawalService) EstimateFee(ctx context.Context, asset, chain, amount string) (string, string, error) {
-	// Stub implementation
-	// Real implementation would call Safeheron or Blockchain node
-	// Fee = Network Fee + Platform Fee
-	// For now, return static or simple calc
-
 	networkFee := "1.0"
 	if asset == "ETH" {
 		networkFee = "0.002"
 	}
 
-	// platformFee := "0" // 0.5% maybe?
-	amt, _ := strconv.ParseFloat(amount, 64)
-	if amt > 0 {
-		// platformFee = fmt.Sprintf("%.4f", amt*0.005)
+	normalizedAmount, err := utils.NormalizeString(amount)
+	if err != nil {
+		return networkFee, "0.00000000", fmt.Errorf("invalid amount: %w", err)
 	}
 
-	// Received = Amount - Network - Platform
-	received := amt - 1.0 // Simple sub
-	if received < 0 {
-		received = 0
+	received, calcErr := utils.Sub(normalizedAmount, networkFee)
+	if calcErr != nil {
+		return networkFee, "0.00000000", fmt.Errorf("failed to calculate: %w", calcErr)
 	}
 
-	return networkFee, fmt.Sprintf("%.4f", received), nil
+	isNegative, _ := utils.IsNegative(received)
+	if isNegative {
+		received = "0.00000000"
+	}
+
+	return networkFee, received, nil
 }

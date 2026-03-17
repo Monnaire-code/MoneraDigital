@@ -11,6 +11,7 @@ import (
 	"monera-digital/internal/binance"
 	"monera-digital/internal/config"
 	"monera-digital/internal/repository"
+	"monera-digital/internal/utils"
 )
 
 var (
@@ -240,24 +241,27 @@ func (s *WealthService) Subscribe(ctx context.Context, userID int, productID int
 		return "", ErrProductNotFound
 	}
 
-	available, _ := strconv.ParseFloat(amount, 64)
-	if available <= 0 {
+	// Validate amount using decimal utils
+	if !utils.IsValidAmount(amount) {
 		return "", ErrAmountBelowMin
 	}
 
-	minAmount, _ := strconv.ParseFloat(product.MinAmount, 64)
-	if available < minAmount {
+	// Check minimum amount
+	minAmountOK, _ := utils.GTE(amount, product.MinAmount)
+	if !minAmountOK {
 		return "", ErrAmountBelowMin
 	}
 
-	maxAmount, _ := strconv.ParseFloat(product.MaxAmount, 64)
-	if available > maxAmount {
+	// Check maximum amount
+	maxAmountOK, _ := utils.LTE(amount, product.MaxAmount)
+	if !maxAmountOK {
 		return "", ErrAmountAboveMax
 	}
 
-	soldQuota, _ := strconv.ParseFloat(product.SoldQuota, 64)
-	totalQuota, _ := strconv.ParseFloat(product.TotalQuota, 64)
-	if soldQuota+available > totalQuota {
+	// Check quota
+	soldQuota, _ := utils.Add(product.SoldQuota, amount)
+	quotaOK, _ := utils.GTE(product.TotalQuota, soldQuota)
+	if !quotaOK {
 		return "", ErrQuotaExceeded
 	}
 
@@ -266,10 +270,10 @@ func (s *WealthService) Subscribe(ctx context.Context, userID int, productID int
 		return "", ErrInsufficientBalance
 	}
 
-	balance, _ := strconv.ParseFloat(account.Balance, 64)
-	frozen, _ := strconv.ParseFloat(account.FrozenBalance, 64)
-	availableBalance := balance - frozen
-	if available > availableBalance {
+	// Check balance using decimal utils
+	availableBalance, _ := utils.Sub(account.Balance, account.FrozenBalance)
+	balanceOK, _ := utils.GTE(availableBalance, amount)
+	if !balanceOK {
 		return "", ErrInsufficientBalance
 	}
 
@@ -294,11 +298,12 @@ func (s *WealthService) Subscribe(ctx context.Context, userID int, productID int
 		finalInterestExpected = interestExpected
 		fmt.Printf("[INFO] Using frontend calculated interest: %s\n", interestExpected)
 	} else {
-		// 后备计算：后端自己计算利息
-		apy, _ := strconv.ParseFloat(product.APY, 64)
-		amountFloat, _ := strconv.ParseFloat(amount, 64)
-		dailyInterest := amountFloat * (apy / 100) / 365
-		finalInterestExpected = strconv.FormatFloat(dailyInterest*float64(product.Duration), 'f', -1, 64)
+		// 后备计算：使用 decimal 工具计算利息
+		calcInterest, err := utils.CalculateInterest(amount, product.APY, product.Duration)
+		if err != nil {
+			return "", err
+		}
+		finalInterestExpected = calcInterest
 		fmt.Printf("[INFO] Using backend calculated interest: %s\n", finalInterestExpected)
 	}
 
@@ -333,13 +338,13 @@ func (s *WealthService) Subscribe(ctx context.Context, userID int, productID int
 	}
 
 	serialNo := fmt.Sprintf("SUBSCRIBE-%s-%d", now.Format("20060102150405"), order.ID)
-	balanceAfterFreeze := balance - available
+	balanceAfterFreeze, _ := utils.Sub(account.Balance, amount)
 	journalRecord := &repository.JournalModel{
 		SerialNo:        serialNo,
 		UserID:          int64(userID),
 		AccountID:       account.ID,
 		Amount:          "-" + amount,
-		BalanceSnapshot: strconv.FormatFloat(balanceAfterFreeze, 'f', -1, 64),
+		BalanceSnapshot: balanceAfterFreeze,
 		BizType:         "SUBSCRIBE_FREEZE",
 		RefID:           &order.ID,
 		CreatedAt:       now.Format(time.RFC3339),
@@ -442,22 +447,21 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 	order.RedeemedAt = now.Format(time.RFC3339)
 
 	if isExpired {
-		interestAccrued, _ := strconv.ParseFloat(order.InterestAccrued, 64)
-		if interestAccrued > 0 {
+		hasInterest, _ := utils.GT(order.InterestAccrued, "0")
+		if hasInterest {
 			err = s.accountRepo.AddBalance(ctx, account.ID, order.InterestAccrued)
 			if err != nil {
 				return err
 			}
 
-			balance, _ := strconv.ParseFloat(account.Balance, 64)
-			newBalance := balance + interestAccrued
+			newBalance, _ := utils.Add(account.Balance, order.InterestAccrued)
 
 			interestJournalRecord := &repository.JournalModel{
 				SerialNo:        fmt.Sprintf("REDEEM-INTEREST-%s-%d", now.Format("20060102150405"), order.ID),
 				UserID:          int64(userID),
 				AccountID:       account.ID,
 				Amount:          order.InterestAccrued,
-				BalanceSnapshot: strconv.FormatFloat(newBalance+interestAccrued, 'f', -1, 64),
+				BalanceSnapshot: newBalance,
 				BizType:         "INTEREST_PAYOUT",
 				RefID:           &order.ID,
 				CreatedAt:       now.Format(time.RFC3339),
@@ -468,24 +472,23 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 			}
 
 			order.InterestPaid = order.InterestAccrued
+			interestPaid := order.InterestAccrued
 			order.InterestAccrued = "0"
-			fmt.Printf("[DEBUG] Paid interest %.8f %s for order %d\n", interestAccrued, order.Currency, order.ID)
+			fmt.Printf("[DEBUG] Paid interest %s %s for order %d\n", interestPaid, order.Currency, order.ID)
 		}
 	} else {
 		order.InterestAccrued = "0"
 		fmt.Printf("[DEBUG] Early redemption - cleared accrued interest for order %d\n", order.ID)
 	}
 
-	balance, _ := strconv.ParseFloat(account.Balance, 64)
-	principalAmt, _ := strconv.ParseFloat(order.Amount, 64)
-	newBalance := balance + principalAmt
+	newBalance, _ := utils.Add(account.Balance, order.Amount)
 
 	principalJournal := &repository.JournalModel{
 		SerialNo:        fmt.Sprintf("REDEEM-PRINCIPAL-%s-%d", now.Format("20060102150405"), order.ID),
 		UserID:          int64(userID),
 		AccountID:       account.ID,
 		Amount:          order.Amount,
-		BalanceSnapshot: strconv.FormatFloat(newBalance, 'f', -1, 64),
+		BalanceSnapshot: newBalance,
 		BizType:         "REDEEM_UNFREEZE",
 		RefID:           &order.ID,
 		CreatedAt:       now.Format(time.RFC3339),

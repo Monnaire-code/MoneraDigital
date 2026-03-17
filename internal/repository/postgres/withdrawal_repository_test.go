@@ -57,10 +57,10 @@ func TestAccountRepository_UpdateFrozenBalance(t *testing.T) {
 	repo := NewAccountRepositoryV1(db)
 
 	userID := 1
-	amount := 100.0
+	amount := "100.0"
 
 	// Test case: Success
-	mock.ExpectExec("UPDATE account SET frozen_balance = frozen_balance \\+ \\$1, version = version \\+ 1, updated_at = \\$3 WHERE user_id = \\$2").
+	mock.ExpectExec("UPDATE account SET frozen_balance = frozen_balance \\+ CAST").
 		WithArgs(amount, userID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

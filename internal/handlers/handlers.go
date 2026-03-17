@@ -10,9 +10,11 @@ import (
 	"monera-digital/internal/dto"
 	"monera-digital/internal/models"
 	"monera-digital/internal/services"
+	"monera-digital/internal/utils"
 	"monera-digital/internal/validator"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -266,10 +268,6 @@ func (h *Handler) ApplyForLending(c *gin.Context) {
 		return
 	}
 
-	if req.Amount <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Amount must be positive"})
-		return
-	}
 	if req.DurationDays < minDurationDays || req.DurationDays > maxDurationDays {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Duration must be between %d and %d days", minDurationDays, maxDurationDays)})
 		return
@@ -279,9 +277,21 @@ func (h *Handler) ApplyForLending(c *gin.Context) {
 		return
 	}
 
+	normalizedAmount, normErr := utils.NormalizeString(req.Amount)
+	if normErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid amount: %v", normErr)})
+		return
+	}
+
+	amountValue, _ := utils.FromString(normalizedAmount)
+	if amountValue.LessThanOrEqual(decimal.Zero) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Amount must be positive"})
+		return
+	}
+
 	position, err := h.LendingService.ApplyForLending(userID, models.ApplyLendingRequest{
 		Asset:        req.Asset,
-		Amount:       fmt.Sprintf("%.7f", req.Amount),
+		Amount:       normalizedAmount,
 		DurationDays: req.DurationDays,
 	})
 	if err != nil {

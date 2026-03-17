@@ -5,26 +5,26 @@ import "strings"
 // Supported currencies following token_network format
 // 注意: USDC_BEP20 使用长格式，其他使用短格式
 const (
-	USDT_ERC20      = "USDT_ERC20"
-	USDT_TRC20      = "USDT_TRC20"
-	USDT_BEP20      = "USDT_BEP20"
+	USDT_ERC20        = "USDT_ERC20"
+	USDT_TRC20        = "USDT_TRC20"
+	USDT_BEP20        = "USDT_BEP20"
 	USDT_TRON_TESTNET = "USDT_TRON_TESTNET"
-	USDC_ERC20      = "USDC_ERC20"
-	USDC_TRC20      = "USDC_TRC20"
-	USDC_BEP20      = "USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET" // 特例：长格式
+	USDC_ERC20        = "USDC_ERC20"
+	USDC_TRC20        = "USDC_TRC20"
+	USDC_BEP20        = "USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET" // 特例：长格式
 	USDC_TRON_TESTNET = "USDC_TRON_TESTNET"
 )
 
 // ShortFormatToFull maps short currency codes to their full backend format
 // 注意：只有 USDC_BEP20 需要映射到长格式
 var ShortFormatToFull = map[string]string{
-	"USDT_ERC20":      USDT_ERC20,
-	"USDT_TRC20":      USDT_TRC20,
-	"USDT_BEP20":      USDT_BEP20,
+	"USDT_ERC20":        USDT_ERC20,
+	"USDT_TRC20":        USDT_TRC20,
+	"USDT_BEP20":        USDT_BEP20,
 	"USDT_TRON_TESTNET": USDT_TRON_TESTNET,
-	"USDC_ERC20":      USDC_ERC20,
-	"USDC_TRC20":      USDC_TRC20,
-	"USDC_BEP20":      USDC_BEP20, // 映射到长格式
+	"USDC_ERC20":        USDC_ERC20,
+	"USDC_TRC20":        USDC_TRC20,
+	"USDC_BEP20":        USDC_BEP20, // 映射到长格式
 	"USDC_TRON_TESTNET": USDC_TRON_TESTNET,
 }
 
@@ -39,9 +39,9 @@ var SupportedNetworks = []string{
 
 // NetworkAliasMap maps common aliases to standard network names
 var NetworkAliasMap = map[string]string{
-	"TRON":        "TRC20",
-	"BSC":         "BEP20",
-	"ETH":         "ERC20",
+	"TRON":                     "TRC20",
+	"BSC":                      "BEP20",
+	"ETH":                      "ERC20",
 	"TRX(SHASTA)_TRON_TESTNET": "TRX(SHASTA)_TRON_TESTNET",
 	// Aliases with spaces and hyphens
 	"TRX (SHASTA) - TRON Testnet": "TRX(SHASTA)_TRON_TESTNET",
@@ -87,13 +87,13 @@ var CurrencyLabelMap = map[string]string{
 
 // ShortFormatLabelMap provides display labels for short currency codes
 var ShortFormatLabelMap = map[string]string{
-	"USDT_ERC20":      "USDT (ERC20)",
-	"USDT_TRC20":      "USDT (TRC20)",
-	"USDT_BEP20":      "USDT (BEP20)",
+	"USDT_ERC20":        "USDT (ERC20)",
+	"USDT_TRC20":        "USDT (TRC20)",
+	"USDT_BEP20":        "USDT (BEP20)",
 	"USDT_TRON_TESTNET": "USDT (TRON Testnet)",
-	"USDC_ERC20":      "USDC (ERC20)",
-	"USDC_TRC20":      "USDC (TRC20)",
-	"USDC_BEP20":      "USDC (BEP20)",
+	"USDC_ERC20":        "USDC (ERC20)",
+	"USDC_TRC20":        "USDC (TRC20)",
+	"USDC_BEP20":        "USDC (BEP20)",
 	"USDC_TRON_TESTNET": "USDC (TRON Testnet)",
 }
 

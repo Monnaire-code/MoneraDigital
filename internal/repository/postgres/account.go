@@ -46,12 +46,12 @@ func (r *AccountRepositoryV1) Create(ctx context.Context, account *models.Accoun
 	return err
 }
 
-func (r *AccountRepositoryV1) UpdateFrozenBalance(ctx context.Context, userID int, amount float64) error {
+func (r *AccountRepositoryV1) UpdateFrozenBalance(ctx context.Context, userID int, amount string) error {
 	// Add to frozen (and check balance if needed, but logic usually in Service.
 	// PRD says: UPDATE account SET frozen_balance = frozen_balance + amount ...
 	result, err := r.db.ExecContext(ctx,
 		`UPDATE account
-		 SET frozen_balance = frozen_balance + $1, version = version + 1, updated_at = $3
+		 SET frozen_balance = frozen_balance + CAST($1 AS NUMERIC(65,8)), version = version + 1, updated_at = $3
 		 WHERE user_id = $2`,
 		amount, userID, time.Now())
 	if err != nil {
@@ -67,11 +67,11 @@ func (r *AccountRepositoryV1) UpdateFrozenBalance(ctx context.Context, userID in
 	return nil
 }
 
-func (r *AccountRepositoryV1) ReleaseFrozenBalance(ctx context.Context, userID int, amount float64) error {
+func (r *AccountRepositoryV1) ReleaseFrozenBalance(ctx context.Context, userID int, amount string) error {
 	result, err := r.db.ExecContext(ctx,
 		`UPDATE account
-		 SET frozen_balance = frozen_balance - $1, version = version + 1, updated_at = $3
-		 WHERE user_id = $2 AND frozen_balance >= $1`,
+		 SET frozen_balance = frozen_balance - CAST($1 AS NUMERIC(65,8)), version = version + 1, updated_at = $3
+		 WHERE user_id = $2 AND frozen_balance >= CAST($1 AS NUMERIC(65,8))`,
 		amount, userID, time.Now())
 	if err != nil {
 		return err
@@ -87,13 +87,13 @@ func (r *AccountRepositoryV1) ReleaseFrozenBalance(ctx context.Context, userID i
 	return nil
 }
 
-func (r *AccountRepositoryV1) DeductBalance(ctx context.Context, userID int, amount float64) error {
+func (r *AccountRepositoryV1) DeductBalance(ctx context.Context, userID int, amount string) error {
 	// Deduct from BOTH balance and frozen (since it was frozen first).
 	// PRD 5.3: frozen_balance = frozen_balance - amount, balance = balance - amount
 	result, err := r.db.ExecContext(ctx,
 		`UPDATE account
-		 SET frozen_balance = frozen_balance - $1, balance = balance - $1, version = version + 1, updated_at = $3
-		 WHERE user_id = $2 AND frozen_balance >= $1`,
+		 SET frozen_balance = frozen_balance - CAST($1 AS NUMERIC(65,8)), balance = balance - CAST($1 AS NUMERIC(65,8)), version = version + 1, updated_at = $3
+		 WHERE user_id = $2 AND frozen_balance >= CAST($1 AS NUMERIC(65,8))`,
 		amount, userID, time.Now())
 	if err != nil {
 		return err

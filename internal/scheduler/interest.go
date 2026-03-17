@@ -10,6 +10,7 @@ import (
 	"monera-digital/internal/config"
 	"monera-digital/internal/logger"
 	"monera-digital/internal/repository"
+	"monera-digital/internal/utils"
 )
 
 type InterestScheduler struct {
@@ -71,7 +72,8 @@ func (s *InterestScheduler) Start() {
 			errorMsg += fmt.Sprintf("settle error: %v", settleErr)
 		}
 
-		s.metrics.RecordInterestRun(success, ordersProcessed, interestAccrued, errorMsg)
+		totalInterestFloat, _ := strconv.ParseFloat(interestAccrued, 64)
+		s.metrics.RecordInterestRun(success, ordersProcessed, totalInterestFloat, errorMsg)
 
 		if !success {
 			logger.Error("[InterestScheduler] Execution failed", "error", errorMsg)
@@ -93,20 +95,20 @@ func (s *InterestScheduler) Start() {
 	}
 }
 
-func (s *InterestScheduler) CalculateDailyInterest(ctx context.Context) (int, float64, error) {
+func (s *InterestScheduler) CalculateDailyInterest(ctx context.Context) (int, string, error) {
 	logger.Info("[InterestScheduler] Calculating daily interest...")
 
 	today := time.Now().UTC()
 
 	orders, err := s.repo.GetActiveOrders(ctx)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get active orders: %v", err)
+		return 0, "0", fmt.Errorf("failed to get active orders: %v", err)
 	}
 
 	logger.Info("[InterestScheduler] Found active orders", "count", len(orders))
 
 	ordersProcessed := 0
-	totalInterestAccrued := 0.0
+	totalInterestAccrued := "0"
 
 	for _, order := range orders {
 		startDate, err := time.Parse("2006-01-02", order.StartDate)
@@ -149,13 +151,14 @@ func (s *InterestScheduler) CalculateDailyInterest(ctx context.Context) (int, fl
 			continue
 		}
 
-		apy, _ := strconv.ParseFloat(product.APY, 64)
-		amount, _ := strconv.ParseFloat(order.Amount, 64)
+		interestAccrued, err := utils.CalculateInterest(order.Amount, product.APY, daysSinceStart)
+		if err != nil {
+			logger.Error("[InterestScheduler] Failed to calculate interest",
+				"order_id", order.ID, "error", err.Error())
+			continue
+		}
 
-		dailyInterest := amount * (apy / 100) / 365
-		interestAccrued := dailyInterest / float64(order.Duration) * float64(daysSinceStart)
-
-		err = s.repo.UpdateInterestAccrued(ctx, order.ID, strconv.FormatFloat(interestAccrued, 'f', -1, 64))
+		err = s.repo.UpdateInterestAccrued(ctx, order.ID, interestAccrued)
 		if err != nil {
 			logger.Error("[InterestScheduler] Failed to update interest accrued",
 				"order_id", order.ID, "error", err.Error())
@@ -163,15 +166,13 @@ func (s *InterestScheduler) CalculateDailyInterest(ctx context.Context) (int, fl
 		}
 
 		ordersProcessed++
-		totalInterestAccrued += interestAccrued
+		totalInterestAccrued, _ = utils.Add(totalInterestAccrued, interestAccrued)
 
 		logger.Info("[InterestScheduler] Interest accrued",
 			"order_id", order.ID,
 			"interest_accrued", interestAccrued,
 			"days_subscribed", daysSinceStart,
-			"currency", order.Currency,
-			"apy", apy,
-			"amount", amount)
+			"currency", order.Currency)
 	}
 
 	logger.Info("[InterestScheduler] Daily interest calculation completed",
@@ -208,16 +209,15 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 	}
 
 	// Generate journal record for principal unfreeze
-	balance, _ := strconv.ParseFloat(account.Balance, 64)
-	principalAmt, _ := strconv.ParseFloat(order.Amount, 64)
-	newBalance := balance + principalAmt
+	newBalance, _ := utils.Add(account.Balance, order.Amount)
+	balanceSnapshot, _ := utils.NormalizeString(newBalance)
 
 	principalJournal := &repository.JournalModel{
 		SerialNo:        fmt.Sprintf("SETTLE-PRINCIPAL-%s-%d", now.Format("20060102150405"), order.ID),
 		UserID:          order.UserID,
 		AccountID:       account.ID,
 		Amount:          order.Amount,
-		BalanceSnapshot: strconv.FormatFloat(newBalance, 'f', -1, 64),
+		BalanceSnapshot: balanceSnapshot,
 		BizType:         "REDEEM_UNFREEZE",
 		RefID:           &order.ID,
 		CreatedAt:       now.Format(time.RFC3339),
@@ -229,21 +229,22 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 	}
 
 	// Step 2: Pay interest if accrued
-	interestPaid, _ := strconv.ParseFloat(order.InterestAccrued, 64)
-	if interestPaid > 0 {
-		err = s.accountRepo.AddBalance(ctx, account.ID, strconv.FormatFloat(interestPaid, 'f', -1, 64))
+	isInterestPositive, _ := utils.IsPositive(order.InterestAccrued)
+	if isInterestPositive {
+		err = s.accountRepo.AddBalance(ctx, account.ID, order.InterestAccrued)
 		if err != nil {
 			return fmt.Errorf("failed to add interest to balance: %v", err)
 		}
 
 		// Generate journal record for interest payout
-		balanceAfterInterest := newBalance + interestPaid
+		balanceAfterInterest, _ := utils.Add(newBalance, order.InterestAccrued)
+		interestSnapshot, _ := utils.NormalizeString(balanceAfterInterest)
 		interestJournal := &repository.JournalModel{
 			SerialNo:        fmt.Sprintf("SETTLE-INTEREST-%s-%d", now.Format("20060102150405"), order.ID),
 			UserID:          order.UserID,
 			AccountID:       account.ID,
-			Amount:          strconv.FormatFloat(interestPaid, 'f', -1, 64),
-			BalanceSnapshot: strconv.FormatFloat(balanceAfterInterest, 'f', -1, 64),
+			Amount:          order.InterestAccrued,
+			BalanceSnapshot: interestSnapshot,
 			BizType:         "INTEREST_PAYOUT",
 			RefID:           &order.ID,
 			CreatedAt:       now.Format(time.RFC3339),
@@ -256,7 +257,7 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 	}
 
 	// Step 3: Update order status
-	err = s.repo.SettleOrder(ctx, orderID, strconv.FormatFloat(interestPaid, 'f', -1, 64))
+	err = s.repo.SettleOrder(ctx, orderID, order.InterestAccrued)
 	if err != nil {
 		return fmt.Errorf("failed to settle order: %v", err)
 	}
@@ -265,7 +266,7 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 		"order_id", orderID,
 		"amount_unfrozen", order.Amount,
 		"currency", order.Currency,
-		"interest_paid", interestPaid)
+		"interest_paid", order.InterestAccrued)
 
 	return nil
 }
@@ -351,15 +352,13 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 	}
 
 	// Check if user has sufficient available balance for principal freeze
-	balance, _ := strconv.ParseFloat(account.Balance, 64)
-	frozen, _ := strconv.ParseFloat(account.FrozenBalance, 64)
-	availableBalance := balance - frozen
-	orderAmount, _ := strconv.ParseFloat(order.Amount, 64)
-	if availableBalance < orderAmount {
+	availableBalance, _ := utils.Sub(account.Balance, account.FrozenBalance)
+	hasEnough, _ := utils.GTE(availableBalance, order.Amount)
+	if !hasEnough {
 		logger.Error("[InterestScheduler] Insufficient balance for renewal",
 			"order_id", order.ID, "user_id", order.UserID,
-			"available", availableBalance, "required", orderAmount)
-		return fmt.Errorf("insufficient balance for renewal: available %.2f, required %.2f", availableBalance, orderAmount)
+			"available", availableBalance, "required", order.Amount)
+		return fmt.Errorf("insufficient balance for renewal: available %s, required %s", availableBalance, order.Amount)
 	}
 
 	now := time.Now()
@@ -378,21 +377,21 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 		"end_date", endDate)
 
 	// Step 1: Pay interest from old order
-	interestPaid, _ := strconv.ParseFloat(order.InterestAccrued, 64)
-	if interestPaid > 0 {
-		err = s.accountRepo.AddBalance(ctx, account.ID, strconv.FormatFloat(interestPaid, 'f', -1, 64))
+	hasInterest, _ := utils.GT(order.InterestAccrued, "0")
+	if hasInterest {
+		err = s.accountRepo.AddBalance(ctx, account.ID, order.InterestAccrued)
 		if err != nil {
 			return fmt.Errorf("failed to add interest: %v", err)
 		}
 
 		// Generate journal record for interest payout
-		balanceAfterInterest := balance + interestPaid
+		balanceAfterInterest, _ := utils.Add(account.Balance, order.InterestAccrued)
 		interestJournal := &repository.JournalModel{
 			SerialNo:        fmt.Sprintf("RENEW-INTEREST-%s-%d", now.Format("20060102150405"), order.ID),
 			UserID:          order.UserID,
 			AccountID:       account.ID,
-			Amount:          strconv.FormatFloat(interestPaid, 'f', -1, 64),
-			BalanceSnapshot: strconv.FormatFloat(balanceAfterInterest, 'f', -1, 64),
+			Amount:          order.InterestAccrued,
+			BalanceSnapshot: balanceAfterInterest,
 			BizType:         "INTEREST_PAYOUT",
 			RefID:           &order.ID,
 			CreatedAt:       now.Format(time.RFC3339),
@@ -412,15 +411,14 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 
 	// Generate journal record for new subscription
 	// Balance after interest payout, then principal stays frozen
-	balanceAfterInterest, _ := strconv.ParseFloat(account.Balance, 64)
-	balanceAfterInterest += interestPaid
-	balanceAfterFreeze := balanceAfterInterest - orderAmount
+	balanceAfterInterest, _ := utils.Add(account.Balance, order.InterestAccrued)
+	balanceAfterFreeze, _ := utils.Sub(balanceAfterInterest, order.Amount)
 	subscribeJournal := &repository.JournalModel{
 		SerialNo:        fmt.Sprintf("RENEW-SUBSCRIBE-%s-%d", now.Format("20060102150405"), newOrder.ID),
 		UserID:          order.UserID,
 		AccountID:       account.ID,
 		Amount:          "-" + order.Amount,
-		BalanceSnapshot: strconv.FormatFloat(balanceAfterFreeze, 'f', -1, 64),
+		BalanceSnapshot: balanceAfterFreeze,
 		BizType:         "SUBSCRIBE_FREEZE",
 		RefID:           &newOrder.ID,
 		CreatedAt:       now.Format(time.RFC3339),
@@ -432,7 +430,7 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 	}
 
 	// Step 3: Update old order status
-	err = s.repo.SettleOrder(ctx, order.ID, strconv.FormatFloat(interestPaid, 'f', -1, 64))
+	err = s.repo.SettleOrder(ctx, order.ID, order.InterestAccrued)
 	if err != nil {
 		logger.Error("[InterestScheduler] Failed to update old order status",
 			"order_id", order.ID, "error", err.Error())
@@ -445,7 +443,7 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 		"currency", order.Currency,
 		"start_date", startDate,
 		"end_date", endDate,
-		"interest_paid", interestPaid)
+		"interest_paid", order.InterestAccrued)
 
 	return nil
 }

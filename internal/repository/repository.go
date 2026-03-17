@@ -21,9 +21,9 @@ type User interface {
 type Account interface {
 	GetByUserIDAndType(ctx context.Context, userID int, accountType string) (*models.Account, error)
 	Create(ctx context.Context, account *models.Account) error
-	UpdateFrozenBalance(ctx context.Context, userID int, amount float64) error  // Add to frozen
-	ReleaseFrozenBalance(ctx context.Context, userID int, amount float64) error // Remove from frozen
-	DeductBalance(ctx context.Context, userID int, amount float64) error        // Deduct from balance and frozen
+	UpdateFrozenBalance(ctx context.Context, userID int, amount string) error  // Add to frozen
+	ReleaseFrozenBalance(ctx context.Context, userID int, amount string) error // Remove from frozen
+	DeductBalance(ctx context.Context, userID int, amount string) error        // Deduct from balance and frozen
 }
 
 // Lending 借贷仓储接口

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"monera-digital/internal/logger"
 	"monera-digital/internal/repository"
+	"monera-digital/internal/utils"
 )
 
 func init() {
@@ -29,6 +30,7 @@ func TestInterestScheduler_CalculateDailyInterest_Success(t *testing.T) {
 	}
 
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
 
 	mockWealthRepo.On("GetActiveOrders", mock.Anything).Return([]*repository.WealthOrderModel{
 		{
@@ -39,7 +41,7 @@ func TestInterestScheduler_CalculateDailyInterest_Success(t *testing.T) {
 			Amount:           "10000",
 			InterestAccrued:  "0",
 			StartDate:        yesterday,
-			EndDate:          "2026-02-15",
+			EndDate:          tomorrow,
 			LastInterestDate: "",
 			Duration:         7,
 			Currency:         "USDT",
@@ -59,7 +61,10 @@ func TestInterestScheduler_CalculateDailyInterest_Success(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, ordersProcessed)
-	assert.True(t, totalInterest > 0)
+
+	// 使用 decimal utils 比较字符串类型的 totalInterest
+	hasInterest, _ := utils.GT(totalInterest, "0")
+	assert.True(t, hasInterest)
 	mockWealthRepo.AssertExpectations(t)
 }
 
@@ -81,7 +86,7 @@ func TestInterestScheduler_CalculateDailyInterest_NoActiveOrders(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, ordersProcessed)
-	assert.Equal(t, 0.0, totalInterest)
+	assert.Equal(t, "0", totalInterest)
 	mockWealthRepo.AssertExpectations(t)
 }
 
@@ -117,7 +122,7 @@ func TestInterestScheduler_CalculateDailyInterest_SkipStartDate(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, ordersProcessed)
-	assert.Equal(t, 0.0, totalInterest)
+	assert.Equal(t, "0", totalInterest)
 	mockWealthRepo.AssertNotCalled(t, "AccrueInterest")
 }
 
@@ -154,7 +159,7 @@ func TestInterestScheduler_CalculateDailyInterest_SkipAlreadyAccrued(t *testing.
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, ordersProcessed)
-	assert.Equal(t, 0.0, totalInterest)
+	assert.Equal(t, "0", totalInterest)
 	mockWealthRepo.AssertNotCalled(t, "AccrueInterest")
 }
 
@@ -176,7 +181,7 @@ func TestInterestScheduler_CalculateDailyInterest_DatabaseError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Equal(t, 0, ordersProcessed)
-	assert.Equal(t, 0.0, totalInterest)
+	assert.Equal(t, "0", totalInterest)
 	assert.Contains(t, err.Error(), "failed to get active orders")
 }
 
@@ -221,7 +226,7 @@ func TestInterestScheduler_CalculateDailyInterest_AccrueError(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, ordersProcessed)
-	assert.Equal(t, 0.0, totalInterest)
+	assert.Equal(t, "0", totalInterest)
 }
 
 func TestSchedulerMetrics_RecordInterestRun_Success(t *testing.T) {
@@ -371,10 +376,11 @@ func TestInterestScheduler_SettleExpiredOrders_AutoRenew(t *testing.T) {
 	}, nil)
 
 	mockAccountRepo.On("GetAccountByUserIDAndCurrency", mock.Anything, int64(1), "USDT").Return(&repository.AccountModel{
-		ID:       1,
-		UserID:   1,
-		Currency: "USDT",
-		Balance:  "100000",
+		ID:            1,
+		UserID:        1,
+		Currency:      "USDT",
+		Balance:       "100000",
+		FrozenBalance: "0",
 	}, nil)
 
 	newOrder := &repository.WealthOrderModel{

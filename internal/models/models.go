@@ -74,8 +74,8 @@ type Account struct {
 	UserID        int       `json:"user_id" db:"user_id"`
 	Type          string    `json:"type" db:"type"` // WEALTH, FUND
 	Currency      string    `json:"currency" db:"currency"`
-	Balance       float64   `json:"balance" db:"balance"`
-	FrozenBalance float64   `json:"frozen_balance" db:"frozen_balance"`
+	Balance       string    `json:"balance" db:"balance"`
+	FrozenBalance string    `json:"frozen_balance" db:"frozen_balance"`
 	Version       int64     `json:"version" db:"version"`
 	CreatedAt     time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at" db:"updated_at"`
