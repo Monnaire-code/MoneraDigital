@@ -299,15 +299,14 @@ export const accountJournal = pgTable("account_journal", {
 	userId: bigint("user_id", { mode: "number" }).notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	accountId: bigint("account_id", { mode: "number" }).notNull(),
-	amount: numeric({ precision: 65, scale: 8 }).notNull(),      // 65,7 → 65,8
-	balanceSnapshot: numeric("balance_snapshot", { precision: 65, scale: 8 }).notNull(), // 65,7 → 65,8
-	bizType: varchar("biz_type", { length: 32 }).notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	amount: numeric({ precision: 65, scale: 8 }).notNull(),
+	balanceSnapshot: numeric("balance_snapshot", { precision: 65, scale: 8 }).notNull(),
+	bizType: integer("biz_type").notNull(),
 	refId: bigint("ref_id", { mode: "number" }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
 }, (table) => [
 	index("idx_journal_account_id").using("btree", table.accountId.asc().nullsLast().op("int8_ops")),
-	index("idx_journal_biz_type").using("btree", table.bizType.asc().nullsLast().op("text_ops")),
+	index("idx_journal_biz_type").using("btree", table.bizType.asc().nullsLast().op("int4_ops")),
 	index("idx_journal_created_at").using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops")),
 	index("idx_journal_ref_id").using("btree", table.refId.asc().nullsLast().op("int8_ops")),
 	index("idx_journal_user_id").using("btree", table.userId.asc().nullsLast().op("int8_ops")),

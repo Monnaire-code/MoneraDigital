@@ -345,7 +345,7 @@ func (s *WealthService) Subscribe(ctx context.Context, userID int, productID int
 		AccountID:       account.ID,
 		Amount:          "-" + amount,
 		BalanceSnapshot: balanceAfterFreeze,
-		BizType:         "SUBSCRIBE_FREEZE",
+		BizType:         1, // WEALTH_SUBSCRIBE
 		RefID:           &order.ID,
 		CreatedAt:       now.Format(time.RFC3339),
 	}
@@ -462,7 +462,7 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 				AccountID:       account.ID,
 				Amount:          order.InterestAccrued,
 				BalanceSnapshot: newBalance,
-				BizType:         "INTEREST_PAYOUT",
+				BizType:         3,
 				RefID:           &order.ID,
 				CreatedAt:       now.Format(time.RFC3339),
 			}
@@ -489,7 +489,7 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 		AccountID:       account.ID,
 		Amount:          order.Amount,
 		BalanceSnapshot: newBalance,
-		BizType:         "REDEEM_UNFREEZE",
+		BizType:         2,
 		RefID:           &order.ID,
 		CreatedAt:       now.Format(time.RFC3339),
 	}
