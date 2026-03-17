@@ -179,7 +179,7 @@ type JournalModel struct {
 	AccountID       int64
 	Amount          string
 	BalanceSnapshot string
-	BizType         int // 业务类型 ID (1-12)
+	BizType         int // 业务类型 ID (1-15)
 	RefID           *int64
 	CreatedAt       string
 }
