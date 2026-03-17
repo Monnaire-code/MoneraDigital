@@ -689,5 +689,22 @@
       "addressAddedDesc": "New address has been added successfully",
       "addAddressErrorTitle": "Failed to Add Address"
     }
+  },
+  "biz": {
+    "wealth_subscribe": "Wealth Product Subscription",
+    "wealth_redeem": "Wealth Product Redemption",
+    "interest_payout": "Interest Payout",
+    "lending_deposit": "Lending Deposit",
+    "lending_withdraw": "Lending Withdrawal",
+    "lending_interest": "Lending Interest",
+    "withdrawal_fee": "Withdrawal Fee",
+    "withdrawal": "Withdrawal",
+    "deposit": "Deposit",
+    "deposit_confirm": "Deposit Confirmed",
+    "referral_bonus": "Referral Bonus",
+    "admin_freeze": "Admin Freeze",
+    "admin_unfreeze": "Admin Unfreeze",
+    "admin_deposit": "Admin Deposit",
+    "admin_deduction": "Admin Deduction"
   }
 }

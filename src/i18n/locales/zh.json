@@ -765,5 +765,22 @@
       "addressAddedDesc": "新地址已成功添加",
       "addAddressErrorTitle": "添加地址失败"
     }
+  },
+  "biz": {
+    "wealth_subscribe": "理财产品申购",
+    "wealth_redeem": "理财产品赎回",
+    "interest_payout": "利息发放",
+    "lending_deposit": "借贷存入",
+    "lending_withdraw": "借贷提取",
+    "lending_interest": "借贷利息",
+    "withdrawal_fee": "提现手续费",
+    "withdrawal": "提现",
+    "deposit": "充值",
+    "deposit_confirm": "充值确认",
+    "referral_bonus": "推荐奖励",
+    "admin_freeze": "后台冻结",
+    "admin_unfreeze": "后台解冻",
+    "admin_deposit": "后台充值",
+    "admin_deduction": "后台扣款"
   }
 }

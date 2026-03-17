@@ -218,7 +218,7 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 		AccountID:       account.ID,
 		Amount:          order.Amount,
 		BalanceSnapshot: balanceSnapshot,
-		BizType:         "REDEEM_UNFREEZE",
+		BizType:         2,
 		RefID:           &order.ID,
 		CreatedAt:       now.Format(time.RFC3339),
 	}
@@ -245,7 +245,7 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 			AccountID:       account.ID,
 			Amount:          order.InterestAccrued,
 			BalanceSnapshot: interestSnapshot,
-			BizType:         "INTEREST_PAYOUT",
+			BizType:         3,
 			RefID:           &order.ID,
 			CreatedAt:       now.Format(time.RFC3339),
 		}
@@ -392,7 +392,7 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 			AccountID:       account.ID,
 			Amount:          order.InterestAccrued,
 			BalanceSnapshot: balanceAfterInterest,
-			BizType:         "INTEREST_PAYOUT",
+			BizType:         3,
 			RefID:           &order.ID,
 			CreatedAt:       now.Format(time.RFC3339),
 		}
@@ -419,7 +419,7 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 		AccountID:       account.ID,
 		Amount:          "-" + order.Amount,
 		BalanceSnapshot: balanceAfterFreeze,
-		BizType:         "SUBSCRIBE_FREEZE",
+		BizType:         1,
 		RefID:           &newOrder.ID,
 		CreatedAt:       now.Format(time.RFC3339),
 	}
