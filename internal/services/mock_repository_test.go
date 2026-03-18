@@ -181,12 +181,12 @@ func (m *MockAccountRepository) Create(ctx context.Context, account *models.Acco
 	return args.Error(0)
 }
 
-func (m *MockAccountRepository) UpdateFrozenBalance(ctx context.Context, userID int, amount float64) error {
+func (m *MockAccountRepository) UpdateFrozenBalance(ctx context.Context, userID int, amount string) error {
 	args := m.Called(ctx, userID, amount)
 	return args.Error(0)
 }
 
-func (m *MockAccountRepository) ReleaseFrozenBalance(ctx context.Context, userID int, amount float64) error {
+func (m *MockAccountRepository) ReleaseFrozenBalance(ctx context.Context, userID int, amount string) error {
 	args := m.Called(ctx, userID, amount)
 	return args.Error(0)
 }

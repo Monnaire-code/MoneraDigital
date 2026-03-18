@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Set environment variable for JWT secret
 process.env.JWT_SECRET = 'test-secret';
 
+// Mock fetch globally before importing the service
+const mockResponse = {
+  ok: true,
+  json: vi.fn().mockResolvedValue({}),
+};
+global.fetch = vi.fn().mockResolvedValue(mockResponse);
+
 import { AuthService } from './auth-service';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -52,7 +59,7 @@ describe('AuthService', () => {
     });
 
     it('should throw error for short password', async () => {
-      await expect(AuthService.register('test@example.com', '123')).rejects.toThrow('Password must be at least 6 characters');
+      await expect(AuthService.register('test@example.com', '123')).rejects.toThrow('Password must be at least 8 characters');
     });
 
     it('should throw error if user already exists', async () => {

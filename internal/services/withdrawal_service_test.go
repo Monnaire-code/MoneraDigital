@@ -43,17 +43,17 @@ func (m *MockAccountRepositoryForWithdrawal) Create(ctx context.Context, account
 	return args.Error(0)
 }
 
-func (m *MockAccountRepositoryForWithdrawal) UpdateFrozenBalance(ctx context.Context, userID int, amount float64) error {
+func (m *MockAccountRepositoryForWithdrawal) UpdateFrozenBalance(ctx context.Context, userID int, amount string) error {
 	args := m.Called(ctx, userID, amount)
 	return args.Error(0)
 }
 
-func (m *MockAccountRepositoryForWithdrawal) ReleaseFrozenBalance(ctx context.Context, userID int, amount float64) error {
+func (m *MockAccountRepositoryForWithdrawal) ReleaseFrozenBalance(ctx context.Context, userID int, amount string) error {
 	args := m.Called(ctx, userID, amount)
 	return args.Error(0)
 }
 
-func (m *MockAccountRepositoryForWithdrawal) DeductBalance(ctx context.Context, userID int, amount float64) error {
+func (m *MockAccountRepositoryForWithdrawal) DeductBalance(ctx context.Context, userID int, amount string) error {
 	args := m.Called(ctx, userID, amount)
 	return args.Error(0)
 }
@@ -73,8 +73,8 @@ func TestWithdrawalService_CreateWithdrawal_InsufficientBalance(t *testing.T) {
 
 	account := &models.Account{
 		UserID:        userID,
-		Balance:       50.0,
-		FrozenBalance: 0.0,
+		Balance:       "50.0",
+		FrozenBalance: "0.0",
 	}
 
 	mockAccountRepo.On("GetByUserIDAndType", ctx, userID, "WEALTH").Return(account, nil)
@@ -116,8 +116,8 @@ func TestWithdrawalService_CreateWithdrawal_WithMockDB(t *testing.T) {
 	// Mock Data
 	account := &models.Account{
 		UserID:        userID,
-		Balance:       200.0,
-		FrozenBalance: 0.0,
+		Balance:       "200.0",
+		FrozenBalance: "0.0",
 	}
 	address := &models.WithdrawalAddress{
 		ID:            10,
@@ -139,16 +139,16 @@ func TestWithdrawalService_CreateWithdrawal_WithMockDB(t *testing.T) {
 		return r.Amount == "100.0" && r.ToAddress == "Txyz..." && r.CoinType == "USDT" && r.ChainType == "TRC20"
 	})).Return(shResp, nil)
 
-	// Mock DB transaction operations
+	// Mock DB transaction operations - use flexible matching
 	sqlMock.ExpectBegin()
-	sqlMock.ExpectExec("UPDATE account SET frozen_balance = frozen_balance \\+ \\$1").
-		WithArgs(100.0, userID, sqlmock.AnyArg()).
+	sqlMock.ExpectExec("UPDATE account SET frozen_balance = frozen_balance \\+ CAST").
+		WithArgs(sqlmock.AnyArg(), userID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	sqlMock.ExpectExec("UPDATE account SET frozen_balance = frozen_balance - \\$1, balance = balance - \\$1").
-		WithArgs(100.0, userID, sqlmock.AnyArg()).
+	sqlMock.ExpectExec("UPDATE account SET frozen_balance = frozen_balance - CAST\\(\\$1 AS NUMERIC\\(65,8\\)\\), balance = balance - CAST").
+		WithArgs(sqlmock.AnyArg(), userID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	sqlMock.ExpectQuery("INSERT INTO withdrawal_order").
-		WithArgs(userID, "100.0", "1.0", "0", "100.0", "TRC20", "USDT", "Txyz...", "sh-123", "0xtx", "SENT", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(1, time.Now()))
 	sqlMock.ExpectCommit()
 

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"monera-digital/internal/repository"
-	"strconv"
+	"monera-digital/internal/utils"
 	"time"
 )
 
@@ -415,10 +415,10 @@ func (r *WealthRepository) SettleOrder(ctx context.Context, orderID int64, inter
 func (r *WealthRepository) RenewOrder(ctx context.Context, order *repository.WealthOrderModel, product *repository.WealthProductModel, startDate string, endDate string) (*repository.WealthOrderModel, error) {
 	now := time.Now()
 
-	apy, _ := strconv.ParseFloat(product.APY, 64)
-	amountFloat, _ := strconv.ParseFloat(order.Amount, 64)
-	dailyInterest := amountFloat * (apy / 100) / 365
-	interestExpected := strconv.FormatFloat(dailyInterest*float64(product.Duration), 'f', -1, 64)
+	interestExpected, err := utils.CalculateInterest(order.Amount, product.APY, product.Duration)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate interest: %v", err)
+	}
 
 	newOrder := &repository.WealthOrderModel{
 		UserID:             order.UserID,
@@ -448,7 +448,7 @@ func (r *WealthRepository) RenewOrder(ctx context.Context, order *repository.Wea
 		VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, '0', $9, '0', '0', $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		RETURNING id
 	`
-	err := r.db.QueryRowContext(ctx, query,
+	err = r.db.QueryRowContext(ctx, query,
 		newOrder.UserID, newOrder.ProductID, newOrder.ProductTitle, newOrder.Currency, newOrder.Amount,
 		newOrder.AutoRenew, newOrder.StartDate, newOrder.EndDate,
 		newOrder.InterestExpected, newOrder.RenewedFromOrderID,

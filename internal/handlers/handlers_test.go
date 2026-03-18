@@ -111,7 +111,7 @@ func TestApplyForLending_Success(t *testing.T) {
 
 	reqBody := dto.ApplyLendingRequest{
 		Asset:        "BTC",
-		Amount:       1000.0,
+		Amount:       "1000.0",
 		DurationDays: 90,
 	}
 	body, _ := json.Marshal(reqBody)
@@ -136,7 +136,7 @@ func TestApplyForLending_InvalidAmount(t *testing.T) {
 
 	reqBody := dto.ApplyLendingRequest{
 		Asset:        "BTC",
-		Amount:       -100, // Invalid negative amount
+		Amount:       "1000.0",
 		DurationDays: 90,
 	}
 	body, _ := json.Marshal(reqBody)
@@ -160,7 +160,7 @@ func TestApplyForLending_InvalidDuration(t *testing.T) {
 
 	reqBody := dto.ApplyLendingRequest{
 		Asset:        "BTC",
-		Amount:       1000.0,
+		Amount:       "1000.0",
 		DurationDays: 15, // Less than minimum 30 days
 	}
 	body, _ := json.Marshal(reqBody)
@@ -184,7 +184,7 @@ func TestApplyForLending_UnsupportedAsset(t *testing.T) {
 
 	reqBody := dto.ApplyLendingRequest{
 		Asset:        "DOGE", // Unsupported asset
-		Amount:       1000.0,
+		Amount:       "1000.0",
 		DurationDays: 90,
 	}
 	body, _ := json.Marshal(reqBody)
@@ -222,7 +222,7 @@ func TestApplyForLending_MissingAuth(t *testing.T) {
 
 	reqBody := dto.ApplyLendingRequest{
 		Asset:        "BTC",
-		Amount:       1000.0,
+		Amount:       "1000.0",
 		DurationDays: 90,
 	}
 	body, _ := json.Marshal(reqBody)

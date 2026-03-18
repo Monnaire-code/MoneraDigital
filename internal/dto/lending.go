@@ -5,9 +5,9 @@ import "time"
 
 // ApplyLendingRequest DTO for lending application
 type ApplyLendingRequest struct {
-	Asset        string  `json:"asset" binding:"required,oneof=BTC ETH USDC USDT"`
-	Amount       float64 `json:"amount" binding:"required,gt=0"`
-	DurationDays int     `json:"durationDays" binding:"required,gt=0,lte=365"`
+	Asset        string `json:"asset" binding:"required,oneof=BTC ETH USDC USDT"`
+	Amount       string `json:"amount" binding:"required"`
+	DurationDays int    `json:"durationDays" binding:"required,gt=0,lte=365"`
 }
 
 // LendingPositionResponse DTO for lending position response

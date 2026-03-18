@@ -278,8 +278,8 @@ export const account = pgTable("account", {
 	userId: bigint("user_id", { mode: "number" }).notNull(),
 	type: varchar({ length: 16 }).notNull(),
 	currency: varchar({ length: 8 }).notNull(),
-	balance: numeric({ precision: 65, scale:  7 }).default('0').notNull(),
-	frozenBalance: numeric("frozen_balance", { precision: 65, scale:  7 }).default('0').notNull(),
+	balance: numeric({ precision: 65, scale: 8 }).default('0').notNull(),      // 65,7 → 65,8
+	frozenBalance: numeric("frozen_balance", { precision: 65, scale: 8 }).default('0').notNull(), // 65,7 → 65,8
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	version: bigint({ mode: "number" }).default(1).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
@@ -299,15 +299,14 @@ export const accountJournal = pgTable("account_journal", {
 	userId: bigint("user_id", { mode: "number" }).notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	accountId: bigint("account_id", { mode: "number" }).notNull(),
-	amount: numeric({ precision: 65, scale:  7 }).notNull(),
-	balanceSnapshot: numeric("balance_snapshot", { precision: 65, scale:  7 }).notNull(),
-	bizType: varchar("biz_type", { length: 32 }).notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	amount: numeric({ precision: 65, scale: 8 }).notNull(),
+	balanceSnapshot: numeric("balance_snapshot", { precision: 65, scale: 8 }).notNull(),
+	bizType: integer("biz_type").notNull(),
 	refId: bigint("ref_id", { mode: "number" }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
 }, (table) => [
 	index("idx_journal_account_id").using("btree", table.accountId.asc().nullsLast().op("int8_ops")),
-	index("idx_journal_biz_type").using("btree", table.bizType.asc().nullsLast().op("text_ops")),
+	index("idx_journal_biz_type").using("btree", table.bizType.asc().nullsLast().op("int4_ops")),
 	index("idx_journal_created_at").using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops")),
 	index("idx_journal_ref_id").using("btree", table.refId.asc().nullsLast().op("int8_ops")),
 	index("idx_journal_user_id").using("btree", table.userId.asc().nullsLast().op("int8_ops")),
@@ -503,7 +502,7 @@ export const withdrawals = pgTable("withdrawals", {
 	id: serial().primaryKey().notNull(),
 	userId: integer("user_id").notNull(),
 	fromAddressId: integer("from_address_id").notNull(),
-	amount: numeric({ precision: 20, scale:  8 }).notNull(),
+	amount: numeric({ precision: 65, scale: 8 }).notNull(),     // 65,7 → 65,8
 	asset: text().notNull(),
 	toAddress: text("to_address").notNull(),
 	status: withdrawalStatus().default('PENDING').notNull(),
@@ -511,8 +510,8 @@ export const withdrawals = pgTable("withdrawals", {
 	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow().notNull(),
 	completedAt: timestamp("completed_at", { mode: 'string' }),
 	failureReason: text("failure_reason"),
-	feeAmount: numeric("fee_amount", { precision: 20, scale:  8 }),
-	receivedAmount: numeric("received_amount", { precision: 20, scale:  8 }),
+	feeAmount: numeric("fee_amount", { precision: 65, scale: 8 }),      // 65,7 → 65,8
+	receivedAmount: numeric("received_amount", { precision: 65, scale: 8 }), // 65,7 → 65,8
 	safeheronTxId: text("safeheron_tx_id"),
 	chain: text(),
 }, (table) => [
@@ -532,7 +531,7 @@ export const deposits = pgTable("deposits", {
 	id: serial().primaryKey().notNull(),
 	userId: integer("user_id").notNull(),
 	txHash: text("tx_hash").notNull(),
-	amount: numeric({ precision: 20, scale:  8 }).notNull(),
+	amount: numeric({ precision: 65, scale: 8 }).notNull(),  // 20,8 → 65,8
 	asset: text().notNull(),
 	chain: text().notNull(),
 	status: depositStatus().default('PENDING').notNull(),

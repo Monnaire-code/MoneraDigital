@@ -241,3 +241,6 @@ export const formatCurrency = (
 
   return num.toFixed(precision);
 };
+
+// Re-export functions for testing
+export { formatNumber } from '@/lib/utils';

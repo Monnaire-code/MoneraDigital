@@ -38,7 +38,7 @@ func TestWealthService_GetAssets(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, assets, 2)
 	assert.Equal(t, "USDT", assets[0].Currency)
-	assert.Equal(t, "100000", assets[0].Total)
-	assert.Equal(t, "95000", assets[0].Available)
+	assert.Equal(t, "100000.0000000", assets[0].Total)
+	assert.Equal(t, "95000.0000000", assets[0].Available)
 	mockAccountRepo.AssertExpectations(t)
 }

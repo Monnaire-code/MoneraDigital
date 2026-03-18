@@ -660,7 +660,7 @@ func TestWalletService_CreateWallet_FetchesAddress(t *testing.T) {
 
 	// Verify GetAddress was called
 	mockCoreAPI.AssertCalled(t, "GetAddress", mock.Anything, mock.Anything)
-	assert.Equal(t, 1, capturedGetAddrReq.UserID)
+	assert.Equal(t, "1", capturedGetAddrReq.UserID)
 	assert.Equal(t, "X_FINANCE", capturedGetAddrReq.ProductCode)
 	assert.Equal(t, "TRON", capturedGetAddrReq.Currency)
 }
@@ -751,8 +751,6 @@ func TestWalletService_CreateWallet_GetAddressReturnsEmpty_UsesCreateWalletAddre
 	assert.Equal(t, "TCreate123456789", result.Address.String)
 }
 
-
-
 func TestWalletService_AddAddress_TestnetCurrency_GeneratesLocally(t *testing.T) {
 	mockRepo := new(MockWalletRepository)
 	mockCoreAPI := new(MockCoreAPIClient)
@@ -799,7 +797,6 @@ func TestWalletService_AddAddress_TestnetCurrency_GeneratesLocally(t *testing.T)
 		UpdatedAt: now,
 	}, nil)
 	mockRepo.On("GetActiveWalletByUserID", mock.Anything, 1).Return(existingWallet, nil)
-
 
 	// For testnet, Core API should NOT be called - address is generated locally
 	// So we don't set up any mock expectations for Core API
