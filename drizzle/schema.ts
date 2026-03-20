@@ -152,22 +152,6 @@ export const userProfitStats = pgTable("UserProfitStats", {
 	uniqueIndex("UserProfitStats_userId_key").using("btree", table.userId.asc().nullsLast().op("text_ops")),
 ]);
 
-export const subscriptionOrder = pgTable("SubscriptionOrder", {
-	id: text().primaryKey().notNull(),
-	userId: text().notNull(),
-	productId: text().notNull(),
-	amount: numeric({ precision: 18, scale:  2 }).notNull(),
-	status: text().default('PENDING').notNull(),
-	createdAt: timestamp({ precision: 3, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
-	updatedAt: timestamp({ precision: 3, mode: 'string' }).notNull(),
-}, (table) => [
-	foreignKey({
-			columns: [table.productId],
-			foreignColumns: [fixedIncomeProduct.id],
-			name: "SubscriptionOrder_productId_fkey"
-		}).onUpdate("cascade").onDelete("restrict"),
-]);
-
 export const businessStats = pgTable("BusinessStats", {
 	id: text().primaryKey().notNull(),
 	date: timestamp({ precision: 3, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
