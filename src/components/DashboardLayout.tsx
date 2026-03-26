@@ -8,32 +8,44 @@ import { Button } from "./ui/button";
 const DashboardLayout = () => {
   const navigate = useNavigate();
   const [user, setUser] = useState<{ email: string } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const savedUser = localStorage.getItem("user");
-    const token = localStorage.getItem("token");
-    // Check for valid token and user data
-    if (!token) {
-      navigate("/login");
-      return;
-    }
-    // Validate user data before parsing
-    if (!savedUser || savedUser === "undefined" || savedUser === "null") {
-      // Token exists but user data is missing/corrupted, clean up and redirect
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      navigate("/login");
-      return;
-    }
-    try {
-      setUser(JSON.parse(savedUser));
-    } catch (e) {
-      console.error("Failed to parse user data:", e);
-      // Clean up invalid data
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      navigate("/login");
-    }
+    const checkAuth = async () => {
+      const savedUser = localStorage.getItem("user");
+      const token = localStorage.getItem("token");
+      
+      // Check for valid token and user data
+      if (!token) {
+        navigate("/login");
+        setIsLoading(false);
+        return;
+      }
+      
+      // Validate user data before parsing
+      if (!savedUser || savedUser === "undefined" || savedUser === "null") {
+        // Token exists but user data is missing/corrupted, clean up and redirect
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        navigate("/login");
+        setIsLoading(false);
+        return;
+      }
+      
+      try {
+        setUser(JSON.parse(savedUser));
+      } catch (e) {
+        console.error("Failed to parse user data:", e);
+        // Clean up invalid data
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        navigate("/login");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    checkAuth();
   }, [navigate]);
 
   const handleLogout = () => {
@@ -41,6 +53,18 @@ const DashboardLayout = () => {
     localStorage.removeItem("user");
     navigate("/");
   };
+
+  // Show loading state while checking authentication
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) return null;
 

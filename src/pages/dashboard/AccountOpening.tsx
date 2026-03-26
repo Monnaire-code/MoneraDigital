@@ -11,6 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, ApiError } from "@/lib/api-client";
 
+// Mock mode - set to true to generate test wallet addresses without backend calls
+const MOCK_MODE = true;
+
 // SQL NullString format from backend (sql.NullString serializes to {String, Valid})
 interface NullString {
   String: string;
@@ -182,6 +185,25 @@ const AccountOpening = () => {
     queryKey: ["walletInfo"],
     enabled: !!token,
     queryFn: async () => {
+      if (MOCK_MODE) {
+        // Return mock wallet data for testing
+        console.log("[MOCK] AccountOpening: Returning mock wallet data");
+        return {
+          status: "SUCCESS",
+          currency: "USDT",
+          walletId: { String: "wallet-123", Valid: true },
+          address: { String: "TJR7VfPVgBGGd7Df7fCpWeYEjGVPgrr", Valid: true },
+          addresses: JSON.stringify({
+            "USDT_TRC20": "TJR7VfPVgBGGd7Df7fCpWeYEjGVPgrr",
+            "USDT_ERC20": "0x742d35Cc6634C0532925a3b844Bc9e7595f8bE21",
+            "USDT_BEP20": "0x1234567890abcdef1234567890abcdef12345678"
+          })
+        };
+      }
+      if (!token) {
+        console.log("[DEBUG] AccountOpening: No token, returning NONE");
+        return { status: "NONE" };
+      }
       if (!token) {
         console.log("[DEBUG] AccountOpening: No token, returning NONE");
         return { status: "NONE" };
@@ -266,6 +288,26 @@ const AccountOpening = () => {
   }, [availableNetworks, selectedNetwork]);
 
   const createMutation = useMutation({
+    mutationFn: async () => {
+      if (MOCK_MODE) {
+        // Mock mode - just return success without calling backend
+        console.log("[MOCK] createMutation: Skipping backend call, returning mock success");
+        return { status: "SUCCESS", message: "Mock wallet created" };
+      }
+      if (!token) {
+        throw new Error("Not authenticated");
+      }
+      return apiRequest("/api/wallet/create", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          productCode: "X_FINANCE",
+          currency: selectedCurrency
+        })
+      });
+    },
     mutationFn: async () => {
       if (!token) {
         throw new Error("Not authenticated");
