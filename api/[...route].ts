@@ -53,6 +53,19 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
   'POST /wealth/subscribe': { requiresAuth: true, backendPath: '/api/wealth/subscribe' },
   'GET /wealth/orders': { requiresAuth: true, backendPath: '/api/wealth/orders' },
   'POST /wealth/redeem': { requiresAuth: true, backendPath: '/api/wealth/redeem' },
+
+  // Lending endpoints
+  'GET /lending/positions': { requiresAuth: true, backendPath: '/api/lending/positions' },
+  'POST /lending/apply': { requiresAuth: true, backendPath: '/api/lending/apply' },
+
+  // Deposit endpoints
+  'GET /deposits': { requiresAuth: true, backendPath: '/api/deposits' },
+
+  // Withdrawal endpoints
+  'GET /withdrawals': { requiresAuth: true, backendPath: '/api/withdrawals' },
+  'POST /withdrawals': { requiresAuth: true, backendPath: '/api/withdrawals' },
+  'GET /withdrawals/fees': { requiresAuth: true, backendPath: '/api/withdrawals/fees' },
+  'GET /withdrawals/:id': { requiresAuth: true, backendPath: '' },
 };
 
 /**
