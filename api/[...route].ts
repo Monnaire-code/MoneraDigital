@@ -192,12 +192,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Construct backend URL
     const backendUrl = `${BACKEND_URL}${backendPath}`;
 
+    // Extract all custom headers (excluding host and standard headers)
+    const customHeaders: Record<string, string> = {};
+    if (req.headers.authorization) {
+      customHeaders['Authorization'] = req.headers.authorization;
+    }
+    if (req.headers['idempotency-key']) {
+      customHeaders['Idempotency-Key'] = req.headers['idempotency-key'] as string;
+    }
+    if (req.headers['x-client-timestamp']) {
+      customHeaders['X-Client-Timestamp'] = req.headers['x-client-timestamp'] as string;
+    }
+    // Forward other custom headers that may be needed
+    const headerWhitelist = ['x-request-id', 'x-correlation-id', 'x-forwarded-for', 'x-real-ip'];
+    headerWhitelist.forEach(key => {
+      const value = req.headers[key];
+      if (value) {
+        customHeaders[key] = value as string;
+      }
+    });
+
     // Prepare request options
     const options: RequestInit = {
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...(req.headers.authorization ? { 'Authorization': req.headers.authorization } : {}),
+        ...customHeaders,
       },
     };
 
