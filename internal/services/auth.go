@@ -87,10 +87,32 @@ func (s *AuthService) Register(req models.RegisterRequest) (*models.User, error)
 		return nil, err
 	}
 
+	// Create FUND accounts for 4 currencies (BTC, ETH, USDT, USDC)
+	if err := s.createDefaultAccounts(user.ID); err != nil {
+		return nil, fmt.Errorf("failed to create default accounts: %w", err)
+	}
+
 	// Create account in Core Account System (fire and forget)
 	_, _ = s.createCoreAccount(user.ID, req.Email)
 
 	return &user, nil
+}
+
+// createDefaultAccounts creates default FUND accounts for the user
+func (s *AuthService) createDefaultAccounts(userID int) error {
+	currencies := []string{"BTC", "ETH", "USDT", "USDC"}
+	now := time.Now()
+
+	for _, currency := range currencies {
+		_, err := s.DB.Exec(`
+			INSERT INTO account (user_id, type, currency, balance, frozen_balance, version, created_at, updated_at)
+			VALUES ($1, 'FUND', $2, 0, 0, 1, $3, $3)`,
+			userID, currency, now)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // createCoreAccount creates an account in the Core Account System
