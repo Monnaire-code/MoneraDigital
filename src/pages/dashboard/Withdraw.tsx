@@ -43,20 +43,22 @@ interface ChainOption {
 
 const CHAIN_OPTIONS: Record<string, ChainOption[]> = {
   BTC: [
-    { value: "Bitcoin", label: "Bitcoin Network", feeEstimate: "0.0005" },
+    { value: "Bitcoin", label: "Bitcoin Network", feeEstimate: "0.00001" },
   ],
   ETH: [
-    { value: "Ethereum", label: "Ethereum Network", feeEstimate: "0.002" },
+    { value: "Ethereum", label: "Ethereum Network", feeEstimate: "0.001" },
+    { value: "Arbitrum", label: "Arbitrum", feeEstimate: "0.00005" },
+    { value: "Polygon", label: "Polygon", feeEstimate: "0.00002" },
   ],
   USDC: [
-    { value: "Ethereum", label: "Ethereum (ERC-20)", feeEstimate: "1" },
-    { value: "Arbitrum", label: "Arbitrum", feeEstimate: "0.1" },
-    { value: "Polygon", label: "Polygon", feeEstimate: "0.1" },
+    { value: "Ethereum", label: "Ethereum (ERC-20)", feeEstimate: "0.5" },
+    { value: "Arbitrum", label: "Arbitrum", feeEstimate: "0.05" },
+    { value: "Polygon", label: "Polygon", feeEstimate: "0.01" },
   ],
   USDT: [
-    { value: "Ethereum", label: "Ethereum (ERC-20)", feeEstimate: "2" },
-    { value: "Arbitrum", label: "Arbitrum", feeEstimate: "0.5" },
-    { value: "Polygon", label: "Polygon", feeEstimate: "0.5" },
+    { value: "Ethereum", label: "Ethereum (ERC-20)", feeEstimate: "1" },
+    { value: "Arbitrum", label: "Arbitrum", feeEstimate: "0.1" },
+    { value: "Polygon", label: "Polygon", feeEstimate: "0.01" },
     { value: "Tron", label: "Tron (TRC-20)", feeEstimate: "1" },
   ],
 };
@@ -164,7 +166,7 @@ function Withdraw() {
       }
     } catch (error) {
       console.error("Fetch addresses error:", error);
-      toast.error("Failed to fetch addresses");
+      toast.error(t("addresses.failedToFetch"));
     } finally {
       setIsLoading(false);
     }
@@ -175,12 +177,12 @@ function Withdraw() {
     if (isCreatingAddress) return;
 
     if (!newAddressAlias || !newAddress || !newAddressChain) {
-      toast.error("Please fill in all fields");
+      toast.error(t("addresses.pleaseFillAllFields"));
       return;
     }
 
     if (!isValidAddress(newAddress, newAddressChain)) {
-      toast.error(`Invalid ${newAddressChain} address format. Please check and try again.`);
+      toast.error(t("dashboard.withdraw.invalidAddress", { chain: newAddressChain }));
       return;
     }
 
@@ -215,12 +217,12 @@ function Withdraw() {
         if (res.status === 409) {
           toast.error(t("addresses.duplicateError"));
         } else {
-          toast.error(data.error || "Failed to add address");
+          toast.error(data.error || t("addresses.failedToAdd"));
         }
       }
     } catch (error) {
       console.error("Create address error:", error);
-      toast.error("Failed to add address. Please try again.");
+      toast.error(t("addresses.failedToAdd"));
     } finally {
       setIsCreatingAddress(false);
     }
@@ -339,7 +341,7 @@ function Withdraw() {
 
   const handleSubmitWithdrawal = async (twoFactorToken?: string) => {
     if (!selectedAddressId || !amount) {
-      toast.error("Please fill in all fields");
+      toast.error(t("addresses.pleaseFillAllFields"));
       return;
     }
 
@@ -363,18 +365,18 @@ function Withdraw() {
 
       const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || "Withdrawal initiated successfully");
+        toast.success(data.message || t("dashboard.withdraw.withdrawalSuccess"));
         setAmount("");
         setIsConfirming(false);
         setIs2FADialogOpen(false);
         setTwoFactorCode("");
         await fetchHistory();
       } else {
-        toast.error(data.error || "Failed to initiate withdrawal");
+        toast.error(data.error || t("dashboard.withdraw.failedToWithdraw"));
       }
     } catch (error) {
       console.error("Withdraw error:", error);
-      toast.error("Failed to initiate withdrawal");
+      toast.error(t("dashboard.withdraw.failedToWithdraw"));
     } finally {
       setIsSubmitting(false);
     }
@@ -383,7 +385,7 @@ function Withdraw() {
   // Handle 2FA verification and submit withdrawal
   const handleVerify2FAAndSubmit = async () => {
     if (!twoFactorCode || twoFactorCode.length !== 6) {
-      toast.error("Please enter a valid 6-digit 2FA code");
+      toast.error(t("dashboard.withdraw.invalid2FACode"));
       return;
     }
 

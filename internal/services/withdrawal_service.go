@@ -198,10 +198,7 @@ func (s *WithdrawalService) GetWithdrawalByID(ctx context.Context, userID int, i
 }
 
 func (s *WithdrawalService) EstimateFee(ctx context.Context, asset, chain, amount string) (string, string, error) {
-	networkFee := "1.0"
-	if asset == "ETH" {
-		networkFee = "0.002"
-	}
+	networkFee := getNetworkFee(asset, chain)
 
 	normalizedAmount, err := utils.NormalizeString(amount)
 	if err != nil {
@@ -219,4 +216,39 @@ func (s *WithdrawalService) EstimateFee(ctx context.Context, asset, chain, amoun
 	}
 
 	return networkFee, received, nil
+}
+
+// getNetworkFee returns the network fee based on asset and chain
+// Fees are adjusted to reflect actual on-chain costs with reasonable buffer
+func getNetworkFee(asset, chain string) string {
+	feeMap := map[string]map[string]string{
+		"BTC": {
+			"Bitcoin": "0.00001", // ~$0.5-2
+		},
+		"ETH": {
+			"Ethereum":  "0.001",  // ~$2-4
+			"Arbitrum":  "0.00005", // ~$0.1
+			"Polygon":   "0.00002", // ~$0.02
+		},
+		"USDT": {
+			"Ethereum": "1",   // ~$1-3
+			"Arbitrum": "0.1", // ~$0.1-0.3
+			"Polygon":  "0.01", // ~$0.01-0.05
+			"Tron":     "1",   // ~$0.5-2
+		},
+		"USDC": {
+			"Ethereum": "0.5",  // ~$0.5-2
+			"Arbitrum": "0.05", // ~$0.05-0.15
+			"Polygon":  "0.01", // ~$0.01-0.05
+		},
+	}
+
+	if assetFees, ok := feeMap[asset]; ok {
+		if fee, ok := assetFees[chain]; ok {
+			return fee
+		}
+	}
+
+	// Default fee for unknown combinations
+	return "1.0"
 }

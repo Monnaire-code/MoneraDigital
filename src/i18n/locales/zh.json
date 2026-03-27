@@ -271,7 +271,19 @@
     "verificationCode": "验证码",
     "deactivateConfirm": "停用地址",
     "deactivateWarning": "这将永久停用该地址，您将无法使用它进行提现。此操作无法撤销。",
-    "noAddresses": "尚未添加任何地址。点击\"添加地址\"开始。"
+    "noAddresses": "尚未添加任何地址。点击\"添加地址\"开始。",
+    "addSuccessMessage": "地址添加成功。首次提现前请完成验证。",
+    "duplicateError": "该地址已被添加。",
+    "primarySetSuccess": "主要地址设置成功",
+    "deactivatedSuccess": "地址已停用",
+    "verifySuccess": "地址验证成功",
+    "failedToFetch": "获取地址失败",
+    "failedToAdd": "添加地址失败",
+    "failedToVerify": "验证地址失败",
+    "failedToSetPrimary": "设置主要地址失败",
+    "failedToDeactivate": "停用地址失败",
+    "pleaseFillAllFields": "请填写所有字段",
+    "enterVerificationToken": "请输入验证码"
   },
   "dashboard": {
     "nav": {
@@ -473,7 +485,13 @@
         "tronTRC20": "Tron (TRC-20)"
       },
       "noAddresses": "没有可用的已验证地址。请先添加并验证地址。",
-      "loading": "加载中..."
+      "loading": "加载中...",
+      "failedToFetch": "获取地址失败",
+      "failedToAdd": "添加地址失败",
+      "invalidAddress": "无效的{chain}地址格式，请检查后重试。",
+      "invalid2FACode": "请输入有效的6位验证码",
+      "failedToWithdraw": "发起提现失败",
+      "withdrawalSuccess": "提现已发起"
     },
     "fixedDeposit": {
       "pageTitle": "定期理财",
@@ -582,6 +600,7 @@
       "alreadySubscribing": "申购处理中，请勿重复操作",
       "tooManyAttempts": "尝试次数过多，请稍后再试",
       "retryLater": "请稍后重试",
+      "connectionTimeout": "请求超时，请检查网络连接后重试。",
       "transactionPassword": "交易密码",
       "enterTransactionPassword": "请输入交易密码",
       "redeemPrincipal": "赎回本金",
@@ -669,7 +688,11 @@
       "openInApp": "在应用中打开",
       "nextBackupCodes": "下一步：备用码",
       "backupCodeInfo": "这些备用码可用于在丢失 2FA 设备时访问您的账户。请妥善保管。",
-      "disable2FAConfirm": "您确定要禁用两步验证吗？这将使您的账户安全性降低。"
+      "disable2FAConfirm": "您确定要禁用两步验证吗？这将使您的账户安全性降低。",
+      "failedToGenerateQR": "生成二维码失败，请重试。",
+      "failedToSetup2FA": "设置两步验证失败",
+      "failedToStartSetup": "启动两步验证设置失败",
+      "enableEndpointNotFound": "两步验证启用 API 端点未找到 (404)"
     },
     "assets": {
       "currency": "币种",

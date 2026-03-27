@@ -42,7 +42,7 @@ const Security = () => {
         })
         .catch(err => {
           console.error("Failed to generate QR code:", err);
-          toast.error("Failed to generate QR code. Please try again.");
+          toast.error(t("dashboard.security.failedToGenerateQR"));
         });
     }
   }, [otpauth]);
@@ -100,11 +100,11 @@ const Security = () => {
         setStep(1);
         setOpen(true);
       } else {
-        throw new Error(data.error || "Failed to setup 2FA");
+        throw new Error(data.error || t("dashboard.security.failedToSetup2FA"));
       }
     } catch (error: any) {
       console.error("2FA Setup error:", error);
-      toast.error(error.message || "Failed to start 2FA setup");
+      toast.error(error.message || t("dashboard.security.failedToStartSetup"));
     } finally {
       setIsSettingUp(false);
     }
@@ -124,7 +124,7 @@ const Security = () => {
       });
 
       if (res.status === 404) {
-        throw new Error("2FA Enable API endpoint not found (404)");
+        throw new Error(t("dashboard.security.enableEndpointNotFound"));
       }
 
       const data = await res.json();

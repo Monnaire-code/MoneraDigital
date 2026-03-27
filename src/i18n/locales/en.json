@@ -273,7 +273,17 @@
     "deactivateWarning": "This will permanently deactivate the address and you won't be able to use it for withdrawals. This action cannot be undone.",
     "noAddresses": "No addresses added yet. Click \"Add Address\" to get started.",
     "addSuccessMessage": "Address added successfully. Please verify it before first withdrawal.",
-    "duplicateError": "This address has already been added."
+    "duplicateError": "This address has already been added.",
+    "primarySetSuccess": "Primary address set successfully",
+    "deactivatedSuccess": "Address deactivated",
+    "verifySuccess": "Address verified successfully",
+    "failedToFetch": "Failed to fetch addresses",
+    "failedToAdd": "Failed to add address",
+    "failedToVerify": "Failed to verify address",
+    "failedToSetPrimary": "Failed to set primary address",
+    "failedToDeactivate": "Failed to deactivate address",
+    "pleaseFillAllFields": "Please fill in all fields",
+    "enterVerificationToken": "Please enter verification token"
   },
   "dashboard": {
     "nav": {
@@ -341,7 +351,11 @@
       "openInApp": "Open in Authenticator App",
       "nextBackupCodes": "Next: Backup Codes",
       "backupCodeInfo": "These backup codes can be used to access your account if you lose your 2FA device. Store them securely.",
-      "disable2FAConfirm": "Are you sure you want to disable 2FA? This will make your account less secure."
+      "disable2FAConfirm": "Are you sure you want to disable 2FA? This will make your account less secure.",
+      "failedToGenerateQR": "Failed to generate QR code. Please try again.",
+      "failedToSetup2FA": "Failed to setup 2FA",
+      "failedToStartSetup": "Failed to start 2FA setup",
+      "enableEndpointNotFound": "2FA Enable API endpoint not found (404)"
     },
     "lending": {
       "applyTitle": "Lend Assets",
@@ -458,7 +472,13 @@
         "tronTRC20": "Tron (TRC-20)"
       },
       "noAddresses": "No verified addresses available. Please add and verify an address first.",
-      "loading": "Loading..."
+      "loading": "Loading...",
+      "failedToFetch": "Failed to fetch addresses",
+      "failedToAdd": "Failed to add address",
+      "invalidAddress": "Invalid {chain} address format. Please check and try again.",
+      "invalid2FACode": "Please enter a valid 6-digit 2FA code",
+      "failedToWithdraw": "Failed to initiate withdrawal",
+      "withdrawalSuccess": "Withdrawal initiated successfully"
     },
     "fixedDeposit": {
       "pageTitle": "Fixed Deposit",
@@ -570,6 +590,7 @@
       "alreadySubscribing": "Subscription in progress, please don't repeat operation",
       "tooManyAttempts": "Too many attempts, please try again later",
       "retryLater": "Please try again later",
+      "connectionTimeout": "Request timed out. Please check your connection and try again.",
       "transactionPassword": "Transaction Password",
       "enterTransactionPassword": "Enter transaction password",
       "redeemPrincipal": "Redeem Principal",

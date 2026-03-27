@@ -53,11 +53,11 @@ const Addresses = () => {
         const data = await res.json();
         setAddresses(data.addresses || []);
       } else {
-        toast.error("Failed to fetch addresses");
+        toast.error(t("addresses.failedToFetch"));
       }
     } catch (error) {
       console.error("Fetch addresses error:", error);
-      toast.error("Failed to fetch addresses");
+      toast.error(t("addresses.failedToFetch"));
     } finally {
       setIsLoading(false);
     }
@@ -88,7 +88,7 @@ const Addresses = () => {
   // Add new address
   const handleAddAddress = async () => {
     if (!newAddress || !label) {
-      toast.error("Please fill in all fields");
+      toast.error(t("addresses.pleaseFillAllFields"));
       return;
     }
 
@@ -135,12 +135,12 @@ const Addresses = () => {
         if (res.status === 409) {
           toast.error(t("addresses.duplicateError"));
         } else {
-          toast.error(data.error || "Failed to add address");
+          toast.error(data.error || t("addresses.failedToAdd"));
         }
       }
     } catch (error) {
       console.error("Add address error:", error);
-      toast.error("Failed to add address");
+      toast.error(t("addresses.failedToAdd"));
     } finally {
       setIsSubmitting(false);
     }
@@ -149,7 +149,7 @@ const Addresses = () => {
   // Verify address
   const handleVerifyAddress = async () => {
     if (!verificationToken || !selectedAddressId) {
-      toast.error("Please enter verification token");
+      toast.error(t("addresses.enterVerificationToken"));
       return;
     }
 
@@ -167,16 +167,16 @@ const Addresses = () => {
 
       const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || "Address verified successfully");
+        toast.success(data.message || t("addresses.verifySuccess"));
         setVerificationToken("");
         setIsVerifyDialogOpen(false);
         await fetchAddresses();
       } else {
-        toast.error(data.error || "Failed to verify address");
+        toast.error(data.error || t("addresses.failedToVerify"));
       }
     } catch (error) {
       console.error("Verify address error:", error);
-      toast.error("Failed to verify address");
+      toast.error(t("addresses.failedToVerify"));
     } finally {
       setIsSubmitting(false);
     }
@@ -191,16 +191,15 @@ const Addresses = () => {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || "Primary address set");
+        toast.success(t("addresses.primarySetSuccess"));
         await fetchAddresses();
       } else {
-        toast.error(data.error || "Failed to set primary address");
+        toast.error(t("addresses.failedToSetPrimary"));
       }
     } catch (error) {
       console.error("Set primary error:", error);
-      toast.error("Failed to set primary address");
+      toast.error(t("addresses.failedToSetPrimary"));
     }
   };
 
@@ -217,15 +216,15 @@ const Addresses = () => {
 
       const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || "Address deactivated");
+        toast.success(data.message || t("addresses.deactivatedSuccess"));
         setDeleteAddressId(null);
         await fetchAddresses();
       } else {
-        toast.error(data.error || "Failed to deactivate address");
+        toast.error(data.error || t("addresses.failedToDeactivate"));
       }
     } catch (error) {
       console.error("Delete address error:", error);
-      toast.error("Failed to deactivate address");
+      toast.error(t("addresses.failedToDeactivate"));
     }
   };
 

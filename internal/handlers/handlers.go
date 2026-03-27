@@ -477,7 +477,7 @@ func (h *Handler) SetPrimaryAddress(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Primary address set successfully"})
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func (h *Handler) DeactivateAddress(c *gin.Context) {

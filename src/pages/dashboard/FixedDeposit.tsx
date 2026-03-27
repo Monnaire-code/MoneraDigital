@@ -599,7 +599,7 @@ const FixedDeposit = () => {
           description: t("dashboard.fixedDeposit.retryLater")
         });
       } else if (networkTimeout) {
-        toast.error("Request timed out. Please check your connection and try again.", {
+        toast.error(t("dashboard.fixedDeposit.connectionTimeout"), {
           duration: 8000
         });
       } else {

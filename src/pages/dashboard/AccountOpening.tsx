@@ -308,21 +308,6 @@ const AccountOpening = () => {
         })
       });
     },
-    mutationFn: async () => {
-      if (!token) {
-        throw new Error("Not authenticated");
-      }
-      return apiRequest("/api/wallet/create", {
-        method: "POST",
-        headers: {
-            Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          productCode: "X_FINANCE",
-          currency: selectedCurrency
-        })
-      });
-    },
     onSuccess: () => {
       // Invalidate walletInfo cache - data will be refreshed from wallet_creation_requests
       queryClient.invalidateQueries({ queryKey: ["walletInfo"] });
