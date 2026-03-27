@@ -25,6 +25,8 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
   'POST /auth/login': { requiresAuth: false, backendPath: '/api/auth/login' },
   'POST /auth/register': { requiresAuth: false, backendPath: '/api/auth/register' },
   'GET /auth/me': { requiresAuth: true, backendPath: '/api/auth/me' },
+  'POST /auth/refresh': { requiresAuth: false, backendPath: '/api/auth/refresh' },
+  'POST /auth/logout': { requiresAuth: true, backendPath: '/api/auth/logout' },
 
   // 2FA endpoints
   'POST /auth/2fa/setup': { requiresAuth: true, backendPath: '/api/auth/2fa/setup' },
