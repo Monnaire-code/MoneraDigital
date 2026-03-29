@@ -9,10 +9,9 @@
 
 ## 技术栈
 
-<<<<<<< Updated upstream
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Shadcn UI (Radix Primitives)
 - **Backend**: Golang (Go) - **Mandatory for all interfaces, database access, and operations.**
-- **Database**: PostgreSQL (Neon)
+- **Database**: PostgreSQL (Neon) + Drizzle ORM
 - **External Core System**: Monnaire Core API (Account Management)
 - **State/Cache**: Redis (Upstash)
 - **Testing**: Vitest (Unit/Integration), Playwright (E2E)
@@ -120,18 +119,7 @@ func (s *AuthService) CreateUser(req models.RegisterRequest) (*models.User, erro
 
 ---
 
-## Build, Lint & Test Commands
-
-### Core Commands
-=======
-- **前端**: React 18, TypeScript, Vite, Tailwind CSS, Shadcn UI (Radix Primitives)
-- **后端**: Golang (Go) - **强制要求：所有业务逻辑、数据库访问和操作必须在 Go 后端实现**
-- **数据库**: PostgreSQL (Neon) + Drizzle ORM
-- **缓存**: Redis (Upstash)
-- **测试**: Vitest (单元/集成测试), Playwright (E2E测试)
-
 ## 构建、代码检查和测试命令
->>>>>>> Stashed changes
 
 ### 核心命令
 ```bash
@@ -200,43 +188,17 @@ npm run favicon                   # 生成网站图标
 - **尾随逗号**: 多行对象/数组使用
 
 ### 命名约定
-- **变量/函数**: `camelCase`
-- **常量**: `UPPER_SNAKE_CASE`
-- **组件/类**: `PascalCase`
-- **文件**: `kebab-case` (服务文件: `-service` 后缀)
-- **数据库**: `snake_case` (表名复数，列名 snake_case)
-
-### 错误处理
-- **从不遗漏未捕获错误** - 始终处理或重新抛出
-- **禁止空 catch 块**
-- **结构化日志记录** - 包含上下文信息
-- **抛出 Error 实例** - 不抛出字符串
-
-### 不可变性 (关键)
-始终创建新对象，**从不直接修改**。使用展开运算符或 structuredClone。
-
-```typescript
-// 错误：直接修改
-function updateUser(user, name) {
-  user.name = name;
-  return user;
-}
-
-// 正确：不可变方式
-function updateUser(user, name) {
-  return { ...user, name };
-}
-```
-
-## 文件组织
-
-<<<<<<< Updated upstream
 | Type | Convention | Examples |
 |------|------------|----------|
 | Variables | camelCase | `userId`, `isLoading` |
 | Constants | UPPER_SNAKE_CASE | `JWT_SECRET`, `MAX_RETRY_COUNT` |
 | JSON Fields | camelCase | `userId`, `accessToken`, `requires2FA` |
 | Database Columns | snake_case | `user_id`, `created_at` |
+| Functions | camelCase (verb-first) | `getUser()`, `fetchWithdrawalHistory()` |
+| Classes/Interfaces | PascalCase | `AuthService`, `WithdrawalAddress` |
+| Components | PascalCase | `DashboardLayout`, `WithdrawPage` |
+| Files | kebab-case | `auth-service.ts`, `withdrawal-history.tsx` |
+| Database tables | snake_case | `withdrawal_addresses`, `lending_positions` |
 
 **Critical Rule**: All API request/response JSON fields MUST use camelCase (`userId`, not `user_id`).
 
@@ -279,19 +241,64 @@ interface WithdrawalAddress {
 ```
 
 **⚠️ WARNING**: Never mix snake_case and camelCase in API JSON. All API communication MUST use camelCase.
+
+### 错误处理
+- **从不遗漏未捕获错误** - 始终处理或重新抛出
+- **禁止空 catch 块**
+- **结构化日志记录** - 包含上下文信息
+- **抛出 Error 实例** - 不抛出字符串
+
+### 不可变性 (关键)
+始终创建新对象，**从不直接修改**。使用展开运算符或 structuredClone。
+
+```typescript
+// 错误：直接修改
+function updateUser(user, name) {
+  user.name = name;
+  return user;
+}
+
+// 正确：不可变方式
+function updateUser(user, name) {
+  return { ...user, name };
+}
 ```
-| Functions | camelCase (verb-first) | `getUser()`, `fetchWithdrawalHistory()` |
-| Classes/PInterfaces | PascalCase | `AuthService`, `WithdrawalAddress` |
-| Components | PascalCase | `DashboardLayout`, `WithdrawPage` |
-| Files | kebab-case | `auth-service.ts`, `withdrawal-history.tsx` |
-| Database tables | snake_case | `withdrawal_addresses`, `lending_positions` |
-=======
+
+## 文件组织
+
 **小文件优先于大文件**：
 - 高内聚，低耦合
 - 典型 200-400 行，最大 800 行
 - 函数保持精简 (< 50 行)
 - 嵌套层次最多 4 层
->>>>>>> Stashed changes
+
+## 目录结构
+
+```
+src/
+├── api/                      # Vercel 无服务器函数 (仅 HTTP 代理)
+├── components/
+│   ├── ui/                   # Shadcn/Radix UI 组件
+│   └── DashboardLayout.tsx   # 布局组件
+├── db/
+│   ├── schema.ts             # Drizzle 架构定义
+│   └── migrations/           # 数据库迁移
+├── lib/                      # 仅 UI 工具和表单验证
+├── pages/                    # 路由页面 (React Router)
+├── hooks/                    # 自定义 React hooks
+├── __tests__/                # 测试文件
+└── i18n/                     # 国际化
+```
+
+## 组件模式
+- **属性接口**: `ComponentNameProps` 后缀
+- **页面组件**: 默认导出
+- **可复用组件**: 命名导出
+- **使用 Shadcn UI**: 来自 `@/components/ui/*`
+- **使用图标**: `lucide-react`
+- **使用通知**: `sonner`
+
+---
 
 ## 测试要求
 
@@ -370,56 +377,39 @@ export function useDebounce<T>(value: T, delay: number): T {
 
 **始终使用并行任务执行**处理独立操作。
 
-## Go 后端约定 (`internal/`)
-- **包名**: 小写，无下划线，无复数
-- **文件**: 小写 + 下划线，≤ 300 行
-- **Context**: 第一个参数，仅用于 I/O
-- **错误**: 始终处理，业务错误不 panic
-- **工具**: 提交前运行 `gofmt -w .` 和 `go vet ./...`
+---
 
-## 目录结构
+## 开始任务前的澄清协议 (强制)
 
-```
-src/
-├── api/                      # Vercel 无服务器函数 (仅 HTTP 代理)
-├── components/
-<<<<<<< Updated upstream
-│   ├── ui/                 # Shadcn/Radix UI components
-│   └── DashboardLayout.tsx # Layout components
-├── lib/                    # Core service layer (API clients only)
-│   ├── auth-service.ts     # Auth API client
-│   ├── withdrawal-service.ts # Withdrawal API client
-│   └── ...                 # Other service clients
-├── pages/                  # Route pages (React Router)
-│   └── dashboard/          # Dashboard pages
-├── hooks/                  # Custom React hooks
-└── i18n/                   # Internationalization
-```
+**在我们开始之前，你必须遵循以下澄清流程：**
 
-**Note**: `src/db/` directory has been removed. Frontend must NOT directly access database.
+### 1. 理解问题 (你的责任)
+
+先用你自己的话说说你理解的：
+- **我要解决什么问题** - 描述问题的本质
+- **交付物是什么** - 描述预期产出
+- **你做了哪些假设** - 标出你不确定但自行假设的地方
+
+如果你觉得有更好的技术方案，直接在这一步说出来，我来决定。
+
+### 2. 向我提问 (每次最多 3 个)
+
+在开始写代码之前，你必须向我提问，直到你对以下三点有 **100% 的把握**：
+
+1. **我真正想要达成的目标是什么** —— 而不是字面上说的
+2. **有哪些我没说出口的约束或偏好** —— 如技术栈、性能要求、需要兼容的现有代码、不能动的部分
+3. **你计划怎么实现** —— 核心思路是什么、为什么选这个方案
+
+### 3. 等待我的明确许可
+
+**在你没有得到我明确的「可以开始」之前：**
+- ❌ 不要写任何代码
+- ❌ 不要修改任何文件
+- ❌ 不要创建任何计划或文档
+
+只有当我明确说「可以开始」后，你才能开始实现。
 
 ---
-=======
-│   ├── ui/                   # Shadcn/Radix UI 组件
-│   └── DashboardLayout.tsx   # 布局组件
-├── db/
-│   ├── schema.ts             # Drizzle 架构定义
-│   └── migrations/           # 数据库迁移
-├── lib/                      # 仅 UI 工具和表单验证
-├── pages/                    # 路由页面 (React Router)
-├── hooks/                    # 自定义 React hooks
-├── __tests__/                # 测试文件
-└── i18n/                     # 国际化
-```
-
-## 组件模式
-- **属性接口**: `ComponentNameProps` 后缀
-- **页面组件**: 默认导出
-- **可复用组件**: 命名导出
-- **使用 Shadcn UI**: 来自 `@/components/ui/*`
-- **使用图标**: `lucide-react`
-- **使用通知**: `sonner`
->>>>>>> Stashed changes
 
 ## 数据库 (Drizzle ORM)
 - **表名**: `snake_case`，复数形式 (`users`, `withdrawal_addresses`)
@@ -438,7 +428,6 @@ src/
 3. 代码审查 (使用 **code-reviewer**)
 4. 提交推送与详细消息
 
-<<<<<<< Updated upstream
 ### 统一 Serverless Function 架构（强制）
 
 **重要**: Vercel Hobby 计划限制最多 **12 个 Serverless Functions**。
@@ -550,14 +539,65 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 ---
 
-## Developer Environment Tips
+## 开发基本原则 (强制要求)
 
-- **Setup**: Copy `.env.example` to `.env`, then run `npm install`
-- **Port**: Vite dev server runs on port 8080 by default
-- **Database**: Database schema is managed by Go backend (`internal/migration/`)
-- **Tests**: Run `npm test` before committing
+**所有代码修复和新功能开发必须遵循以下原则：**
 
-**Note**: Frontend does NOT directly access database. All database operations go through Go backend API.
+### 1. 设计原则
+- **KISS 原则**: 保持代码简洁、干净
+- **高内聚、低耦合**: 用精简的设计模式
+- **单一职责**: 每个模块只做一件事
+
+### 2. 测试要求
+- **覆盖率**: 所有新功能代码必须测试，保证 **100% 测试率**
+- **TDD 方法**: 先写测试，再写实现代码
+- **回归测试**: 修复后必须验证不影响其他功能
+
+### 3. 变更原则
+- **隔离性**: 修改不能影响无关功能
+- **最小化**: 只改必要的代码，不做大规模重构
+
+### 4. 提案流程
+- **新功能**: 使用 **openspec** 生成功能提案并实现
+- **Bug 修复**: 使用 **openspec** 生成修复提案
+- **任何代码变更**: 都必须包含此提示词要求
+
+---
+
+## 代码质量检查清单
+
+完成任务前检查：
+- [ ] 代码可读性好，命名清晰
+- [ ] 函数精简 (< 50 行)
+- [ ] 文件集中 (< 800 行)
+- [ ] 无深层嵌套 (> 4 层)
+- [ ] 错误处理完善
+- [ ] 无 console.log 语句
+- [ ] 无硬编码值
+- [ ] 使用不可变模式
+
+---
+
+## Go 后端约定 (`internal/`)
+- **包名**: 小写，无下划线，无复数
+- **文件**: 小写 + 下划线，≤ 300 行
+- **Context**: 第一个参数，仅用于 I/O
+- **错误**: 始终处理，业务错误不 panic
+- **工具**: 提交前运行 `gofmt -w .` 和 `go vet ./...`
+
+---
+
+## Quick Reference
+
+| Category | Rule |
+|----------|------|
+| Imports | Absolute `@/` for internal, relative for co-located |
+| Types | Explicit, no `any`, use Zod for validation |
+| Errors | Always handle, never empty catch, log with context |
+| Components | Props interface, default export pages |
+| Services | Static methods, Zod schema, structured logging |
+| Files | kebab-case for non-components, PascalCase for components |
+| Tests | Run single file with `npm test -- <path>` |
 
 ---
 
@@ -577,129 +617,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 ---
 
-## Quick Reference
+## Developer Environment Tips
 
-| Category | Rule |
-|----------|------|
-| Imports | Absolute `@/` for internal, relative for co-located |
-| Types | Explicit, no `any`, use Zod for validation |
-| Errors | Always handle, never empty catch, log with context |
-| Components | Props interface, default export pages |
-| Services | Static methods, Zod schema, structured logging |
-| Files | kebab-case for non-components, PascalCase for components |
-| Tests | Run single file with `npm test -- <path>` |
+- **Setup**: Copy `.env.example` to `.env`, then run `npm install`
+- **Port**: Vite dev server runs on port 8080 by default
+- **Database**: Database schema is managed by Go backend (`internal/migration/`)
+- **Tests**: Run `npm test` before committing
 
----
-
-## Go Code Conventions (Legacy Backend in `internal/`)
-
-- **Package**: lowercase, no underscore, no plural
-- **Files**: lowercase + underscore, ≤ 300 lines
-- **Context**: First param, for I/O only
-- **Errors**: Always handle, no panic for business errors
-- **Logging**: Handler layer only, structured logging
-- **Tools**: Run `gofmt -w .` and `go vet ./...` before committing
-
----
-
-## New Feature Development Rules
-
-**Mandatory rules for developing new features:**
-
-1.  **Technology Stack**
-    - **Frontend**: TypeScript
-    - **Backend**: Golang (Go) - **MUST** be used for all backend interfaces, database access, and operations.
-
-2.  **Architecture Principle: Backend-Only Business Logic**
-    - **Frontend API Route (`api/`)**: MUST be pure HTTP proxies only - NO business logic
-    - **Go Backend (`internal/`)**: MUST handle ALL business logic, database operations, and authentication
-    - **Frontend Service Layer (`src/lib/`)**: MUST NOT contain direct database access or authentication logic
-    - **All API calls**: Frontend → Vercel API (proxy only) → Go Backend (business logic)
-    - **Exception**: Simple UI utilities and form validation are allowed in frontend
-
-3.  **Design Principles**
-    - **KISS**: Keep code clean and simple.
-    - **Architecture**: High Cohesion, Low Coupling. Use streamlined design patterns.
-    - **Single Source of Truth**: Go backend is the only source for business logic.
-
-4.  **Testing**
-    - **Requirement**: All new functional code must be tested.
-    - **Coverage**: Maintain **100% test coverage**.
-
-5.  **Isolation**
-    - Changes must **not** affect unrelated functions.
-
-6.  **Proposal Process**
-    - Use **openspec** to generate proposals for new features.
-
-## Bug Fixing Rules
-
-**Mandatory rules for fixing bugs:**
-
-1.  **Technology Stack**
-    - **Frontend**: TypeScript
-    - **Backend**: Golang (Go) - **MUST** be used for all backend interfaces, database access, and operations.
-
-2.  **Architecture Principle: Backend-Only Business Logic**
-    - **Frontend API Routes (`api/`)**: MUST be pure HTTP proxies only - NO business logic
-    - **Go Backend (`internal/`)**: MUST handle ALL business logic, database operations, and authentication
-    - **Frontend Service Layer (`src/lib/`)**: MUST NOT contain direct database access or authentication logic
-    - **All API calls**: Frontend → Vercel API (proxy only) → Go Backend (business logic)
-    - **Exception**: Simple UI utilities and form validation are allowed in frontend
-
-3.  **Design Principles**
-    - **KISS**: Keep code clean and simple.
-    - **Architecture**: High Cohesion, Low Coupling. Use concise design patterns.
-    - **Single Source of Truth**: Go backend is the only source for business logic.
-
-4.  **Testing**
-    - **Methodology**: Test-Driven Development (TDD) - **write tests first**.
-    - **Requirement**: All new functional code must be tested.
-    - **Coverage**: Maintain **100% test coverage**.
-    - **Regression**: Perform regression testing after fixes.
-
-5.  **Isolation**
-    - Changes must **not** affect unrelated functions.
-
-6.  **Proposal Process**
-    - Use **openspec** to generate new bug proposals.
-=======
-#SZ|
-
-## 开发基本原则 (强制要求)
-
-**所有代码修复和新功能开发必须遵循以下原则：**
-
-### 1. 设计原则
-#YM|- **KISS 原则**: 保持代码简洁、干净
-#QW|- **高内聚、低耦合**: 用精简的设计模式
-#JK|- **单一职责**: 每个模块只做一件事
-
-### 2. 测试要求
-#QV|- **覆盖率**: 所有新功能代码必须测试，保证 **100% 测试率**
-#XR|- **TDD 方法**: 先写测试，再写实现代码
-#QM|- **回归测试**: 修复后必须验证不影响其他功能
-
-### 3. 变更原则
-#NM|- **隔离性**: 修改不能影响无关功能
-#RX|- **最小化**: 只改必要的代码，不做大规模重构
-
-### 4. 提案流程
-#HM|- **新功能**: 使用 **openspec** 生成功能提案并实现
-#NV|- **Bug 修复**: 使用 **openspec** 生成修复提案
-#QT|- **任何代码变更**: 都必须包含此提示词要求
-
----
-
-## 代码质量检查清单
-
-完成任务前检查：
-- [ ] 代码可读性好，命名清晰
-- [ ] 函数精简 (< 50 行)
-- [ ] 文件集中 (< 800 行)
-- [ ] 无深层嵌套 (> 4 层)
-- [ ] 错误处理完善
-- [ ] 无 console.log 语句
-- [ ] 无硬编码值
-- [ ] 使用不可变模式
->>>>>>> Stashed changes
+**Note**: Frontend does NOT directly access database. All database operations go through Go backend API.
