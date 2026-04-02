@@ -77,7 +77,7 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 
 	// ==================== PROTECTED ROUTES (JWT Auth Required) ====================
 	protected := api.Group("")
-	protected.Use(middleware.AuthMiddleware(cont.JWTSecret))
+	protected.Use(middleware.AuthMiddleware(cont.JWTSecret, cont.Repository.User))
 	{
 		// Auth routes
 		protectedAuth := protected.Group("/auth")

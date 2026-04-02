@@ -168,8 +168,8 @@ func (s *AuthService) Login(req models.LoginRequest) (*LoginResponse, error) {
 	var user models.User
 	var hashedPassword string
 
-	query := `SELECT id, email, password, two_factor_enabled FROM users WHERE email = $1`
-	err := s.DB.QueryRow(query, req.Email).Scan(&user.ID, &user.Email, &hashedPassword, &user.TwoFactorEnabled)
+	query := `SELECT id, email, password, status, two_factor_enabled FROM users WHERE email = $1`
+	err := s.DB.QueryRow(query, req.Email).Scan(&user.ID, &user.Email, &hashedPassword, &user.Status, &user.TwoFactorEnabled)
 
 	if err == sql.ErrNoRows {
 		return nil, errors.New("invalid credentials")
@@ -180,6 +180,11 @@ func (s *AuthService) Login(req models.LoginRequest) (*LoginResponse, error) {
 	// Verify password
 	if !utils.CheckPasswordHash(req.Password, hashedPassword) {
 		return nil, errors.New("invalid credentials")
+	}
+
+	// Check if user account is disabled
+	if user.Status == models.UserStatusDisabled {
+		return nil, errors.New("user account is disabled")
 	}
 
 	// Generate JWT token directly (no 2FA check during login)
@@ -206,6 +211,11 @@ func (s *AuthService) Verify2FAAndLogin(userID int, token string) (*LoginRespons
 	user, err := s.GetUserByID(userID)
 	if err != nil {
 		return nil, fmt.Errorf("user not found: %w", err)
+	}
+
+	// 检查用户状态
+	if user.Status == models.UserStatusDisabled {
+		return nil, errors.New("user account is disabled")
 	}
 
 	// 验证2FA令牌
@@ -241,6 +251,11 @@ func (s *AuthService) Skip2FAAndLogin(userID int) (*LoginResponse, error) {
 	user, err := s.GetUserByID(userID)
 	if err != nil {
 		return nil, fmt.Errorf("user not found: %w", err)
+	}
+
+	// 检查用户状态
+	if user.Status == models.UserStatusDisabled {
+		return nil, errors.New("user account is disabled")
 	}
 
 	// 如果用户已经启用了2FA，则不允许跳过

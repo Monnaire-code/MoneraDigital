@@ -94,6 +94,7 @@ func (h *Handler) Login(c *gin.Context) {
 		dtoResp.User = &dto.UserInfo{
 			ID:               resp.User.ID,
 			Email:            resp.User.Email,
+			Status:           string(resp.User.Status),
 			TwoFactorEnabled: resp.User.TwoFactorEnabled,
 		}
 	}
@@ -129,6 +130,7 @@ func (h *Handler) Register(c *gin.Context) {
 	c.JSON(http.StatusCreated, dto.UserInfo{
 		ID:               user.ID,
 		Email:            user.Email,
+		Status:           string(user.Status),
 		TwoFactorEnabled: user.TwoFactorEnabled,
 	})
 }
@@ -149,6 +151,7 @@ func (h *Handler) GetMe(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.UserInfo{
 		ID:               user.ID,
 		Email:            user.Email,
+		Status:           string(user.Status),
 		TwoFactorEnabled: user.TwoFactorEnabled,
 	})
 }
@@ -177,6 +180,7 @@ func (h *Handler) Verify2FALogin(c *gin.Context) {
 		User: &dto.UserInfo{
 			ID:               resp.User.ID,
 			Email:            resp.User.Email,
+			Status:           string(resp.User.Status),
 			TwoFactorEnabled: resp.User.TwoFactorEnabled,
 		},
 	}
@@ -218,6 +222,7 @@ func (h *Handler) Skip2FALogin(c *gin.Context) {
 		User: &dto.UserInfo{
 			ID:               resp.User.ID,
 			Email:            resp.User.Email,
+			Status:           string(resp.User.Status),
 			TwoFactorEnabled: resp.User.TwoFactorEnabled,
 		},
 	}

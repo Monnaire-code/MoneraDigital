@@ -2,16 +2,19 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"monera-digital/internal/models"
+	"monera-digital/internal/repository"
 )
 
 // AuthMiddleware validates JWT tokens in Authorization header
-func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
+// and checks if user account is disabled
+func AuthMiddleware(jwtSecret string, userRepo repository.User) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -59,6 +62,19 @@ func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
 			})
 			c.Abort()
 			return
+		}
+
+		// Check if user account is disabled
+		if userRepo != nil {
+			isDisabled, err := userRepo.IsDisabled(context.Background(), claims.UserID)
+			if err == nil && isDisabled {
+				c.JSON(http.StatusForbidden, ErrorResponse{
+					Code:    "USER_DISABLED",
+					Message: "User account is disabled",
+				})
+				c.Abort()
+				return
+			}
 		}
 
 		// Store user info in context
