@@ -74,12 +74,13 @@ func (r *WealthRepository) CreateOrder(ctx context.Context, order *repository.We
 		INSERT INTO wealth_order (user_id, product_id, product_title, currency, amount,
 			principal_redeemed, interest_expected, interest_paid, interest_accrued,
 			start_date, end_date, auto_renew, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, '0', $6, '0', '0', $7, $8, $9, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		RETURNING id
 	`
 	err := r.db.QueryRowContext(ctx, query,
 		order.UserID, order.ProductID, order.ProductTitle, order.Currency, order.Amount,
-		order.InterestExpected, order.StartDate, order.EndDate, order.AutoRenew,
+		order.PrincipalRedeemed, order.InterestExpected, order.InterestPaid, order.InterestAccrued,
+		order.StartDate, order.EndDate, order.AutoRenew, order.Status,
 	).Scan(&order.ID)
 	if err != nil {
 		fmt.Printf("[DEBUG] CreateOrder - error: %v\n", err)
@@ -375,6 +376,57 @@ func (r *WealthRepository) GetExpiredOrders(ctx context.Context) ([]*repository.
 	return orders, rows.Err()
 }
 
+func (r *WealthRepository) GetPendingOrders(ctx context.Context) ([]*repository.WealthOrderModel, error) {
+	query := `
+		SELECT o.id, o.user_id, o.product_id, p.title as product_title, p.currency, o.amount,
+			o.interest_expected, o.interest_paid, o.interest_accrued, o.start_date, o.end_date,
+			o.auto_renew, o.status, o.renewed_from_order_id, o.renewed_to_order_id,
+			o.redemption_amount, o.redemption_type, o.redeemed_at, o.created_at, o.updated_at
+		FROM wealth_order o
+		JOIN wealth_product p ON o.product_id = p.id
+		WHERE o.status = 0 AND o.start_date <= CURRENT_DATE
+		ORDER BY o.created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []*repository.WealthOrderModel
+	for rows.Next() {
+		var o repository.WealthOrderModel
+		var redemptionAmount, redeemedAt sql.NullString
+		var redemptionType sql.NullString
+		err := rows.Scan(
+			&o.ID, &o.UserID, &o.ProductID, &o.ProductTitle, &o.Currency, &o.Amount,
+			&o.InterestExpected, &o.InterestPaid, &o.InterestAccrued,
+			&o.StartDate, &o.EndDate, &o.AutoRenew, &o.Status,
+			&o.RenewedFromOrderID, &o.RenewedToOrderID,
+			&redemptionAmount, &redemptionType, &redeemedAt,
+			&o.CreatedAt, &o.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		o.RedemptionAmount = redemptionAmount.String
+		o.RedeemedAt = redeemedAt.String
+		orders = append(orders, &o)
+	}
+	return orders, rows.Err()
+}
+
+func (r *WealthRepository) ActivateOrder(ctx context.Context, orderID int64) error {
+	query := `
+		UPDATE wealth_order SET
+			status = 1,
+			updated_at = NOW()
+		WHERE id = $1
+	`
+	_, err := r.db.ExecContext(ctx, query, orderID)
+	return err
+}
+
 func (r *WealthRepository) UpdateInterestAccrued(ctx context.Context, orderID int64, interestAccrued string) error {
 	query := `
 		UPDATE wealth_order SET
@@ -427,7 +479,7 @@ func (r *WealthRepository) RenewOrder(ctx context.Context, order *repository.Wea
 		Currency:           product.Currency,
 		Amount:             order.Amount,
 		AutoRenew:          order.AutoRenew,
-		Status:             1,
+		Status:             0, // 待计息，由定时器在 start_date 更新为 1
 		StartDate:          startDate,
 		EndDate:            endDate,
 		PrincipalRedeemed:  "0",
@@ -445,13 +497,14 @@ func (r *WealthRepository) RenewOrder(ctx context.Context, order *repository.Wea
 			auto_renew, status, start_date, end_date,
 			principal_redeemed, interest_expected, interest_paid, interest_accrued,
 			renewed_from_order_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, '0', $9, '0', '0', $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		RETURNING id
 	`
 	err = r.db.QueryRowContext(ctx, query,
 		newOrder.UserID, newOrder.ProductID, newOrder.ProductTitle, newOrder.Currency, newOrder.Amount,
-		newOrder.AutoRenew, newOrder.StartDate, newOrder.EndDate,
-		newOrder.InterestExpected, newOrder.RenewedFromOrderID,
+		newOrder.AutoRenew, newOrder.Status, newOrder.StartDate, newOrder.EndDate,
+		newOrder.PrincipalRedeemed, newOrder.InterestExpected, newOrder.InterestPaid, newOrder.InterestAccrued,
+		newOrder.RenewedFromOrderID,
 	).Scan(&newOrder.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create renewed order: %v", err)

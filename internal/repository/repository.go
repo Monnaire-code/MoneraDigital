@@ -93,6 +93,8 @@ type Wealth interface {
 	UpdateProductSoldQuota(ctx context.Context, id int64, amount string) error
 	GetActiveOrders(ctx context.Context) ([]*WealthOrderModel, error)
 	GetExpiredOrders(ctx context.Context) ([]*WealthOrderModel, error)
+	GetPendingOrders(ctx context.Context) ([]*WealthOrderModel, error)
+	ActivateOrder(ctx context.Context, orderID int64) error
 	UpdateInterestAccrued(ctx context.Context, orderID int64, interestAccrued string) error
 	AccrueInterest(ctx context.Context, orderID int64, amount string, date string) error
 	SettleOrder(ctx context.Context, orderID int64, interestPaid string) error

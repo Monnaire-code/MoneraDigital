@@ -61,11 +61,9 @@ export default function Login() {
 
       const data = await res.json();
       if (!res.ok) {
-        const errorCode = data.code || "";
+        const errorMessage = data.error || "";
 
-        if (errorCode === "EMAIL_NOT_FOUND") {
-          setEmailError(t("auth.errors.emailNotFound"));
-        } else if (errorCode === "INVALID_CREDENTIALS") {
+        if (errorMessage.includes("invalid credentials") || errorMessage.includes("invalid email") || errorMessage.includes("password")) {
           setEmailError(t("auth.errors.invalidEmailOrPassword"));
           setPasswordError(t("auth.errors.invalidEmailOrPassword"));
         } else {
