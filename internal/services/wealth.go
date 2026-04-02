@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"monera-digital/internal/binance"
-	"monera-digital/internal/config"
 	"monera-digital/internal/repository"
 	"monera-digital/internal/utils"
 )
@@ -27,6 +26,8 @@ var (
 	ErrPriceFetchFailed      = errors.New("failed to fetch price")
 	ErrJournalCreateFailed   = errors.New("failed to create journal record")
 	ErrDuplicateRequest      = errors.New("duplicate request, please try again later")
+	ErrEarlyRedemption       = errors.New("early redemption not allowed")
+	ErrSystemMaintenance     = errors.New("system maintenance in progress, please retry after UTC 00:01")
 )
 
 type WealthService struct {
@@ -282,12 +283,8 @@ func (s *WealthService) Subscribe(ctx context.Context, userID int, productID int
 		return "", err
 	}
 
-	now := time.Now()
-	loc := config.GetLocation()
-	nowInLoc := now.In(loc)
-
-	// 计算新加坡时区(UTC+8)的日期
-	today := nowInLoc.Format("2006-01-02")
+	now := time.Now().UTC()
+	today := now.Format("2006-01-02")
 	todayDate, _ := time.Parse("2006-01-02", today)
 	startDate := todayDate.AddDate(0, 0, 1).Format("2006-01-02")
 	endDate := todayDate.AddDate(0, 0, 1+product.Duration).Format("2006-01-02")
@@ -314,7 +311,7 @@ func (s *WealthService) Subscribe(ctx context.Context, userID int, productID int
 		Currency:          product.Currency,
 		Amount:            amount,
 		AutoRenew:         autoRenew,
-		Status:            1,
+		Status:            0, // 0 = 待计息, 由定时器在 start_date 更新为 1 = 计息中
 		StartDate:         startDate,
 		EndDate:           endDate,
 		PrincipalRedeemed: "0",
@@ -421,9 +418,33 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 		return ErrOrderAlreadyRedeemed
 	}
 
-	now := time.Now()
-	endDate, _ := time.Parse("2006-01-02", order.EndDate)
-	isExpired := now.After(endDate) || now.Equal(endDate)
+	now := time.Now().UTC()
+
+	// 检查是否在系统维护时间 (UTC 00:00 - 00:01)
+	hour, minute, _ := now.Clock()
+	if hour == 0 && minute < 1 {
+		fmt.Printf("[DEBUG] Redemption blocked - system maintenance time (UTC 00:00-00:01)\n")
+		return ErrSystemMaintenance
+	}
+
+	// 统一处理日期格式：只取前10位 (YYYY-MM-DD)
+	endDateStr := order.EndDate
+	if len(endDateStr) >= 10 {
+		endDateStr = endDateStr[:10]
+	}
+	endDate, parseErr := time.Parse("2006-01-02", endDateStr)
+	if parseErr != nil {
+		fmt.Printf("[ERROR] Order %d failed to parse endDate: raw=%s, parsed=%s, error=%v\n",
+			order.ID, order.EndDate, endDateStr, parseErr)
+		return fmt.Errorf("invalid end date format: %s", order.EndDate)
+	}
+
+	endDateOnly := time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 0, 0, 0, 0, time.UTC)
+	nowDateOnly := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	isExpired := nowDateOnly.After(endDateOnly)
+
+	fmt.Printf("[DEBUG] Order %d redemption check: now=%s, endDate=%s, isExpired=%v\n",
+		order.ID, nowDateOnly.Format("2006-01-02"), endDateOnly.Format("2006-01-02"), isExpired)
 
 	if isExpired {
 		fmt.Printf("[DEBUG] Order %d is expired - full redemption with interest\n", order.ID)

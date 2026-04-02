@@ -808,7 +808,18 @@ func (h *Handler) Redeem(c *gin.Context) {
 	}
 
 	if err := h.WealthService.Redeem(c.Request.Context(), userID, req.OrderID, req.RedemptionType); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		switch err {
+		case services.ErrOrderNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "ORDER_NOT_FOUND"})
+		case services.ErrOrderAlreadyRedeemed:
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "ALREADY_REDEEMED"})
+		case services.ErrSystemMaintenance:
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": "SYSTEM_MAINTENANCE"})
+		case services.ErrEarlyRedemption:
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error(), "code": "EARLY_REDEMPTION"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
 		return
 	}
 

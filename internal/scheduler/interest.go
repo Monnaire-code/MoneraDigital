@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"monera-digital/internal/binance"
-	"monera-digital/internal/config"
 	"monera-digital/internal/logger"
 	"monera-digital/internal/repository"
 	"monera-digital/internal/utils"
@@ -54,13 +53,16 @@ func (s *InterestScheduler) Start() {
 		now := time.Now().In(loc)
 		logger.Info("[InterestScheduler] Execution started", "timestamp", now.Format("2006-01-02 15:04:05"))
 
+		// Step 0: Activate pending orders (status 0 -> 1)
+		activatedCount, activateErr := s.ActivatePendingOrders(ctx)
+
 		// Step 1: Calculate daily interest
 		ordersProcessed, interestAccrued, err := s.CalculateDailyInterest(ctx)
 
 		// Step 2: Settle expired orders
 		settledCount, settleErr := s.SettleExpiredOrders(ctx)
 
-		success := err == nil && settleErr == nil
+		success := err == nil && settleErr == nil && activateErr == nil
 		errorMsg := ""
 		if err != nil {
 			errorMsg = err.Error()
@@ -71,6 +73,12 @@ func (s *InterestScheduler) Start() {
 			}
 			errorMsg += fmt.Sprintf("settle error: %v", settleErr)
 		}
+		if activateErr != nil {
+			if errorMsg != "" {
+				errorMsg += "; "
+			}
+			errorMsg += fmt.Sprintf("activate error: %v", activateErr)
+		}
 
 		totalInterestFloat, _ := strconv.ParseFloat(interestAccrued, 64)
 		s.metrics.RecordInterestRun(success, ordersProcessed, totalInterestFloat, errorMsg)
@@ -79,6 +87,7 @@ func (s *InterestScheduler) Start() {
 			logger.Error("[InterestScheduler] Execution failed", "error", errorMsg)
 		} else {
 			logger.Info("[InterestScheduler] Execution completed",
+				"orders_activated", activatedCount,
 				"orders_processed", ordersProcessed,
 				"interest_accrued", interestAccrued,
 				"orders_settled", settledCount)
@@ -361,12 +370,8 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 		return fmt.Errorf("insufficient balance for renewal: available %s, required %s", availableBalance, order.Amount)
 	}
 
-	now := time.Now()
-	loc := config.GetLocation()
-	nowInLoc := now.In(loc)
-
-	// Calculate dates - same as subscription: start tomorrow, end tomorrow + duration
-	today := nowInLoc.Format("2006-01-02")
+	now := time.Now().UTC()
+	today := now.Format("2006-01-02")
 	todayDate, _ := time.Parse("2006-01-02", today)
 	startDate := todayDate.AddDate(0, 0, 1).Format("2006-01-02")
 	endDate := todayDate.AddDate(0, 0, 1+product.Duration).Format("2006-01-02")
@@ -446,6 +451,37 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 		"interest_paid", order.InterestAccrued)
 
 	return nil
+}
+
+func (s *InterestScheduler) ActivatePendingOrders(ctx context.Context) (int, error) {
+	logger.Info("[InterestScheduler] Activating pending orders...")
+
+	orders, err := s.repo.GetPendingOrders(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get pending orders: %v", err)
+	}
+
+	logger.Info("[InterestScheduler] Found pending orders", "count", len(orders))
+
+	activatedCount := 0
+	for _, order := range orders {
+		err := s.repo.ActivateOrder(ctx, order.ID)
+		if err != nil {
+			logger.Error("[InterestScheduler] Failed to activate order",
+				"order_id", order.ID, "error", err.Error())
+			continue
+		}
+		logger.Info("[InterestScheduler] Order activated",
+			"order_id", order.ID,
+			"user_id", order.UserID,
+			"start_date", order.StartDate)
+		activatedCount++
+	}
+
+	logger.Info("[InterestScheduler] Pending orders activation completed",
+		"activated_count", activatedCount)
+
+	return activatedCount, nil
 }
 
 func (s *InterestScheduler) GetMetrics() *SchedulerMetrics {

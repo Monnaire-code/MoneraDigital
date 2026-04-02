@@ -108,8 +108,6 @@ const FixedDeposit = () => {
   const [isRedeeming, setIsRedeeming] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [isSubscribing, setIsSubscribing] = useState(false);
-  const [concurrentAttempts, setConcurrentAttempts] = useState(0);
-  const [retryCount, setRetryCount] = useState(0);
   const [networkTimeout, setNetworkTimeout] = useState(false);
   const [operationProgress, setOperationProgress] = useState<string>("idle");
   const [loadingStates, setLoadingStates] = useState({
@@ -119,6 +117,7 @@ const FixedDeposit = () => {
     subscribe: false
   });
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const requestIdRef = useRef<string | null>(null);
 
   const [assets, setAssets] = useState<Asset[]>([]);
   const [isLoadingAssets, setIsLoadingAssets] = useState(true);
@@ -316,27 +315,22 @@ const FixedDeposit = () => {
 
   // 根据当前Tab和币种筛选获取相应数据
   useEffect(() => {
-    if (assets.length > 0 && currencyFilter) {
+    if (assets.length > 0) {
       if (activeTab === "products") {
-        fetchProducts(currencyFilter);
+        fetchProducts(currencyFilter || undefined);
       } else if (activeTab === "history") {
-        fetchOrders(currencyFilter);
+        fetchOrders(currencyFilter || undefined);
       }
-    } else if (assets.length > 0) {
-      setProducts([]);
-      setProductsTotal(0);
-      setOrders([]);
-      setOrdersTotal(0);
     }
   }, [assets.length, currencyFilter, activeTab]);
 
   // 当Tab切换时获取对应数据
   useEffect(() => {
-    if (currencyFilter && assets.length > 0) {
+    if (assets.length > 0) {
       if (activeTab === "products") {
-        fetchProducts(currencyFilter);
+        fetchProducts(currencyFilter || undefined);
       } else if (activeTab === "history") {
-        fetchOrders(currencyFilter);
+        fetchOrders(currencyFilter || undefined);
       }
     }
   }, [activeTab, currencyFilter, assets.length]);
@@ -352,13 +346,6 @@ const FixedDeposit = () => {
     return [...new Set([...productCurrencies, ...orderCurrencies, ...assetCurrencies])].sort();
   }, [displayAssets, displayOrders, displayProducts]);
 
-  useEffect(() => {
-    // 只在初始化时设置默认的币种筛选器
-    if (allCurrencies.length > 0 && !currencyFilter) {
-      setCurrencyFilter(allCurrencies[0]);
-    }
-  }, [allCurrencies, currencyFilter]);
-
   const filteredProducts = useMemo(() => {
     if (!currencyFilter) return displayProducts;
     return displayProducts.filter(p => p.currency === currencyFilter);
@@ -372,23 +359,20 @@ const FixedDeposit = () => {
   const handleSubscribe = async () => {
     if (!selectedProduct || !amount) return;
 
-    // 防止并发申购 - 客户端级别
-    if (isSubscribing) {
+    // 防止并发申购 - 使用 ref 判断，防止递归重试导致的问题
+    if (requestIdRef.current !== null) {
       toast.error(t("dashboard.fixedDeposit.alreadySubscribing"));
       return;
     }
 
-    // 检查并发请求次数
-    if (concurrentAttempts > 3) {
-      toast.error(t("dashboard.fixedDeposit.tooManyAttempts"));
-      return;
-    }
+    // 生成唯一请求 ID（只在首次调用时生成，重试时复用）
+    const requestId = generateRequestId();
+    requestIdRef.current = requestId;
 
     setIsSubscribing(true);
-    setConcurrentAttempts(prev => prev + 1);
 
     // 设置网络超时监控
-    const requestTimeout = 30000; // 30秒超时
+    const requestTimeout = 60000; // 60秒超时
     timeoutRef.current = setTimeout(() => {
       setNetworkTimeout(true);
       toast.error(t("dashboard.fixedDeposit.requestTimeoutError"), {
@@ -403,9 +387,6 @@ const FixedDeposit = () => {
         navigate("/login");
         return;
       }
-
-      // 并发控制：生成请求ID
-      const requestId = generateRequestId();
 
       // 计算预期利息 - 使用高精度计算
       const interestCalculation = getInterestCalculation();
@@ -430,10 +411,9 @@ const FixedDeposit = () => {
           totalAmount: interestCalculation.totalAmount
         },
         // 并发控制
-        requestId: requestId,
+        requestId: requestIdRef.current,
         clientTimestamp: Date.now(),
         userAgent: navigator.userAgent,
-        retryCount: retryCount,
         // 安全验证
         ip: '', // 将在服务器端获取
         sessionId: localStorage.getItem('sessionId'),
@@ -442,16 +422,16 @@ const FixedDeposit = () => {
       // 日志记录申购数据
       console.log('申购请求数据:', JSON.stringify(subscribeData, null, 2));
 
-      const res = await fetchWithRetry("/api/wealth/subscribe", {
+      const res = await fetch("/api/wealth/subscribe", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": requestId,
+          "Idempotency-Key": requestIdRef.current,
           "X-Client-Timestamp": subscribeData.clientTimestamp.toString(),
           Authorization: `Bearer ${token}`
         },
         body: JSON.stringify(subscribeData)
-      }, retryCount);
+      });
 
       // 清除超时定时器
       if (timeoutRef.current) {
@@ -549,8 +529,7 @@ const FixedDeposit = () => {
         endDate: data.endDate,
         autoRenew: autoRenew,
         transactionTime: new Date().toISOString(),
-        retriesUsed: retryCount,
-        backendResponse: data // 完整的后端响应
+        backendResponse: data
       });
 
       // 申购成功的详细提示
@@ -571,25 +550,13 @@ const FixedDeposit = () => {
         fetchOrders(currencyFilter || undefined)
       ]);
 
-    } catch (error: unknown) {
+      } catch (error: unknown) {
       // 清除超时定时器
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
       
       const errorMessage = error instanceof Error ? error.message : t("dashboard.fixedDeposit.subscribeFailed");
-      
-      // 智能重试逻辑 - 针对特定错误类型
-      if (shouldRetry(errorMessage) && retryCount < 2) {
-        setRetryCount(prev => prev + 1);
-        toast.warning("Retrying operation...", {
-          duration: 2000
-        });
-        
-        // 延迟重试
-        await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
-        return handleSubscribe(); // 递归重试
-      }
       
       // 如果是系统繁忙或并发问题，提供更友好的提示
       if (errorMessage.includes(t("dashboard.fixedDeposit.concurrentRequestError")) || 
@@ -609,64 +576,12 @@ const FixedDeposit = () => {
       }
     } finally {
       setIsSubscribing(false);
-      setConcurrentAttempts(0);
-      setRetryCount(0);
       setNetworkTimeout(false);
+      requestIdRef.current = null; // 重置请求 ID，允许下次申购
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
     }
-  };
-
-  const shouldRetry = (errorMessage: string): boolean => {
-    // Only retry for network-related or temporary errors
-    const retryableErrors = [
-      'network',
-      'timeout',
-      'concurrent',
-      'duplicate',
-      'system busy',
-      '503',
-      '502',
-      '504'
-    ];
-    
-    return retryableErrors.some(error => 
-      errorMessage.toLowerCase().includes(error.toLowerCase())
-    );
-  };
-
-  const fetchWithRetry = async (url: string, options: RequestInit, retries: number): Promise<Response> => {
-    const maxRetries = 3;
-    let lastError: Error | null = null;
-    
-    for (let i = 0; i <= maxRetries; i++) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 25000); // 25秒内部超时
-        
-        const response = await fetch(url, {
-          ...options,
-          signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        return response;
-        
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error('Unknown error');
-        
-        if (i === maxRetries) {
-          throw lastError;
-        }
-        
-        // 指数退避策略
-        const delay = Math.pow(2, i) * 500; // 500ms, 1s, 2s, 4s
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-    
-    throw lastError || new Error('Max retries exceeded');
   };
 
   const getFriendlyErrorMessage = (errorKey: string, t: any): string => {
@@ -843,9 +758,9 @@ const FixedDeposit = () => {
   const STATUS_MAP: Record<number, { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
     0: { label: "pending_interest", variant: "secondary" },
     1: { label: "accruing_interest", variant: "default" },
-    2: { label: "renewed", variant: "outline" },
-    3: { label: "settled", variant: "outline" },
-    4: { label: "redeemed", variant: "destructive" },
+    2: { label: "renewing", variant: "outline" },
+    3: { label: "matured", variant: "outline" },
+    4: { label: "early_redeem", variant: "destructive" },
   };
 
   const validateAmountInput = (): { valid: boolean; error?: string } => {
@@ -919,6 +834,17 @@ const FixedDeposit = () => {
           ) : (
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-muted-foreground">{t("dashboard.fixedDeposit.filterByCurrency")}:</span>
+              <Button
+                variant={currencyFilter === null ? "default" : "outline"}
+                size="sm"
+                onClick={() => setCurrencyFilter(null)}
+                className="gap-1"
+                disabled={loadingStates.assets}
+              >
+                <Wallet size={14} />
+                {t("dashboard.fixedDeposit.filterAll")}
+                {loadingStates.assets && <RefreshCw className="animate-spin h-3 w-3 ml-1" />}
+              </Button>
               {displayAssets.length === 0 ? (
                 <span className="text-sm text-muted-foreground">{t("dashboard.fixedDeposit.noAssets")}</span>
               ) : (
