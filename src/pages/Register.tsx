@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 interface RegisterError {
+  error?: string;
   code: string;
   message: string;
   details?: string;
@@ -110,36 +111,28 @@ export default function Register() {
   };
 
   const handleApiError = (data: RegisterError) => {
+    const errorMessage = data.error || "";
     const errorCode = data.code || "";
-    const errorMessage = data.message || "";
     const errorDetails = data.details || "";
-    const localizedMessage = getLocalizedError(errorMessage);
 
-    switch (errorCode) {
-      case "VALIDATION_ERROR":
-        if (errorDetails === "email") {
-          setEmailError(t("auth.errors.invalidEmailFormat"));
-        } else if (errorDetails === "password") {
-          setPasswordError(t("auth.errors.invalidPasswordFormat"));
-        } else {
-          toast.error(t("auth.errors.invalidParameters"));
-        }
-        break;
-      case "EMAIL_ALREADY_EXISTS":
-        setEmailError(t("auth.errors.emailAlreadyRegistered"));
-        break;
-      case "INTERNAL_ERROR":
-      case "PANIC_RECOVERED":
-        toast.error(t("auth.errors.serverError"));
-        break;
-      default:
-        if (errorDetails === "email") {
-          setEmailError(localizedMessage);
-        } else if (errorDetails === "password") {
-          setPasswordError(localizedMessage);
-        } else {
-          toast.error(localizedMessage || t("auth.errors.registrationFailed"));
-        }
+    if (errorMessage.includes("email already registered") || errorCode === "EMAIL_ALREADY_EXISTS") {
+      setEmailError(t("auth.errors.emailAlreadyRegistered"));
+    } else if (errorMessage.includes("email") && (errorMessage.includes("invalid") || errorMessage.includes("format"))) {
+      setEmailError(t("auth.errors.invalidEmailFormat"));
+    } else if (errorMessage.includes("password") && (errorMessage.includes("invalid") || errorMessage.includes("format") || errorMessage.includes("too short"))) {
+      setPasswordError(t("auth.errors.invalidPasswordFormat"));
+    } else if (errorCode === "VALIDATION_ERROR") {
+      if (errorDetails === "email") {
+        setEmailError(t("auth.errors.invalidEmailFormat"));
+      } else if (errorDetails === "password") {
+        setPasswordError(t("auth.errors.invalidPasswordFormat"));
+      } else {
+        toast.error(t("auth.errors.invalidParameters"));
+      }
+    } else if (errorCode === "INTERNAL_ERROR" || errorCode === "PANIC_RECOVERED") {
+      toast.error(t("auth.errors.serverError"));
+    } else {
+      toast.error(errorMessage || t("auth.errors.registrationFailed"));
     }
   };
 

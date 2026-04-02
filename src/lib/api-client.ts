@@ -125,7 +125,7 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
     try {
       const data = await response.json();
       return {
-        message: data.message || response.statusText,
+        message: data.error || data.message || response.statusText,
         code: data.code || `HTTP_${response.status}`,
       };
     } catch {
