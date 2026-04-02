@@ -14,6 +14,8 @@ type User interface {
 	GetByID(ctx context.Context, id int) (*models.User, error)
 	Create(ctx context.Context, email, passwordHash string) (*models.User, error)
 	Update(ctx context.Context, user *models.User) error
+	UpdateStatus(ctx context.Context, userID int, status models.UserStatus) error
+	IsDisabled(ctx context.Context, userID int) (bool, error)
 	Delete(ctx context.Context, id int) error
 }
 

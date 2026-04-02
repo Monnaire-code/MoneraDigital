@@ -32,6 +32,7 @@ type LoginResponse struct {
 type UserInfo struct {
 	ID               int    `json:"id"`
 	Email            string `json:"email"`
+	Status           string `json:"status"`
 	TwoFactorEnabled bool   `json:"twoFactorEnabled"`
 }
 

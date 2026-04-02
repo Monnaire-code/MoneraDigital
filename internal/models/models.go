@@ -57,15 +57,25 @@ const (
 	UserWalletStatusCancelled UserWalletStatus = "CANCELLED"
 )
 
+// UserStatus represents the status of a user account
+type UserStatus string
+
+const (
+	UserStatusActive   UserStatus = "ACTIVE"
+	UserStatusDisabled UserStatus = "DISABLED"
+)
+
 // User model
 type User struct {
 	ID                   int            `json:"id" db:"id"`
 	Email                string         `json:"email" db:"email"`
 	Password             string         `json:"-" db:"password"`
+	Status               UserStatus     `json:"status" db:"status"`
 	TwoFactorSecret      sql.NullString `json:"-" db:"two_factor_secret"`
 	TwoFactorEnabled     bool           `json:"twoFactorEnabled" db:"two_factor_enabled"`
 	TwoFactorBackupCodes sql.NullString `json:"-" db:"two_factor_backup_codes"`
 	CreatedAt            time.Time      `json:"createdAt" db:"created_at"`
+	UpdatedAt            time.Time      `json:"updatedAt" db:"updated_at"`
 }
 
 // Account model (New)
