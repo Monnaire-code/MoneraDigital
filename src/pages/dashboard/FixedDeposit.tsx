@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { PiggyBank, TrendingUp, Info, ArrowRight, Clock, Percent, ShieldCheck, RefreshCw, History, AlertTriangle, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -125,10 +125,24 @@ const FixedDeposit = () => {
   // 统一的币种筛选器
   const [currencyFilter, setCurrencyFilter] = useState<string | null>(null);
 
+  // 年化利率排序状态: null=默认, 'asc'=升序, 'desc'=降序
+  const [apySortOrder, setApySortOrder] = useState<'asc' | 'desc' | null>(null);
+
   const [productsPage, setProductsPage] = useState(1);
   const [productsTotal, setProductsTotal] = useState(0);
   const [ordersPage, setOrdersPage] = useState(1);
   const [ordersTotal, setOrdersTotal] = useState(0);
+
+  // 切换年化利率排序
+  const toggleApySort = () => {
+    if (apySortOrder === null) {
+      setApySortOrder('desc'); // 默认降序(高到低)
+    } else if (apySortOrder === 'desc') {
+      setApySortOrder('asc'); // 升序(低到高)
+    } else {
+      setApySortOrder(null); // 取消排序
+    }
+  };
 
   const fetchAssets = async () => {
     try {
@@ -350,6 +364,16 @@ const FixedDeposit = () => {
     if (!currencyFilter) return displayProducts;
     return displayProducts.filter(p => p.currency === currencyFilter);
   }, [displayProducts, currencyFilter]);
+
+  // 按年化利率排序后的产品列表
+  const sortedProducts = useMemo(() => {
+    if (!apySortOrder) return filteredProducts;
+    return [...filteredProducts].sort((a, b) => {
+      return apySortOrder === 'asc'
+        ? a.apy - b.apy
+        : b.apy - a.apy;
+    });
+  }, [filteredProducts, apySortOrder]);
 
   const filteredOrders = useMemo(() => {
     if (!currencyFilter) return displayOrders;
@@ -1086,33 +1110,44 @@ const FixedDeposit = () => {
                 <CardDescription>{t("dashboard.fixedDeposit.productDesc")}</CardDescription>
               </CardHeader>
               <CardContent>
-                 {filteredProducts.length === 0 ? (
-                   <div className="h-48 flex flex-col items-center justify-center text-muted-foreground gap-3">
-                     <Info size={32} className="text-muted-foreground/50" />
-                     <span className="text-lg">{t("dashboard.fixedDeposit.noProducts")}</span>
-                      {currencyFilter && (
-                        <span className="text-sm">
-                          {t("dashboard.fixedDeposit.tryOtherCurrency")}
-                        </span>
-                      )}
-                   </div>
-                 ) : (
-                   <>
-                     <Table>
-                       <TableHeader>
-                         <TableRow className="hover:bg-transparent border-border/50">
-                           <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.productName")}</TableHead>
-                           <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.currency")}</TableHead>
-                           <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.apy")}</TableHead>
-                           <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.duration")}</TableHead>
-                           <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.minAmount")}</TableHead>
-                           <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.maxAmount")}</TableHead>
-                           <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.autoRenew")}</TableHead>
-                           <TableHead className="text-muted-foreground text-right">{t("dashboard.fixedDeposit.action")}</TableHead>
-                         </TableRow>
-                       </TableHeader>
-                       <TableBody>
-                         {filteredProducts.map((product) => (
+              {sortedProducts.length === 0 ? (
+                    <div className="h-48 flex flex-col items-center justify-center text-muted-foreground gap-3">
+                      <Info size={32} className="text-muted-foreground/50" />
+                      <span className="text-lg">{t("dashboard.fixedDeposit.noProducts")}</span>
+                       {currencyFilter && (
+                         <span className="text-sm">
+                           {t("dashboard.fixedDeposit.tryOtherCurrency")}
+                         </span>
+                       )}
+                    </div>
+                  ) : (
+                    <>
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="hover:bg-transparent border-border/50">
+                            <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.productName")}</TableHead>
+                            <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.currency")}</TableHead>
+                            <TableHead className="text-muted-foreground">
+                              <button
+                                onClick={toggleApySort}
+                                className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer"
+                                title={t("dashboard.fixedDeposit.sortByApy")}
+                              >
+                                {t("dashboard.fixedDeposit.apy")}
+                                {apySortOrder === null && <ArrowUpDown size={14} className="opacity-50" />}
+                                {apySortOrder === 'desc' && <ArrowDown size={14} className="text-primary" />}
+                                {apySortOrder === 'asc' && <ArrowUp size={14} className="text-primary" />}
+                              </button>
+                            </TableHead>
+                            <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.duration")}</TableHead>
+                            <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.minAmount")}</TableHead>
+                            <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.maxAmount")}</TableHead>
+                            <TableHead className="text-muted-foreground">{t("dashboard.fixedDeposit.autoRenew")}</TableHead>
+                            <TableHead className="text-muted-foreground text-right">{t("dashboard.fixedDeposit.action")}</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {sortedProducts.map((product) => (
                            <TableRow 
                              key={product.id} 
                              className="border-border/50 hover:bg-secondary/30 transition-colors group cursor-pointer"
@@ -1163,20 +1198,20 @@ const FixedDeposit = () => {
                                 </Button>
                               </TableCell>
                            </TableRow>
-                         ))}
-                       </TableBody>
-                     </Table>
-                     {filteredProducts.length > 0 && (
-                       <Pagination 
-                         currentPage={productsPage} 
-                         totalPages={Math.max(1, Math.ceil(productsTotal / 10))} 
-                         onPageChange={setProductsPage}
-                       />
-                     )}
-                   </>
-                  )}
-               </CardContent>
-            </Card>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {sortedProducts.length > 0 && (
+                        <Pagination 
+                          currentPage={productsPage} 
+                          totalPages={Math.max(1, Math.ceil(productsTotal / 10))} 
+                          onPageChange={setProductsPage}
+                        />
+                      )}
+                    </>
+                   )}
+                </CardContent>
+             </Card>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card className="bg-gradient-to-br from-primary/10 to-transparent border-primary/20">
