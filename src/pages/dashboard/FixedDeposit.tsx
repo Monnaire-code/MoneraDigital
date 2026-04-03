@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { PiggyBank, TrendingUp, Info, ArrowRight, Clock, Percent, ShieldCheck, RefreshCw, History, AlertTriangle, Wallet } from "lucide-react";
+import { CryptoIcon } from "@/components/ui/crypto-icon";
 import { toast } from "sonner";
 import {
   calculateInterest,
@@ -878,10 +879,10 @@ const FixedDeposit = () => {
                     variant={currencyFilter === asset.currency ? "default" : "outline"}
                     size="sm"
                     onClick={() => setCurrencyFilter(asset.currency)}
-                    className="gap-1"
+                    className="gap-2"
                     disabled={loadingStates.assets}
                   >
-                    <Wallet size={14} />
+                    <CryptoIcon currency={asset.currency} size={16} />
                     {asset.currency}
                     {loadingStates.assets && <RefreshCw className="animate-spin h-3 w-3 ml-1" />}
                   </Button>
@@ -1148,17 +1149,17 @@ const FixedDeposit = () => {
                         </TableHeader>
                         <TableBody>
                           {sortedProducts.map((product) => (
-                           <TableRow 
-                             key={product.id} 
-                             className="border-border/50 hover:bg-secondary/30 transition-colors group cursor-pointer"
-                             onClick={() => setSelectedProduct(product)}
-                           >
-                             <TableCell>
-                               <div className="flex items-center gap-2">
-                                 <PiggyBank size={16} className="text-primary" />
-                                 <span className="font-medium">{product.name}</span>
-                               </div>
-                             </TableCell>
+                            <TableRow 
+                              key={product.id} 
+                              className="border-border/50 hover:bg-secondary/30 transition-colors group cursor-pointer"
+                              onClick={() => setSelectedProduct(product)}
+                            >
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <CryptoIcon currency={product.currency} size={18} />
+                                  <span className="font-medium">{product.name}</span>
+                                </div>
+                              </TableCell>
                              <TableCell>
                                <Badge variant="secondary" className="font-mono">{product.currency}</Badge>
                              </TableCell>
@@ -1286,16 +1287,16 @@ const FixedDeposit = () => {
                            const statusInfo = getStatusInfo(order.status);
                            const daysRemaining = order.status === 1 ? getDaysRemaining(order.endDate) : null;
                            return (
-                             <TableRow key={order.id} className="border-border/50 hover:bg-secondary/30 transition-colors group">
-                               <TableCell className="font-mono text-xs text-muted-foreground">
-                                 #{order.id.toString().padStart(6, '0')}
-                               </TableCell>
-                               <TableCell>
-                                 <div className="flex items-center gap-2">
-                                   <PiggyBank size={14} className="text-primary" />
-                                   <span className="font-medium">{order.productTitle}</span>
-                                 </div>
-                               </TableCell>
+                              <TableRow key={order.id} className="border-border/50 hover:bg-secondary/30 transition-colors group">
+                                <TableCell className="font-mono text-xs text-muted-foreground">
+                                  #{order.id.toString().padStart(6, '0')}
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex items-center gap-2">
+                                    <CryptoIcon currency={order.currency} size={16} />
+                                    <span className="font-medium">{order.productTitle}</span>
+                                  </div>
+                                </TableCell>
                                <TableCell className="font-mono">{formatNumber(order.amount)} {order.currency}</TableCell>
                                <TableCell className="font-mono text-primary">{formatNumber(order.interestExpected)} {order.currency}</TableCell>
                                <TableCell className="font-mono text-green-400">{formatNumber(order.interestPaid)} {order.currency}</TableCell>

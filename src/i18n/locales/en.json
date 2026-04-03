@@ -184,6 +184,7 @@
       "passwordRequired": "Password is required",
       "userAlreadyExists": "User already exists",
       "invalidEmailOrPassword": "Invalid email or password",
+      "accountDisabled": "Your account has been disabled. Please contact support.",
       "invalidParameters": "Invalid parameters, please check your input",
       "invalidPasswordFormat": "Password must contain uppercase, lowercase, and digit characters",
       "emailAlreadyRegistered": "This email is already registered",
