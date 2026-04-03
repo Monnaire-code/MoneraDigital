@@ -475,14 +475,18 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 				return err
 			}
 
-			newBalance, _ := utils.Add(account.Balance, order.InterestAccrued)
+			// 重新获取账户余额以获取准确的 BalanceSnapshot
+			account, err = s.accountRepo.GetAccountByUserIDAndCurrency(ctx, int64(userID), order.Currency)
+			if err != nil {
+				return err
+			}
 
 			interestJournalRecord := &repository.JournalModel{
 				SerialNo:        fmt.Sprintf("REDEEM-INTEREST-%s-%d", now.Format("20060102150405"), order.ID),
 				UserID:          int64(userID),
 				AccountID:       account.ID,
 				Amount:          order.InterestAccrued,
-				BalanceSnapshot: newBalance,
+				BalanceSnapshot: account.Balance,
 				BizType:         3,
 				RefID:           &order.ID,
 				CreatedAt:       now.Format(time.RFC3339),
@@ -502,6 +506,7 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 		fmt.Printf("[DEBUG] Early redemption - cleared accrued interest for order %d\n", order.ID)
 	}
 
+	// 计算本金入账后的最终余额
 	newBalance, _ := utils.Add(account.Balance, order.Amount)
 
 	principalJournal := &repository.JournalModel{
