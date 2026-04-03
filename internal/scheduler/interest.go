@@ -217,23 +217,22 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 		return fmt.Errorf("failed to unfreeze balance: %v", err)
 	}
 
-	// Generate journal record for principal unfreeze
-	newBalance, _ := utils.Add(account.Balance, order.Amount)
-	balanceSnapshot, _ := utils.NormalizeString(newBalance)
-
-	principalJournal := &repository.JournalModel{
-		SerialNo:        fmt.Sprintf("SETTLE-PRINCIPAL-%s-%d", now.Format("20060102150405"), order.ID),
+	// 记录解冻流水
+	balanceAfterUnfreeze, _ := utils.Add(account.Balance, order.Amount)
+	unfreezeSnapshot, _ := utils.NormalizeString(balanceAfterUnfreeze)
+	unfreezeJournal := &repository.JournalModel{
+		SerialNo:        fmt.Sprintf("UNFREEZE-%s-%d", now.Format("20060102150405"), order.ID),
 		UserID:          order.UserID,
 		AccountID:       account.ID,
 		Amount:          order.Amount,
-		BalanceSnapshot: balanceSnapshot,
-		BizType:         2,
+		BalanceSnapshot: unfreezeSnapshot,
+		BizType:         2, // WEALTH_REDEEM (解冻)
 		RefID:           &order.ID,
 		CreatedAt:       now.Format(time.RFC3339),
 	}
-	err = s.journalRepo.CreateJournalRecord(ctx, principalJournal)
+	err = s.journalRepo.CreateJournalRecord(ctx, unfreezeJournal)
 	if err != nil {
-		logger.Error("[InterestScheduler] Failed to create principal journal record",
+		logger.Error("[InterestScheduler] Failed to create unfreeze journal record",
 			"order_id", orderID, "error", err.Error())
 	}
 
@@ -245,9 +244,14 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 			return fmt.Errorf("failed to add interest to balance: %v", err)
 		}
 
+		// 重新获取账户余额以获取准确的 BalanceSnapshot
+		account, err = s.accountRepo.GetAccountByUserIDAndCurrency(ctx, order.UserID, order.Currency)
+		if err != nil {
+			return fmt.Errorf("failed to get account: %v", err)
+		}
+
 		// Generate journal record for interest payout
-		balanceAfterInterest, _ := utils.Add(newBalance, order.InterestAccrued)
-		interestSnapshot, _ := utils.NormalizeString(balanceAfterInterest)
+		interestSnapshot, _ := utils.NormalizeString(account.Balance)
 		interestJournal := &repository.JournalModel{
 			SerialNo:        fmt.Sprintf("SETTLE-INTEREST-%s-%d", now.Format("20060102150405"), order.ID),
 			UserID:          order.UserID,
