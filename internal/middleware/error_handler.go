@@ -12,6 +12,7 @@ import (
 // ErrorResponse represents a standardized error response
 type ErrorResponse struct {
 	Code    string `json:"code"`
+	Error   string `json:"error"`
 	Message string `json:"message"`
 	Details string `json:"details,omitempty"`
 }
@@ -24,6 +25,7 @@ var errorMapping = map[string]struct {
 }{
 	"email not found":                 {http.StatusUnauthorized, "EMAIL_NOT_FOUND", "Email input error or does not exist"},
 	"invalid credentials":             {http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid email or password"},
+	"user account is disabled":        {http.StatusUnauthorized, "ACCOUNT_DISABLED", "Your account has been disabled. Please contact support."},
 	"email already registered":        {http.StatusConflict, "EMAIL_ALREADY_EXISTS", "Email is already registered"},
 	"invalid refresh token":           {http.StatusUnauthorized, "INVALID_REFRESH_TOKEN", "Refresh token is invalid or expired"},
 	"refresh token has been revoked":  {http.StatusUnauthorized, "TOKEN_REVOKED", "Refresh token has been revoked"},
@@ -55,6 +57,7 @@ func handleError(c *gin.Context, err error) {
 	if errors.As(err, &validationErr) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{
 			Code:    "VALIDATION_ERROR",
+			Error:   validationErr.Error(),
 			Message: validationErr.Error(),
 			Details: validationErr.Field,
 		})
@@ -66,6 +69,7 @@ func handleError(c *gin.Context, err error) {
 	if mapping, ok := errorMapping[errMsg]; ok {
 		c.JSON(mapping.status, ErrorResponse{
 			Code:    mapping.code,
+			Error:   mapping.msg,
 			Message: mapping.msg,
 		})
 		return
@@ -74,6 +78,7 @@ func handleError(c *gin.Context, err error) {
 	// Generic internal server error
 	c.JSON(http.StatusInternalServerError, ErrorResponse{
 		Code:    "INTERNAL_ERROR",
+		Error:   "An internal server error occurred",
 		Message: "An internal server error occurred",
 		Details: errMsg,
 	})
@@ -86,6 +91,7 @@ func RecoveryHandler() gin.HandlerFunc {
 			if err := recover(); err != nil {
 				c.JSON(http.StatusInternalServerError, ErrorResponse{
 					Code:    "PANIC_RECOVERED",
+					Error:   "An unexpected error occurred",
 					Message: "An unexpected error occurred",
 				})
 				c.Abort()

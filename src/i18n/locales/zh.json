@@ -184,6 +184,7 @@
       "passwordRequired": "请输入密码",
       "userAlreadyExists": "用户已存在",
       "invalidEmailOrPassword": "邮箱或密码错误",
+      "accountDisabled": "您的账户已被禁用，请联系客服。",
       "invalidParameters": "参数错误，请检查输入",
       "invalidPasswordFormat": "密码需要包含大写字母、小写字母和数字",
       "emailAlreadyRegistered": "该邮箱已被注册",

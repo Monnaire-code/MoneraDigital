@@ -217,23 +217,28 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 		return fmt.Errorf("failed to unfreeze balance: %v", err)
 	}
 
-	// Generate journal record for principal unfreeze
-	newBalance, _ := utils.Add(account.Balance, order.Amount)
-	balanceSnapshot, _ := utils.NormalizeString(newBalance)
+	// 重新获取账户以获取准确的可用余额快照
+	account, err = s.accountRepo.GetAccountByUserIDAndCurrency(ctx, order.UserID, order.Currency)
+	if err != nil {
+		return fmt.Errorf("failed to get account: %v", err)
+	}
 
-	principalJournal := &repository.JournalModel{
-		SerialNo:        fmt.Sprintf("SETTLE-PRINCIPAL-%s-%d", now.Format("20060102150405"), order.ID),
+	// 计算解冻后的可用余额: balance - frozen_balance
+	availableAfterUnfreeze, _ := utils.Sub(account.Balance, account.FrozenBalance)
+	unfreezeSnapshot, _ := utils.NormalizeString(availableAfterUnfreeze)
+	unfreezeJournal := &repository.JournalModel{
+		SerialNo:        fmt.Sprintf("UNFREEZE-%s-%d", now.Format("20060102150405"), order.ID),
 		UserID:          order.UserID,
 		AccountID:       account.ID,
 		Amount:          order.Amount,
-		BalanceSnapshot: balanceSnapshot,
-		BizType:         2,
+		BalanceSnapshot: unfreezeSnapshot,
+		BizType:         2, // WEALTH_REDEEM (解冻)
 		RefID:           &order.ID,
 		CreatedAt:       now.Format(time.RFC3339),
 	}
-	err = s.journalRepo.CreateJournalRecord(ctx, principalJournal)
+	err = s.journalRepo.CreateJournalRecord(ctx, unfreezeJournal)
 	if err != nil {
-		logger.Error("[InterestScheduler] Failed to create principal journal record",
+		logger.Error("[InterestScheduler] Failed to create unfreeze journal record",
 			"order_id", orderID, "error", err.Error())
 	}
 
@@ -245,9 +250,15 @@ func (s *InterestScheduler) SettleOrder(ctx context.Context, orderID int64) erro
 			return fmt.Errorf("failed to add interest to balance: %v", err)
 		}
 
-		// Generate journal record for interest payout
-		balanceAfterInterest, _ := utils.Add(newBalance, order.InterestAccrued)
-		interestSnapshot, _ := utils.NormalizeString(balanceAfterInterest)
+		// 重新获取账户余额以获取准确的可用余额快照
+		account, err = s.accountRepo.GetAccountByUserIDAndCurrency(ctx, order.UserID, order.Currency)
+		if err != nil {
+			return fmt.Errorf("failed to get account: %v", err)
+		}
+
+		// 计算利息入账后的可用余额: balance - frozen_balance
+		availableAfterInterest, _ := utils.Sub(account.Balance, account.FrozenBalance)
+		interestSnapshot, _ := utils.NormalizeString(availableAfterInterest)
 		interestJournal := &repository.JournalModel{
 			SerialNo:        fmt.Sprintf("SETTLE-INTEREST-%s-%d", now.Format("20060102150405"), order.ID),
 			UserID:          order.UserID,
@@ -389,14 +400,20 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 			return fmt.Errorf("failed to add interest: %v", err)
 		}
 
-		// Generate journal record for interest payout
-		balanceAfterInterest, _ := utils.Add(account.Balance, order.InterestAccrued)
+		// 重新获取账户以获取准确的可用余额快照
+		account, err = s.accountRepo.GetAccountByUserIDAndCurrency(ctx, order.UserID, order.Currency)
+		if err != nil {
+			return fmt.Errorf("failed to get account: %v", err)
+		}
+
+		// 计算利息入账后的可用余额: balance - frozen_balance
+		availableAfterInterest, _ := utils.Sub(account.Balance, account.FrozenBalance)
 		interestJournal := &repository.JournalModel{
 			SerialNo:        fmt.Sprintf("RENEW-INTEREST-%s-%d", now.Format("20060102150405"), order.ID),
 			UserID:          order.UserID,
 			AccountID:       account.ID,
 			Amount:          order.InterestAccrued,
-			BalanceSnapshot: balanceAfterInterest,
+			BalanceSnapshot: availableAfterInterest,
 			BizType:         3,
 			RefID:           &order.ID,
 			CreatedAt:       now.Format(time.RFC3339),
@@ -408,30 +425,10 @@ func (s *InterestScheduler) RenewOrder(ctx context.Context, order *repository.We
 		}
 	}
 
-	// Step 2: Create new order (principal stays frozen)
+	// Step 2: Create new order (principal stays frozen, 无需记录流水)
 	newOrder, err := s.repo.RenewOrder(ctx, order, product, startDate, endDate)
 	if err != nil {
 		return fmt.Errorf("failed to create renewed order: %v", err)
-	}
-
-	// Generate journal record for new subscription
-	// Balance after interest payout, then principal stays frozen
-	balanceAfterInterest, _ := utils.Add(account.Balance, order.InterestAccrued)
-	balanceAfterFreeze, _ := utils.Sub(balanceAfterInterest, order.Amount)
-	subscribeJournal := &repository.JournalModel{
-		SerialNo:        fmt.Sprintf("RENEW-SUBSCRIBE-%s-%d", now.Format("20060102150405"), newOrder.ID),
-		UserID:          order.UserID,
-		AccountID:       account.ID,
-		Amount:          "-" + order.Amount,
-		BalanceSnapshot: balanceAfterFreeze,
-		BizType:         1,
-		RefID:           &newOrder.ID,
-		CreatedAt:       now.Format(time.RFC3339),
-	}
-	err = s.journalRepo.CreateJournalRecord(ctx, subscribeJournal)
-	if err != nil {
-		logger.Error("[InterestScheduler] Failed to create subscription journal record",
-			"order_id", newOrder.ID, "error", err.Error())
 	}
 
 	// Step 3: Update old order status

@@ -284,6 +284,8 @@ func (s *WealthService) Subscribe(ctx context.Context, userID int, productID int
 	}
 
 	now := time.Now().UTC()
+	balanceAfterFreeze, _ := utils.Sub(account.Balance, amount)
+
 	today := now.Format("2006-01-02")
 	todayDate, _ := time.Parse("2006-01-02", today)
 	startDate := todayDate.AddDate(0, 0, 1).Format("2006-01-02")
@@ -335,7 +337,6 @@ func (s *WealthService) Subscribe(ctx context.Context, userID int, productID int
 	}
 
 	serialNo := fmt.Sprintf("SUBSCRIBE-%s-%d", now.Format("20060102150405"), order.ID)
-	balanceAfterFreeze, _ := utils.Sub(account.Balance, amount)
 	journalRecord := &repository.JournalModel{
 		SerialNo:        serialNo,
 		UserID:          int64(userID),
@@ -464,6 +465,29 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 		return err
 	}
 
+	// 重新获取账户以获取准确的可用余额快照
+	account, err = s.accountRepo.GetAccountByUserIDAndCurrency(ctx, int64(userID), order.Currency)
+	if err != nil {
+		return err
+	}
+
+	// 计算解冻后的可用余额: balance - frozen_balance
+	availableAfterUnfreeze, _ := utils.Sub(account.Balance, account.FrozenBalance)
+	unfreezeJournal := &repository.JournalModel{
+		SerialNo:        fmt.Sprintf("UNFREEZE-%s-%d", now.Format("20060102150405"), order.ID),
+		UserID:          int64(userID),
+		AccountID:       account.ID,
+		Amount:          order.Amount,
+		BalanceSnapshot: availableAfterUnfreeze,
+		BizType:         2, // WEALTH_REDEEM (解冻)
+		RefID:           &order.ID,
+		CreatedAt:       now.Format(time.RFC3339),
+	}
+	err = s.journalRepo.CreateJournalRecord(ctx, unfreezeJournal)
+	if err != nil {
+		fmt.Printf("[ERROR] Failed to create unfreeze journal record: %v\n", err)
+	}
+
 	order.RedemptionAmount = order.Amount
 	order.RedeemedAt = now.Format(time.RFC3339)
 
@@ -475,14 +499,20 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 				return err
 			}
 
-			newBalance, _ := utils.Add(account.Balance, order.InterestAccrued)
+			// 重新获取账户余额以获取准确的可用余额快照
+			account, err = s.accountRepo.GetAccountByUserIDAndCurrency(ctx, int64(userID), order.Currency)
+			if err != nil {
+				return err
+			}
 
+			// 计算利息入账后的可用余额: balance - frozen_balance
+			availableAfterInterest, _ := utils.Sub(account.Balance, account.FrozenBalance)
 			interestJournalRecord := &repository.JournalModel{
 				SerialNo:        fmt.Sprintf("REDEEM-INTEREST-%s-%d", now.Format("20060102150405"), order.ID),
 				UserID:          int64(userID),
 				AccountID:       account.ID,
 				Amount:          order.InterestAccrued,
-				BalanceSnapshot: newBalance,
+				BalanceSnapshot: availableAfterInterest,
 				BizType:         3,
 				RefID:           &order.ID,
 				CreatedAt:       now.Format(time.RFC3339),
@@ -500,23 +530,6 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 	} else {
 		order.InterestAccrued = "0"
 		fmt.Printf("[DEBUG] Early redemption - cleared accrued interest for order %d\n", order.ID)
-	}
-
-	newBalance, _ := utils.Add(account.Balance, order.Amount)
-
-	principalJournal := &repository.JournalModel{
-		SerialNo:        fmt.Sprintf("REDEEM-PRINCIPAL-%s-%d", now.Format("20060102150405"), order.ID),
-		UserID:          int64(userID),
-		AccountID:       account.ID,
-		Amount:          order.Amount,
-		BalanceSnapshot: newBalance,
-		BizType:         2,
-		RefID:           &order.ID,
-		CreatedAt:       now.Format(time.RFC3339),
-	}
-	err = s.journalRepo.CreateJournalRecord(ctx, principalJournal)
-	if err != nil {
-		fmt.Printf("[ERROR] Failed to create principal journal record: %v\n", err)
 	}
 
 	return s.repo.UpdateOrder(ctx, order)
