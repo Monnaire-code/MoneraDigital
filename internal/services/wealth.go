@@ -76,11 +76,12 @@ func (s *WealthService) clearLock(key string) {
 }
 
 type Asset struct {
-	Currency      string  `json:"currency"`
-	Total         string  `json:"total"`
-	Available     string  `json:"available"`
-	FrozenBalance string  `json:"frozenBalance"`
-	UsdValue      float64 `json:"usdValue"`
+	Currency        string  `json:"currency"`
+	Total           string  `json:"total"`
+	Available       string  `json:"available"`
+	FrozenBalance   string  `json:"frozenBalance"`
+	InvestedBalance string  `json:"investedBalance"`
+	UsdValue        float64 `json:"usdValue"`
 }
 
 func (s *WealthService) GetAssets(ctx context.Context, userID int) ([]*Asset, error) {
@@ -97,6 +98,20 @@ func (s *WealthService) GetAssets(ctx context.Context, userID int) ([]*Asset, er
 	}
 	prices := binance.NewPriceService().GetPricesFromCache(currencies)
 
+	orders, err := s.repo.GetOrdersByUserID(ctx, int64(userID))
+	if err != nil {
+		return nil, err
+	}
+
+	investedByCurrency := make(map[string]string)
+	for _, order := range orders {
+		if order.Status == 0 || order.Status == 1 || order.Status == 2 {
+			current := investedByCurrency[order.Currency]
+			invested, _ := utils.Add(current, order.Amount)
+			investedByCurrency[order.Currency] = invested
+		}
+	}
+
 	var result []*Asset
 	for _, a := range accounts {
 		available := subtractStrings(a.Balance, a.FrozenBalance)
@@ -109,12 +124,18 @@ func (s *WealthService) GetAssets(ctx context.Context, userID int) ([]*Asset, er
 			usdValue = availableFloat * price
 		}
 
+		investedBalance := "0"
+		if v, ok := investedByCurrency[a.Currency]; ok {
+			investedBalance = v
+		}
+
 		result = append(result, &Asset{
-			Currency:      a.Currency,
-			Total:         formatTo7Decimal(a.Balance),
-			Available:     available,
-			FrozenBalance: formatTo7Decimal(a.FrozenBalance),
-			UsdValue:      usdValue,
+			Currency:        a.Currency,
+			Total:           formatTo7Decimal(a.Balance),
+			Available:       available,
+			FrozenBalance:   formatTo7Decimal(a.FrozenBalance),
+			InvestedBalance: formatTo7Decimal(investedBalance),
+			UsdValue:        usdValue,
 		})
 	}
 	return result, nil
@@ -415,7 +436,7 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 		return ErrOrderNotFound
 	}
 
-	if order.Status == 3 {
+	if order.Status == 3 || order.Status == 4 {
 		return ErrOrderAlreadyRedeemed
 	}
 

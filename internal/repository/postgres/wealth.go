@@ -299,6 +299,7 @@ func (r *AccountRepository) AddBalance(ctx context.Context, accountID int64, amo
 func (r *WealthRepository) GetActiveOrders(ctx context.Context) ([]*repository.WealthOrderModel, error) {
 	query := `
 		SELECT o.id, o.user_id, o.product_id, p.title as product_title, p.currency, o.amount,
+			p.duration,
 			o.interest_expected, o.interest_paid, o.interest_accrued, o.start_date, o.end_date,
 			o.auto_renew, o.status, o.renewed_from_order_id, o.renewed_to_order_id,
 			o.redemption_amount, o.redemption_type, o.redeemed_at, o.created_at, o.updated_at
@@ -320,6 +321,7 @@ func (r *WealthRepository) GetActiveOrders(ctx context.Context) ([]*repository.W
 		var redemptionType sql.NullString
 		err := rows.Scan(
 			&o.ID, &o.UserID, &o.ProductID, &o.ProductTitle, &o.Currency, &o.Amount,
+			&o.Duration,
 			&o.InterestExpected, &o.InterestPaid, &o.InterestAccrued,
 			&o.StartDate, &o.EndDate, &o.AutoRenew, &o.Status,
 			&o.RenewedFromOrderID, &o.RenewedToOrderID,
@@ -339,6 +341,7 @@ func (r *WealthRepository) GetActiveOrders(ctx context.Context) ([]*repository.W
 func (r *WealthRepository) GetExpiredOrders(ctx context.Context) ([]*repository.WealthOrderModel, error) {
 	query := `
 		SELECT o.id, o.user_id, o.product_id, p.title as product_title, p.currency, o.amount,
+			p.duration,
 			o.interest_expected, o.interest_paid, o.interest_accrued, o.start_date, o.end_date,
 			o.auto_renew, o.status, o.renewed_from_order_id, o.renewed_to_order_id,
 			o.redemption_amount, o.redemption_type, o.redeemed_at, o.created_at, o.updated_at
@@ -360,6 +363,7 @@ func (r *WealthRepository) GetExpiredOrders(ctx context.Context) ([]*repository.
 		var redemptionType sql.NullString
 		err := rows.Scan(
 			&o.ID, &o.UserID, &o.ProductID, &o.ProductTitle, &o.Currency, &o.Amount,
+			&o.Duration,
 			&o.InterestExpected, &o.InterestPaid, &o.InterestAccrued,
 			&o.StartDate, &o.EndDate, &o.AutoRenew, &o.Status,
 			&o.RenewedFromOrderID, &o.RenewedToOrderID,
@@ -379,6 +383,7 @@ func (r *WealthRepository) GetExpiredOrders(ctx context.Context) ([]*repository.
 func (r *WealthRepository) GetPendingOrders(ctx context.Context) ([]*repository.WealthOrderModel, error) {
 	query := `
 		SELECT o.id, o.user_id, o.product_id, p.title as product_title, p.currency, o.amount,
+			p.duration,
 			o.interest_expected, o.interest_paid, o.interest_accrued, o.start_date, o.end_date,
 			o.auto_renew, o.status, o.renewed_from_order_id, o.renewed_to_order_id,
 			o.redemption_amount, o.redemption_type, o.redeemed_at, o.created_at, o.updated_at
@@ -400,6 +405,7 @@ func (r *WealthRepository) GetPendingOrders(ctx context.Context) ([]*repository.
 		var redemptionType sql.NullString
 		err := rows.Scan(
 			&o.ID, &o.UserID, &o.ProductID, &o.ProductTitle, &o.Currency, &o.Amount,
+			&o.Duration,
 			&o.InterestExpected, &o.InterestPaid, &o.InterestAccrued,
 			&o.StartDate, &o.EndDate, &o.AutoRenew, &o.Status,
 			&o.RenewedFromOrderID, &o.RenewedToOrderID,

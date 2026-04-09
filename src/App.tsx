@@ -13,12 +13,11 @@ import DashboardLayout from "./components/DashboardLayout";
 import Overview from "./pages/dashboard/Overview";
 import AccountOpening from "./pages/dashboard/AccountOpening";
 import Assets from "./pages/dashboard/Assets";
-import Deposit from "./pages/dashboard/Deposit";
-import Lending from "./pages/dashboard/Lending";
 import Addresses from "./pages/dashboard/Addresses";
 import Withdraw from "./pages/dashboard/Withdraw";
 import Security from "./pages/dashboard/Security";
 import FixedDeposit from "./pages/dashboard/FixedDeposit";
+import ComingSoon from "./components/ComingSoon";
 
 const queryClient = new QueryClient();
 
@@ -38,14 +37,14 @@ const App = () => (
               <Route index element={<Overview />} />
               <Route path="account-opening" element={<AccountOpening />} />
               <Route path="assets" element={<Assets />} />
-              <Route path="deposit" element={<Deposit />} />
-              <Route path="lending" element={<Lending />} />
+              <Route path="deposit" element={<ComingSoon moduleName="充值" />} />
+              <Route path="lending" element={<ComingSoon moduleName="借贷管理" />} />
               <Route path="addresses" element={<Addresses />} />
               <Route path="withdraw" element={<Withdraw />} />
               <Route path="investments" element={<div className="p-8 text-center text-muted-foreground">Investment products coming soon</div>} />
               <Route path="fixed-deposit" element={<FixedDeposit />} />
               <Route path="security" element={<Security />} />
-              <Route path="statements" element={<div>Statements Page (Coming Soon)</div>} />
+              <Route path="statements" element={<ComingSoon moduleName="账户对账单" />} />
             </Route>
 
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
