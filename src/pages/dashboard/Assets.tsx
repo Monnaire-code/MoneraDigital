@@ -21,6 +21,7 @@ interface Asset {
   total: string;
   available: string;
   frozenBalance: string;
+  investedBalance: string;
   usdValue: number;
 }
 
@@ -208,8 +209,9 @@ const Assets = () => {
                   <TableRow className="hover:bg-transparent border-border/50">
                     <TableHead className="text-muted-foreground">{t("dashboard.assets.currency")}</TableHead>
                     <TableHead className="text-muted-foreground">{t("dashboard.assets.total")}</TableHead>
-                    <TableHead className="text-muted-foreground">{t("dashboard.assets.available")}</TableHead>
+                    <TableHead className="text-muted-foreground">{t("dashboard.assets.invested")}</TableHead>
                     <TableHead className="text-muted-foreground">{t("dashboard.assets.frozen")}</TableHead>
+                    <TableHead className="text-muted-foreground">{t("dashboard.assets.available")}</TableHead>
                     <TableHead className="text-muted-foreground text-right">{t("dashboard.assets.valueUSD")}</TableHead>
                     <TableHead className="text-muted-foreground text-right">{t("dashboard.assets.actions")}</TableHead>
                   </TableRow>
@@ -227,8 +229,9 @@ const Assets = () => {
                         </div>
                       </TableCell>
                       <TableCell className="font-mono">{formatNumber(asset.total)}</TableCell>
-                      <TableCell className="font-mono text-green-400">{formatNumber(asset.available)}</TableCell>
+                      <TableCell className="font-mono text-blue-400">{formatNumber(asset.investedBalance || '0')}</TableCell>
                       <TableCell className="font-mono text-orange-400">{formatNumber(asset.frozenBalance)}</TableCell>
+                      <TableCell className="font-mono text-green-400">{formatNumber(asset.available)}</TableCell>
                       <TableCell className="text-right font-semibold font-mono">
                         ${formatNumber(asset.usdValue)}
                       </TableCell>

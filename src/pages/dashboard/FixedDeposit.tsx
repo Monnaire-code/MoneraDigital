@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
-import { PiggyBank, TrendingUp, Info, ArrowRight, Clock, Percent, ShieldCheck, RefreshCw, History, AlertTriangle, Wallet } from "lucide-react";
+import { PiggyBank, TrendingUp, Info, ArrowRight, Clock, Percent, ShieldCheck, RefreshCw, History, AlertTriangle, Wallet, Lock } from "lucide-react";
 import { CryptoIcon } from "@/components/ui/crypto-icon";
 import { toast } from "sonner";
 import {
@@ -55,6 +55,7 @@ interface Asset {
   currency: string;
   total: string;
   available: string;
+  frozenBalance?: string;
 }
 
 interface PaginationProps {
@@ -905,9 +906,20 @@ const FixedDeposit = () => {
                   </div>
                   <div className="flex items-center gap-3">
                     {currencyFilter && (
-                      <span className="text-sm text-muted-foreground font-mono">
-                        {formatNumber(assets.find(a => a.currency === currencyFilter)?.available || 0)} {currencyFilter}
-                      </span>
+                      <div className="flex items-center gap-4 text-xs">
+                        <div className="flex items-center gap-1">
+                          <Lock size={12} className="text-orange-500" />
+                          <span className="text-muted-foreground font-mono">
+                            {formatNumber(assets.find(a => a.currency === currencyFilter)?.frozenBalance || 0)} {currencyFilter}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Wallet size={12} className="text-primary" />
+                          <span className="text-muted-foreground font-mono">
+                            {formatNumber(assets.find(a => a.currency === currencyFilter)?.available || 0)} {currencyFilter}
+                          </span>
+                        </div>
+                      </div>
                     )}
                     <Dialog open={open} onOpenChange={setOpen}>
                       <DialogTrigger asChild>
@@ -947,15 +959,26 @@ const FixedDeposit = () => {
                           <div className="space-y-2">
                             <Label>{t("dashboard.fixedDeposit.amount")} ({selectedProduct?.currency})</Label>
                             {selectedProduct && (
-                              <div className="flex items-center justify-between text-sm p-3 rounded-lg bg-primary/5 border border-primary/20">
-                                <span className="text-muted-foreground flex items-center gap-1.5">
-                                  <Wallet size={16} className="text-primary" />
-                                  {t("dashboard.fixedDeposit.available")}
-                                </span>
-                                <span className="font-mono font-bold text-primary">
-                                  {formatNumber(assets.find(a => a.currency === selectedProduct.currency)?.available || 0)} {selectedProduct.currency}
-                                </span>
-                              </div>
+                              <>
+                                <div className="flex items-center justify-between text-sm p-3 rounded-lg bg-orange-500/10 border border-orange-500/20">
+                                  <div className="flex items-center gap-1.5">
+                                    <Lock size={16} className="text-orange-500" />
+                                    <span className="text-muted-foreground">{t("dashboard.fixedDeposit.frozen")}</span>
+                                  </div>
+                                  <span className="font-mono text-orange-500">
+                                    {formatNumber(assets.find(a => a.currency === selectedProduct.currency)?.frozenBalance || 0)} {selectedProduct.currency}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between text-sm p-3 rounded-lg bg-primary/5 border border-primary/20">
+                                  <div className="flex items-center gap-1.5">
+                                    <Wallet size={16} className="text-primary" />
+                                    <span className="text-muted-foreground">{t("dashboard.fixedDeposit.available")}</span>
+                                  </div>
+                                  <span className="font-mono font-bold text-primary">
+                                    {formatNumber(assets.find(a => a.currency === selectedProduct.currency)?.available || 0)} {selectedProduct.currency}
+                                  </span>
+                                </div>
+                              </>
                             )}
                             <Input
                               type="number"
@@ -1339,18 +1362,18 @@ const FixedDeposit = () => {
                                <TableCell>
                                  <Badge variant={statusInfo.variant} className="w-full justify-center">{statusInfo.label}</Badge>
                                </TableCell>
-                               <TableCell className="text-right">
-                                 {order.status === 1 && (
-                                   <Button size="sm" variant="destructive" className="gap-1" onClick={() => { setSelectedOrder(order); setRedeemAmount(order.amount.toString()); setRedeemDialogOpen(true); }}>
-                                     <RefreshCw size={12} />{t("dashboard.fixedDepositHistory.redeem")}
-                                   </Button>
-                                 )}
-                                 {order.status === 2 && (
-                                   <Button size="sm" variant="default" className="gap-1" onClick={() => { setSelectedOrder(order); setRedeemAmount(order.amount.toString()); setRedeemDialogOpen(true); }}>
-                                     <ArrowRight size={12} />{t("dashboard.fixedDepositHistory.claim")}
-                                   </Button>
-                                 )}
-                               </TableCell>
+                                <TableCell className="text-right">
+                                  {(order.status === 0 || order.status === 1) && (
+                                    <Button size="sm" variant="destructive" className="gap-1" onClick={() => { setSelectedOrder(order); setRedeemAmount(order.amount.toString()); setRedeemDialogOpen(true); }}>
+                                      <RefreshCw size={12} />{t("dashboard.fixedDepositHistory.redeem")}
+                                    </Button>
+                                  )}
+                                  {order.status === 2 && (
+                                    <Button size="sm" variant="default" className="gap-1" onClick={() => { setSelectedOrder(order); setRedeemAmount(order.amount.toString()); setRedeemDialogOpen(true); }}>
+                                      <ArrowRight size={12} />{t("dashboard.fixedDepositHistory.claim")}
+                                    </Button>
+                                  )}
+                                </TableCell>
                              </TableRow>
                            );
                          })}
