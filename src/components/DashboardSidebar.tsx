@@ -3,15 +3,12 @@ import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Wallet,
-  ArrowLeftRight,
   ArrowUpCircle,
   TrendingUp,
   ShieldCheck,
-  FileText,
   ChevronLeft,
   ChevronRight,
   UserPlus,
-  ArrowDownCircle,
   Bitcoin
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,12 +23,9 @@ const DashboardSidebar = () => {
     { icon: LayoutDashboard, label: t("dashboard.nav.overview"), href: "/dashboard" },
     { icon: UserPlus, label: t("dashboard.nav.accountOpening"), href: "/dashboard/account-opening" },
     { icon: Wallet, label: t("dashboard.nav.assets"), href: "/dashboard/assets" },
-    { icon: ArrowDownCircle, label: t("dashboard.nav.deposit"), href: "/dashboard/deposit" },
-    { icon: ArrowLeftRight, label: t("dashboard.nav.lending"), href: "/dashboard/lending" },
     { icon: ArrowUpCircle, label: t("dashboard.nav.withdraw"), href: "/dashboard/withdraw" },
     { icon: Bitcoin, label: t("dashboard.nav.fixedDeposit"), href: "/dashboard/fixed-deposit" },
     { icon: ShieldCheck, label: t("dashboard.nav.security"), href: "/dashboard/security" },
-    { icon: FileText, label: t("dashboard.nav.statements"), href: "/dashboard/statements" },
   ];
 
   return (

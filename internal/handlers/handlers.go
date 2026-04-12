@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"monera-digital/internal/binance"
 	"monera-digital/internal/dto"
 	"monera-digital/internal/models"
 	"monera-digital/internal/services"
@@ -658,6 +659,36 @@ func (h *Handler) RefreshPrices(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Prices refreshed successfully"})
 }
 
+func (h *Handler) GetPrices(c *gin.Context) {
+	priceService := binance.NewPriceService()
+
+	currencies := []string{"BTC", "ETH", "SOL", "ADA", "XRP", "DOGE", "BNB", "USDT", "USDC", "DAI"}
+	prices := priceService.GetPricesFromCache(currencies)
+
+	var result []map[string]interface{}
+	for _, symbol := range currencies {
+		price := prices[symbol]
+		if symbol == "USDT" || symbol == "USDC" || symbol == "DAI" {
+			result = append(result, map[string]interface{}{
+				"symbol":    symbol,
+				"price":     1.0,
+				"change24h": 0.0,
+			})
+		} else if price > 0 {
+			result = append(result, map[string]interface{}{
+				"symbol":    symbol,
+				"price":     price,
+				"change24h": 0.0,
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"prices":    result,
+		"updatedAt": priceService.GetLastUpdateTime().Format("2006-01-02T15:04:05Z"),
+	})
+}
+
 // Wealth handlers
 
 func (h *Handler) GetProducts(c *gin.Context) {
@@ -829,4 +860,26 @@ func (h *Handler) Redeem(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Redemption successful"})
+}
+
+func (h *Handler) GetInterestHistory(c *gin.Context) {
+	userID, err := h.getUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	daysStr := c.DefaultQuery("days", "7")
+	days := 7
+	if d, err := strconv.Atoi(daysStr); err == nil {
+		days = d
+	}
+
+	history, err := h.WealthService.GetInterestHistory(c.Request.Context(), userID, days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"history": history})
 }

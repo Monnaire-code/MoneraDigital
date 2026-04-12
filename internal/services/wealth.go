@@ -31,20 +31,22 @@ var (
 )
 
 type WealthService struct {
-	repo        repository.Wealth
-	accountRepo repository.AccountV2
-	journalRepo repository.Journal
-	lockMap     map[string]bool
-	mu          map[string]*sync.Mutex
+	repo              repository.Wealth
+	accountRepo       repository.AccountV2
+	journalRepo       repository.Journal
+	dailyInterestRepo repository.DailyInterest
+	lockMap           map[string]bool
+	mu                map[string]*sync.Mutex
 }
 
-func NewWealthService(wealthRepo repository.Wealth, accountRepo repository.AccountV2, journalRepo repository.Journal) *WealthService {
+func NewWealthService(wealthRepo repository.Wealth, accountRepo repository.AccountV2, journalRepo repository.Journal, dailyInterestRepo repository.DailyInterest) *WealthService {
 	return &WealthService{
-		repo:        wealthRepo,
-		accountRepo: accountRepo,
-		journalRepo: journalRepo,
-		lockMap:     make(map[string]bool),
-		mu:          make(map[string]*sync.Mutex),
+		repo:              wealthRepo,
+		accountRepo:       accountRepo,
+		journalRepo:       journalRepo,
+		dailyInterestRepo: dailyInterestRepo,
+		lockMap:           make(map[string]bool),
+		mu:                make(map[string]*sync.Mutex),
 	}
 }
 
@@ -107,6 +109,9 @@ func (s *WealthService) GetAssets(ctx context.Context, userID int) ([]*Asset, er
 	for _, order := range orders {
 		if order.Status == 0 || order.Status == 1 || order.Status == 2 {
 			current := investedByCurrency[order.Currency]
+			if current == "" {
+				current = "0"
+			}
 			invested, _ := utils.Add(current, order.Amount)
 			investedByCurrency[order.Currency] = invested
 		}
@@ -554,4 +559,63 @@ func (s *WealthService) Redeem(ctx context.Context, userID int, orderID int64, r
 	}
 
 	return s.repo.UpdateOrder(ctx, order)
+}
+
+type DailyInterest struct {
+	Date     string  `json:"date"`
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+}
+
+func (s *WealthService) GetInterestHistory(ctx context.Context, userID int, days int) ([]DailyInterest, error) {
+	if days <= 0 {
+		days = 7
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	records, err := s.dailyInterestRepo.GetByUserID(ctx, int64(userID), days)
+	if err != nil {
+		return nil, err
+	}
+
+	dailyMap := make(map[string]map[string]float64)
+
+	beijingLoc, _ := time.LoadLocation("Asia/Shanghai")
+	for _, rec := range records {
+		amount, _ := strconv.ParseFloat(rec.Amount, 64)
+		if amount <= 0 {
+			continue
+		}
+
+		createdAt, err := time.Parse(time.RFC3339, rec.CreatedAt)
+		if err != nil {
+			createdAt, _ = time.Parse("2006-01-02T15:04:05Z", rec.CreatedAt)
+		}
+		beijingTime := createdAt.In(beijingLoc)
+		localDate := beijingTime.Format("2006-01-02")
+		currency := rec.Currency
+		if currency == "" {
+			currency = "USDT"
+		}
+
+		if dailyMap[localDate] == nil {
+			dailyMap[localDate] = make(map[string]float64)
+		}
+		dailyMap[localDate][currency] += amount
+	}
+
+	var result []DailyInterest
+	for date := range dailyMap {
+		for currency, amount := range dailyMap[date] {
+			result = append(result, DailyInterest{
+				Date:     date,
+				Amount:   amount,
+				Currency: currency,
+			})
+		}
+	}
+
+	return result, nil
 }

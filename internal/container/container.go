@@ -109,15 +109,16 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 
 	// 初始化仓储
 	c.Repository = &repository.Repository{
-		User:       postgres.NewUserRepository(db),
-		Deposit:    postgres.NewDepositRepository(db),
-		Wallet:     postgres.NewWalletRepository(db),
-		Account:    postgres.NewAccountRepositoryV1(db),
-		AccountV2:  postgres.NewAccountRepository(db),
-		Address:    postgres.NewAddressRepository(db),
-		Withdrawal: postgres.NewWithdrawalRepository(db),
-		Wealth:     postgres.NewWealthRepository(db),
-		Journal:    postgres.NewJournalRepository(db),
+		User:          postgres.NewUserRepository(db),
+		Deposit:       postgres.NewDepositRepository(db),
+		Wallet:        postgres.NewWalletRepository(db),
+		Account:       postgres.NewAccountRepositoryV1(db),
+		AccountV2:     postgres.NewAccountRepository(db),
+		Address:       postgres.NewAddressRepository(db),
+		Withdrawal:    postgres.NewWithdrawalRepository(db),
+		Wealth:        postgres.NewWealthRepository(db),
+		Journal:       postgres.NewJournalRepository(db),
+		DailyInterest: postgres.NewDailyInterestRepository(db),
 	}
 
 	// 初始化核心服务
@@ -129,7 +130,7 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	c.WithdrawalService = services.NewWithdrawalService(db, c.Repository, services.NewSafeheronService())
 	c.DepositService = services.NewDepositService(c.Repository.Deposit)
 	c.WalletService = services.NewWalletService(c.Repository.Wallet, c.CoreAPIClient)
-	c.WealthService = services.NewWealthService(c.Repository.Wealth, c.Repository.AccountV2, c.Repository.Journal)
+	c.WealthService = services.NewWealthService(c.Repository.Wealth, c.Repository.AccountV2, c.Repository.Journal, c.Repository.DailyInterest)
 
 	// 应用配置选项 (按顺序执行)
 	for _, opt := range opts {
