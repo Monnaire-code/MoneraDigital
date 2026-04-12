@@ -520,6 +520,7 @@
       "days": "天",
       "amount": "申购金额",
       "available": "可用",
+      "frozen": "冻结",
       "minAmount": "起购金额",
       "amountBelowMinError": "申购金额不能低于",
       "amountAboveMaxError": "申购金额不能超过",

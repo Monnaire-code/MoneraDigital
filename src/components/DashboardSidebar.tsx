@@ -8,7 +8,6 @@ import {
   ShieldCheck,
   ChevronLeft,
   ChevronRight,
-  UserPlus,
   Bitcoin
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -21,7 +20,6 @@ const DashboardSidebar = () => {
 
   const menuItems = [
     { icon: LayoutDashboard, label: t("dashboard.nav.overview"), href: "/dashboard" },
-    { icon: UserPlus, label: t("dashboard.nav.accountOpening"), href: "/dashboard/account-opening" },
     { icon: Wallet, label: t("dashboard.nav.assets"), href: "/dashboard/assets" },
     { icon: ArrowUpCircle, label: t("dashboard.nav.withdraw"), href: "/dashboard/withdraw" },
     { icon: Bitcoin, label: t("dashboard.nav.fixedDeposit"), href: "/dashboard/fixed-deposit" },
