@@ -48,6 +48,7 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
 
   // Assets endpoints
   'GET /assets': { requiresAuth: true, backendPath: '/api/assets' },
+  'GET /assets/prices': { requiresAuth: true, backendPath: '/api/assets/prices' },
   'POST /assets/refresh-prices': { requiresAuth: true, backendPath: '/api/assets/refresh-prices' },
 
   // Wealth endpoints
@@ -55,6 +56,7 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
   'POST /wealth/subscribe': { requiresAuth: true, backendPath: '/api/wealth/subscribe' },
   'GET /wealth/orders': { requiresAuth: true, backendPath: '/api/wealth/orders' },
   'POST /wealth/redeem': { requiresAuth: true, backendPath: '/api/wealth/redeem' },
+  'GET /wealth/interest-history': { requiresAuth: true, backendPath: '/api/wealth/interest-history' },
 
   // Lending endpoints
   'GET /lending/positions': { requiresAuth: true, backendPath: '/api/lending/positions' },

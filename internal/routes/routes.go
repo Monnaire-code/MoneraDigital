@@ -99,6 +99,7 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 		assets := protected.Group("/assets")
 		{
 			assets.GET("", h.GetAssets)
+			assets.GET("/prices", h.GetPrices)
 			assets.POST("/refresh-prices", h.RefreshPrices)
 		}
 
@@ -151,6 +152,7 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			wealth.POST("/subscribe", h.Subscribe)
 			wealth.GET("/orders", h.GetOrders)
 			wealth.POST("/redeem", h.Redeem)
+			wealth.GET("/interest-history", h.GetInterestHistory)
 		}
 	}
 }

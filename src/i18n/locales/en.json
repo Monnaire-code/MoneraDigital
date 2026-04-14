@@ -304,7 +304,12 @@
       "activeLending": "Active Lending",
       "investmentPerformance": "Investment Performance",
       "marketTrends": "Market Trends",
-      "assetDistribution": "Asset Distribution"
+      "assetDistribution": "Asset Distribution",
+      "totalAssets": "Total Assets",
+      "productValue": "Product Value",
+      "totalInterest": "Total Interest",
+      "dailyInterest": "Daily Interest",
+      "cryptoPrices": "Crypto Prices"
     },
     "assets": {
       "currency": "Currency",

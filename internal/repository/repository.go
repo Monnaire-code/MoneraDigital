@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
+
 	"monera-digital/internal/models"
 )
 
@@ -188,18 +190,40 @@ type JournalModel struct {
 	CreatedAt       string
 }
 
+// DailyInterest 每日利息仓储接口
+type DailyInterest interface {
+	Create(ctx context.Context, record *DailyInterestModel) error
+	CreateWithDate(ctx context.Context, record *DailyInterestModel, dateOverride *time.Time) error
+	GetByUserID(ctx context.Context, userID int64, days int) ([]DailyInterestModel, error)
+	InvalidateByOrderID(ctx context.Context, orderID int64) error
+	SumEffectiveByOrderID(ctx context.Context, orderID int64) (string, error)
+}
+
+// DailyInterestModel 每日利息模型
+type DailyInterestModel struct {
+	ID        int64
+	UserID    int64
+	OrderID   int64
+	Currency  string
+	Amount    string
+	Effective bool
+	CreatedAt string
+	UpdatedAt string
+}
+
 // Repository 仓储容器
 type Repository struct {
-	User       User
-	Account    Account   // Legacy account interface
-	AccountV2  AccountV2 // New detailed account interface
-	Lending    Lending
-	Address    Address
-	Withdrawal Withdrawal
-	Deposit    Deposit
-	Wallet     Wallet
-	Wealth     Wealth
-	Journal    Journal
+	User          User
+	Account       Account   // Legacy account interface
+	AccountV2     AccountV2 // New detailed account interface
+	Lending       Lending
+	Address       Address
+	Withdrawal    Withdrawal
+	Deposit       Deposit
+	Wallet        Wallet
+	Wealth        Wealth
+	Journal       Journal
+	DailyInterest DailyInterest
 }
 
 // Common errors

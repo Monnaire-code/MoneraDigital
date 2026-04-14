@@ -13,20 +13,22 @@ import (
 )
 
 type InterestScheduler struct {
-	repo         repository.Wealth
-	accountRepo  repository.AccountV2
-	journalRepo  repository.Journal
-	priceService *binance.PriceService
-	metrics      *SchedulerMetrics
+	repo              repository.Wealth
+	accountRepo       repository.AccountV2
+	journalRepo       repository.Journal
+	dailyInterestRepo repository.DailyInterest
+	priceService      *binance.PriceService
+	metrics           *SchedulerMetrics
 }
 
-func NewInterestScheduler(wealthRepo repository.Wealth, accountRepo repository.AccountV2, journalRepo repository.Journal) *InterestScheduler {
+func NewInterestScheduler(wealthRepo repository.Wealth, accountRepo repository.AccountV2, journalRepo repository.Journal, dailyInterestRepo repository.DailyInterest) *InterestScheduler {
 	return &InterestScheduler{
-		repo:         wealthRepo,
-		accountRepo:  accountRepo,
-		journalRepo:  journalRepo,
-		priceService: binance.NewPriceService(),
-		metrics:      NewSchedulerMetrics(),
+		repo:              wealthRepo,
+		accountRepo:       accountRepo,
+		journalRepo:       journalRepo,
+		dailyInterestRepo: dailyInterestRepo,
+		priceService:      binance.NewPriceService(),
+		metrics:           NewSchedulerMetrics(),
 	}
 }
 
@@ -35,16 +37,16 @@ func (s *InterestScheduler) Start() {
 	loc := time.UTC
 	timeZoneName := "UTC"
 
-	nextMidnight := time.Now().In(loc)
-	nextMidnight = time.Date(nextMidnight.Year(), nextMidnight.Month(), nextMidnight.Day(), 0, 0, 5, 0, loc)
-	duration := nextMidnight.Sub(time.Now().In(loc))
+	// 临时改为10分钟后执行（用于测试）
+	testDuration := 10 * time.Minute
+	nextRun := time.Now().In(loc).Add(testDuration)
 
-	logger.Info("[InterestScheduler] First run scheduled",
-		"scheduled_time", nextMidnight.Format("2006-01-02 15:04:05"),
-		"delay_seconds", duration.Seconds(),
+	logger.Info("[InterestScheduler] First run scheduled (TEST MODE - 10 min)",
+		"scheduled_time", nextRun.Format("2006-01-02 15:04:05"),
+		"delay_seconds", testDuration.Seconds(),
 		"timezone", timeZoneName)
 
-	time.Sleep(duration)
+	time.Sleep(testDuration)
 
 	logger.Info("[InterestScheduler] Started - running daily at 00:00:05 UTC")
 
@@ -57,7 +59,7 @@ func (s *InterestScheduler) Start() {
 		activatedCount, activateErr := s.ActivatePendingOrders(ctx)
 
 		// Step 1: Calculate daily interest
-		ordersProcessed, interestAccrued, err := s.CalculateDailyInterest(ctx)
+		ordersProcessed, interestAccrued, err := s.CalculateDailyInterest(ctx, nil)
 
 		// Step 2: Settle expired orders
 		settledCount, settleErr := s.SettleExpiredOrders(ctx)
@@ -104,10 +106,13 @@ func (s *InterestScheduler) Start() {
 	}
 }
 
-func (s *InterestScheduler) CalculateDailyInterest(ctx context.Context) (int, string, error) {
+func (s *InterestScheduler) CalculateDailyInterest(ctx context.Context, dateOverride *time.Time) (int, string, error) {
 	logger.Info("[InterestScheduler] Calculating daily interest...")
 
 	today := time.Now().UTC()
+	if dateOverride != nil {
+		today = dateOverride.UTC()
+	}
 
 	orders, err := s.repo.GetActiveOrders(ctx)
 	if err != nil {
@@ -120,14 +125,14 @@ func (s *InterestScheduler) CalculateDailyInterest(ctx context.Context) (int, st
 	totalInterestAccrued := "0"
 
 	for _, order := range orders {
-		startDate, err := time.Parse("2006-01-02", order.StartDate)
+		startDate, err := time.Parse("2006-01-02", order.StartDate[:10])
 		if err != nil {
 			logger.Error("[InterestScheduler] Failed to parse start date",
 				"order_id", order.ID, "start_date", order.StartDate, "error", err.Error())
 			continue
 		}
 
-		endDate, err := time.Parse("2006-01-02", order.EndDate)
+		endDate, err := time.Parse("2006-01-02", order.EndDate[:10])
 		if err != nil {
 			logger.Error("[InterestScheduler] Failed to parse end date",
 				"order_id", order.ID, "end_date", order.EndDate, "error", err.Error())
@@ -172,6 +177,33 @@ func (s *InterestScheduler) CalculateDailyInterest(ctx context.Context) (int, st
 			logger.Error("[InterestScheduler] Failed to update interest accrued",
 				"order_id", order.ID, "error", err.Error())
 			continue
+		}
+
+		dailyInterestAmount, _ := utils.Sub(interestAccrued, order.InterestAccrued)
+		isPositive, _ := utils.GT(dailyInterestAmount, "0")
+		if isPositive {
+			dailyInterestFloat, _ := strconv.ParseFloat(dailyInterestAmount, 64)
+			usdValue := s.priceService.GetUSDValueFromCache(dailyInterestFloat, order.Currency)
+			usdAmount := strconv.FormatFloat(usdValue, 'f', 10, 64)
+
+			dailyInterest := &repository.DailyInterestModel{
+				UserID:    order.UserID,
+				OrderID:   order.ID,
+				Currency:  "USD",
+				Amount:    usdAmount,
+				Effective: true,
+				CreatedAt: today.Format(time.RFC3339),
+			}
+			if err := s.dailyInterestRepo.CreateWithDate(ctx, dailyInterest, dateOverride); err != nil {
+				logger.Error("[InterestScheduler] Failed to create daily interest record",
+					"order_id", order.ID, "amount_usd", usdAmount, "error", err.Error())
+			} else {
+				logger.Info("[InterestScheduler] Daily interest recorded",
+					"order_id", order.ID,
+					"amount_usd", usdAmount,
+					"currency", order.Currency,
+					"record_id", dailyInterest.ID)
+			}
 		}
 
 		ordersProcessed++

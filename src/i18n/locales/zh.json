@@ -304,7 +304,12 @@
       "activeLending": "当前借贷状态",
       "investmentPerformance": "投资产品表现",
       "marketTrends": "市场关键指标",
-      "assetDistribution": "资产分布"
+      "assetDistribution": "资产分布",
+      "totalAssets": "总资产",
+      "productValue": "产品价值",
+      "totalInterest": "累计收益",
+      "dailyInterest": "每日收益",
+      "cryptoPrices": "加密货币价格"
     },
     "assets": {
       "currency": "币种",
@@ -515,6 +520,7 @@
       "days": "天",
       "amount": "申购金额",
       "available": "可用",
+      "frozen": "冻结",
       "minAmount": "起购金额",
       "amountBelowMinError": "申购金额不能低于",
       "amountAboveMaxError": "申购金额不能超过",
