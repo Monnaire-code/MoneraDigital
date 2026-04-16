@@ -698,7 +698,27 @@
     },
     "noHistory": "No deposit history found.",
     "activate": "Activate Account",
-    "activateDesc": "Please activate your wallet account first to get a deposit address."
+    "activateDesc": "Please activate your wallet account first to get a deposit address.",
+    "comingSoon": {
+      "title": "Deposit Service Coming Soon",
+      "description": "Our deposit service is currently being prepared. Please contact us for deposit arrangements.",
+      "howToDeposit": "How to Deposit",
+      "step1": {
+        "title": "Contact Our Team",
+        "desc": "Reach out to us via email with your deposit requirements"
+      },
+      "step2": {
+        "title": "Receive Instructions",
+        "desc": "We will provide you with detailed deposit instructions"
+      },
+      "step3": {
+        "title": "Complete Deposit",
+        "desc": "Transfer funds to the designated address and confirm with us"
+      },
+      "contactUs": "Contact Us",
+      "contactDesc": "For deposit inquiries, please contact our operations team:",
+      "supportedCoins": "Supported Currencies"
+    }
   },
   "wallet": {
     "opening": {
