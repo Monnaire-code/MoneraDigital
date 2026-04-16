@@ -37,16 +37,22 @@ func (s *InterestScheduler) Start() {
 	loc := time.UTC
 	timeZoneName := "UTC"
 
-	// 临时改为10分钟后执行（用于测试）
-	testDuration := 10 * time.Minute
-	nextRun := time.Now().In(loc).Add(testDuration)
+	nextMidnight := time.Now().In(loc)
+	nextMidnight = time.Date(nextMidnight.Year(), nextMidnight.Month(), nextMidnight.Day(), 0, 0, 5, 0, loc)
+	duration := nextMidnight.Sub(time.Now().In(loc))
 
-	logger.Info("[InterestScheduler] First run scheduled (TEST MODE - 10 min)",
-		"scheduled_time", nextRun.Format("2006-01-02 15:04:05"),
-		"delay_seconds", testDuration.Seconds(),
+	// 如果午夜已过，等待到下一个 UTC 00:00:05
+	if duration < 0 {
+		nextMidnight = nextMidnight.AddDate(0, 0, 1)
+		duration = nextMidnight.Sub(time.Now().In(loc))
+	}
+
+	logger.Info("[InterestScheduler] First run scheduled",
+		"scheduled_time", nextMidnight.Format("2006-01-02 15:04:05"),
+		"delay_seconds", duration.Seconds(),
 		"timezone", timeZoneName)
 
-	time.Sleep(testDuration)
+	time.Sleep(duration)
 
 	logger.Info("[InterestScheduler] Started - running daily at 00:00:05 UTC")
 

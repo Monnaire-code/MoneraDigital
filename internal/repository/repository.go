@@ -47,6 +47,8 @@ type Address interface {
 	DeleteAddress(ctx context.Context, id int) error
 	GetByAddressAndChain(ctx context.Context, address, chain string) (*models.WithdrawalAddress, error)
 	SetPrimary(ctx context.Context, userID int, addressID int) error
+	UnfreezeExpiredAddresses(ctx context.Context) (int64, error)
+	UpdateFrozenUntil(ctx context.Context, id int, frozenUntil sql.NullTime) error
 }
 
 // Withdrawal 提现仓储接口

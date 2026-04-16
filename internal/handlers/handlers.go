@@ -370,6 +370,10 @@ func (h *Handler) GetAddresses(c *gin.Context) {
 		if addr.VerifiedAt.Valid {
 			response[i].VerifiedAt = &addr.VerifiedAt.Time
 		}
+		// Handle nullable FrozenUntil
+		if addr.FrozenUntil.Valid {
+			response[i].FrozenUntil = &addr.FrozenUntil.Time
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"addresses": response, "total": len(response), "count": len(response)})

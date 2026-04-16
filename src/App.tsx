@@ -17,6 +17,7 @@ import Addresses from "./pages/dashboard/Addresses";
 import Withdraw from "./pages/dashboard/Withdraw";
 import Security from "./pages/dashboard/Security";
 import FixedDeposit from "./pages/dashboard/FixedDeposit";
+import Deposit from "./pages/dashboard/Deposit";
 import ComingSoon from "./components/ComingSoon";
 
 const queryClient = new QueryClient();
@@ -37,7 +38,7 @@ const App = () => (
               <Route index element={<Overview />} />
               <Route path="account-opening" element={<AccountOpening />} />
               <Route path="assets" element={<Assets />} />
-              <Route path="deposit" element={<ComingSoon moduleName="充值" />} />
+              <Route path="deposit" element={<Deposit />} />
               <Route path="lending" element={<ComingSoon moduleName="借贷管理" />} />
               <Route path="addresses" element={<Addresses />} />
               <Route path="withdraw" element={<Withdraw />} />

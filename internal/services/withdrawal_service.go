@@ -178,6 +178,11 @@ func (s *WithdrawalService) validateWithdrawalRequest(ctx context.Context, userI
 		return "", nil, errors.New("address does not belong to user")
 	}
 
+	// Check if address is frozen
+	if address.IsFrozen() {
+		return "", nil, fmt.Errorf("address is frozen until %s", address.FrozenUntil.Time.Format("2006-01-02 15:04:05 MST"))
+	}
+
 	return normalizedAmount, address, nil
 }
 
@@ -226,15 +231,15 @@ func getNetworkFee(asset, chain string) string {
 			"Bitcoin": "0.00001", // ~$0.5-2
 		},
 		"ETH": {
-			"Ethereum":  "0.001",  // ~$2-4
-			"Arbitrum":  "0.00005", // ~$0.1
-			"Polygon":   "0.00002", // ~$0.02
+			"Ethereum": "0.001",   // ~$2-4
+			"Arbitrum": "0.00005", // ~$0.1
+			"Polygon":  "0.00002", // ~$0.02
 		},
 		"USDT": {
-			"Ethereum": "1",   // ~$1-3
-			"Arbitrum": "0.1", // ~$0.1-0.3
+			"Ethereum": "1",    // ~$1-3
+			"Arbitrum": "0.1",  // ~$0.1-0.3
 			"Polygon":  "0.01", // ~$0.01-0.05
-			"Tron":     "1",   // ~$0.5-2
+			"Tron":     "1",    // ~$0.5-2
 		},
 		"USDC": {
 			"Ethereum": "0.5",  // ~$0.5-2

@@ -10,9 +10,11 @@ import { Badge } from "@/components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowRight, CheckCircle2, Clock, AlertCircle, Shield, Wallet, Plus, Lock } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ArrowRight, CheckCircle2, Clock, AlertCircle, Shield, Wallet, Plus, Lock, Trash2, MoreHorizontal } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 interface WithdrawalAddress {
   id: number;
@@ -20,6 +22,7 @@ interface WithdrawalAddress {
   chainType: string;
   addressAlias: string;
   verified: boolean;
+  frozenUntil: string | null;
 }
 
 interface Withdrawal {
@@ -89,9 +92,31 @@ function isValidAddress(address: string, chain: string): boolean {
   return pattern ? pattern.test(address) : address.length >= 26 && address.length <= 64;
 }
 
+function isAddressFrozen(frozenUntil: string | null): boolean {
+  if (!frozenUntil) return false;
+  return new Date(frozenUntil) > new Date();
+}
+
+function getFrozenTimeRemaining(frozenUntil: string | null): string {
+  if (!frozenUntil) return "";
+  const now = new Date();
+  const frozenTime = new Date(frozenUntil);
+  const diff = frozenTime.getTime() - now.getTime();
+  if (diff <= 0) return "";
+  
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
+}
+
 function Withdraw() {
   const { t } = useTranslation();
   const [searchParams] = useSearchParams();
+  const [allAddresses, setAllAddresses] = useState<WithdrawalAddress[]>([]);
   const [addresses, setAddresses] = useState<WithdrawalAddress[]>([]);
   const [withdrawalHistory, setWithdrawalHistory] = useState<Withdrawal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -126,6 +151,11 @@ function Withdraw() {
     chain: string;
    } | null>(null);
 
+  // Delete address state
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [addressToDelete, setAddressToDelete] = useState<WithdrawalAddress | null>(null);
+  const [isDeletingAddress, setIsDeletingAddress] = useState(false);
+
   // Format number with 7 decimal places
   const formatNumber = (num: string | number): string => {
     if (typeof num === "string") {
@@ -152,16 +182,31 @@ function Withdraw() {
       if (res.ok) {
         const data = await res.json();
         // Backend returns camelCase: walletAddress, chainType, addressAlias
-        const allAddresses: WithdrawalAddress[] = data.addresses || [];
-        // Only show verified addresses for withdrawal
-        const verifiedAddresses = allAddresses.filter(a => a.verified);
-        setAddresses(verifiedAddresses);
+        const allAddrs: WithdrawalAddress[] = data.addresses || [];
+        
+        // Store all addresses for display purposes
+        setAllAddresses(allAddrs);
+        
+        // Filter: show verified AND non-frozen addresses for withdrawal
+        const now = new Date();
+        const availableAddresses = allAddrs.filter(a => {
+          // Must be verified
+          if (!a.verified) return false;
+          // Must not be frozen (frozenUntil is null or in the past)
+          if (a.frozenUntil && new Date(a.frozenUntil) > now) return false;
+          return true;
+        });
+        
+        setAddresses(availableAddresses);
 
-        // Auto-select first verified address
-        if (verifiedAddresses.length > 0) {
-          const first = verifiedAddresses[0];
+        // Auto-select first available address
+        if (availableAddresses.length > 0) {
+          const first = availableAddresses[0];
           setSelectedAddressId(String(first.id));
           setSelectedAddress(first);
+        } else {
+          setSelectedAddressId("");
+          setSelectedAddress(null);
         }
       }
     } catch (error) {
@@ -169,6 +214,47 @@ function Withdraw() {
       toast.error(t("addresses.failedToFetch"));
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Delete address
+  const handleDeleteAddress = async () => {
+    if (!addressToDelete || isDeletingAddress) return;
+
+    setIsDeletingAddress(true);
+    try {
+      const token = localStorage.getItem("token");
+      const csrfToken = localStorage.getItem("csrf_token");
+
+      const res = await fetch(`/api/addresses/${addressToDelete.id}/deactivate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          ...(csrfToken && { "X-CSRF-Token": csrfToken }),
+        },
+      });
+
+      if (res.ok) {
+        toast.success(t("addresses.deleteSuccess") || "Address deleted successfully");
+        setIsDeleteDialogOpen(false);
+        setAddressToDelete(null);
+        await fetchAddresses();
+        
+        // Clear selection if deleted address was selected
+        if (selectedAddressId === String(addressToDelete.id)) {
+          setSelectedAddressId("");
+          setSelectedAddress(null);
+        }
+      } else {
+        const data = await res.json();
+        toast.error(data.error || t("addresses.deleteFailed") || "Failed to delete address");
+      }
+    } catch (error) {
+      console.error("Delete address error:", error);
+      toast.error(t("addresses.deleteFailed") || "Failed to delete address");
+    } finally {
+      setIsDeletingAddress(false);
     }
   };
 
@@ -433,10 +519,10 @@ function Withdraw() {
                 <div className="text-center text-muted-foreground">{t("dashboard.withdraw.address.loading")}</div>
               </CardContent>
             </Card>
-          ) : addresses.length === 0 ? (
+          ) : allAddresses.length === 0 ? (
             <Card className="bg-card/50 border-border/50">
               <CardContent className="pt-6">
-                <div className="text-center text-muted-foreground mb-6">
+                <div className="text-center text-muted-foreground mb-4">
                   {t("dashboard.withdraw.address.empty")}
                 </div>
                 <div className="flex justify-center">
@@ -450,56 +536,178 @@ function Withdraw() {
           ) : (
             <>
               <Card className="bg-card/50 border-border/50">
-                <CardHeader>
-                  <CardTitle className="text-lg">{t("dashboard.withdraw.address.title")}</CardTitle>
-                  <CardDescription>{t("dashboard.withdraw.address.description")}</CardDescription>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg">{t("dashboard.withdraw.address.title")}</CardTitle>
+                      <CardDescription>{t("dashboard.withdraw.address.description")}</CardDescription>
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => setIsAddAddressOpen(true)}
+                      className="gap-1"
+                    >
+                      <Plus size={14} />
+                      {t("dashboard.withdraw.address.addNew")}
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="address">{t("dashboard.withdraw.address.label")}</Label>
-                    <Select value={selectedAddressId} onValueChange={handleAddressChange}>
-                      <SelectTrigger id="address">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {addresses.map((addr) => (
-                          <SelectItem key={addr.id} value={String(addr.id)}>
-                            <div className="flex items-center gap-2">
-                              <span>{addr.addressAlias}</span>
-                              <Badge variant="outline">{addr.chainType}</Badge>
+                  {/* Available addresses by chain */}
+                  {allAddresses.length > 0 && (
+                    <div className="space-y-3">
+                      {/* Supported chains for current asset */}
+                      {(["Bitcoin", "Ethereum", "Arbitrum", "Polygon", "Tron"] as const).map((chainType) => {
+                        const chainAddresses = allAddresses.filter(a => a.chainType === chainType);
+                        if (chainAddresses.length === 0) return null;
+                        
+                        const availableCount = chainAddresses.filter(a => 
+                          a.verified && !isAddressFrozen(a.frozenUntil)
+                        ).length;
+                        
+                        return (
+                          <div key={chainType} className="border rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-xs font-medium">
+                                  {chainType}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground">
+                                  {availableCount}/{chainAddresses.length} {t("dashboard.withdraw.address.available")}
+                                </span>
+                              </div>
+                              {availableCount === 0 && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {t("dashboard.withdraw.address.noAvailable")}
+                                </Badge>
+                              )}
                             </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Chain Selection */}
-                  <div className="space-y-2">
-                    <Label htmlFor="chain">{t("dashboard.withdraw.chain.label")}</Label>
-                    <Select value={chain} onValueChange={setChain}>
-                      <SelectTrigger id="chain">
-                        <SelectValue placeholder={t("dashboard.withdraw.chain.placeholder")} />
-                      </SelectTrigger>
-                       <SelectContent>
-                         {(getChainOptions(t, asset) || []).map((option) => (
-                           <SelectItem key={option.value} value={option.value}>
-                            <div className="flex items-center justify-between gap-4">
-                              <span>{option.label}</span>
-                              <span className="text-xs text-muted-foreground">
-                                ~{option.feeEstimate} {asset} fee
-                              </span>
+                            <div className="space-y-2">
+                              {chainAddresses.map((addr) => {
+                                const isFrozen = isAddressFrozen(addr.frozenUntil);
+                                const isNotVerified = !addr.verified;
+                                const isSelectable = !isFrozen && !isNotVerified;
+                                const isSelected = selectedAddressId === String(addr.id);
+                                
+                                return (
+                                  <div
+                                    key={addr.id}
+                                    className={cn(
+                                      "flex items-center justify-between p-3 rounded-lg border transition-all cursor-pointer",
+                                      isSelected 
+                                        ? "bg-primary/10 border-primary" 
+                                        : isSelectable
+                                        ? "bg-card hover:bg-secondary/50 border-border cursor-pointer"
+                                        : "bg-muted/30 border-muted opacity-60"
+                                    )}
+                                    onClick={() => {
+                                      if (isSelectable) {
+                                        handleAddressChange(String(addr.id));
+                                      }
+                                    }}
+                                  >
+                                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                                      <div className={cn(
+                                        "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold",
+                                        isSelected ? "bg-primary text-primary-foreground" : "bg-secondary"
+                                      )}>
+                                        {addr.addressAlias.charAt(0).toUpperCase()}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium text-sm truncate">{addr.addressAlias}</span>
+                                          {isNotVerified && (
+                                            <Badge variant="secondary" className="text-xs shrink-0">
+                                              {t("dashboard.withdraw.address.pending")}
+                                            </Badge>
+                                          )}
+                                          {isFrozen && !isNotVerified && (
+                                            <Badge variant="destructive" className="text-xs shrink-0">
+                                              {t("dashboard.withdraw.address.frozen")} {getFrozenTimeRemaining(addr.frozenUntil)}
+                                            </Badge>
+                                          )}
+                                          {addr.verified && !isFrozen && (
+                                            <Badge variant="default" className="bg-green-500/80 hover:bg-green-500/90 text-xs shrink-0">
+                                              {t("dashboard.withdraw.address.ready")}
+                                            </Badge>
+                                          )}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground font-mono truncate">
+                                          {addr.walletAddress}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 ml-2">
+                                      {isSelectable && !isSelected && (
+                                        <Button 
+                                          variant="ghost" 
+                                          size="sm" 
+                                          className="h-7 px-2 text-xs"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleAddressChange(String(addr.id));
+                                          }}
+                                        >
+                                          {t("dashboard.withdraw.address.select")}
+                                        </Button>
+                                      )}
+                                      {isSelected && (
+                                        <CheckCircle2 className="h-5 w-5 text-primary" />
+                                      )}
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-7 w-7 p-0 hover:bg-destructive/10 hover:text-destructive"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setAddressToDelete(addr);
+                                          setIsDeleteDialogOpen(true);
+                                        }}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </Button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
+                  {/* No addresses at all */}
+                  {allAddresses.length === 0 && (
+                    <div className="text-center py-8">
+                      <Wallet className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
+                      <p className="text-muted-foreground mb-4">{t("dashboard.withdraw.address.empty")}</p>
+                      <Button onClick={() => setIsAddAddressOpen(true)} className="gap-2">
+                        <Plus size={16} />
+                        {t("dashboard.withdraw.address.addFirst")}
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Address Details */}
                   {selectedAddress && (
                     <div className="p-4 bg-secondary/30 rounded-lg border border-border/50">
-                      <p className="text-xs text-muted-foreground mb-2">{t("dashboard.withdraw.address.details")}</p>
-                      <p className="text-sm font-mono break-all">{selectedAddress.walletAddress}</p>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs text-muted-foreground">{t("dashboard.withdraw.address.details")}</p>
+                        <Badge variant="outline" className="text-xs">{selectedAddress.chainType}</Badge>
+                      </div>
+                      <p className="text-sm font-mono break-all mb-1">{selectedAddress.walletAddress}</p>
+                      {isAddressFrozen(selectedAddress.frozenUntil) && (
+                        <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/30 rounded border border-yellow-200 dark:border-yellow-800">
+                          <p className="text-xs text-yellow-700 dark:text-yellow-400">
+                            {t("dashboard.withdraw.address.frozenUntil")}: {selectedAddress.frozenUntil ? new Date(selectedAddress.frozenUntil).toLocaleString() : ""}
+                          </p>
+                          <p className="text-xs text-yellow-600 dark:text-yellow-500 mt-1">
+                            {t("dashboard.withdraw.address.frozenTimeRemaining")}: {getFrozenTimeRemaining(selectedAddress.frozenUntil)}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </CardContent>
@@ -811,6 +1019,19 @@ function Withdraw() {
             </div>
           )}
 
+          {/* Freeze notice */}
+          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
+            <div className="flex items-start gap-2">
+              <Clock className="h-4 w-4 text-blue-600 mt-0.5" />
+              <div className="text-sm text-blue-800">
+                <p className="font-medium">{t("dashboard.withdraw.address.freezeNotice") || "Security Notice"}</p>
+                <p className="text-xs mt-1">
+                  {t("dashboard.withdraw.address.freezeDesc") || "New addresses will be frozen for 4 hours for security. They will be available for withdrawal after the freeze period."}
+                </p>
+              </div>
+            </div>
+          </div>
+
           <DialogFooter>
             <Button
               variant="outline"
@@ -828,6 +1049,28 @@ function Withdraw() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Address Confirmation Dialog */}
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("dashboard.withdraw.address.deleteTitle") || "Delete Address"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("dashboard.withdraw.address.deleteDesc") || `Are you sure you want to delete "${addressToDelete?.addressAlias}"? This action cannot be undone.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingAddress}>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteAddress}
+              disabled={isDeletingAddress}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeletingAddress ? t("dashboard.withdraw.address.deleting") || "Deleting..." : t("dashboard.withdraw.address.delete") || "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

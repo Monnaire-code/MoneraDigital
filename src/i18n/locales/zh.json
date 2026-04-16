@@ -430,13 +430,29 @@
       "calculating": "计算中...",
       "processing": "处理中...",
       "address": {
-        "title": "选择提现地址",
-        "description": "选择一个已验证的钱包地址用于提现",
+        "title": "提现地址管理",
+        "description": "管理您在不同链上的提现地址",
         "label": "提现地址",
         "loading": "正在加载地址...",
-        "empty": "暂无可用的已验证地址，请先添加提现地址。",
+        "empty": "暂无提现地址，请添加您的第一个地址。",
         "addButton": "添加提现地址",
-        "details": "地址详情"
+        "addNew": "新增",
+        "addFirst": "添加第一个地址",
+        "details": "地址详情",
+        "frozen": "冻结中",
+        "frozenUntil": "地址冻结至",
+        "frozenTimeRemaining": "剩余时间",
+        "frozenInfo": "部分地址暂时不可用",
+        "frozenDesc": "地址可能正在等待验证或因安全原因被冻结。",
+        "pending": "待验证",
+        "delete": "删除",
+        "deleteTitle": "删除地址",
+        "deleteDesc": "确定要删除此地址吗？此操作无法撤销。",
+        "deleting": "删除中...",
+        "available": "可用",
+        "noAvailable": "无可用",
+        "ready": "可用",
+        "select": "选择"
       },
       "chain": {
         "label": "提现网络"

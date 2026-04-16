@@ -164,8 +164,17 @@ type WithdrawalAddress struct {
 	VerificationMethod sql.NullString `json:"verification_method" db:"verification_method"`
 	IsDeleted          bool           `json:"is_deleted" db:"is_deleted"`
 	IsPrimary          bool           `json:"is_primary" db:"is_primary"`
+	FrozenUntil        sql.NullTime   `json:"frozen_until" db:"frozen_until"`
 	CreatedAt          time.Time      `json:"created_at" db:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at" db:"updated_at"`
+}
+
+// IsFrozen checks if the address is currently frozen
+func (w *WithdrawalAddress) IsFrozen() bool {
+	if !w.FrozenUntil.Valid {
+		return false
+	}
+	return time.Now().Before(w.FrozenUntil.Time)
 }
 
 // WithdrawalRequest model (New)

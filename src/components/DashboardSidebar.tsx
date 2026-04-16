@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   Wallet,
   ArrowUpCircle,
+  ArrowDownCircle,
   TrendingUp,
   ShieldCheck,
   ChevronLeft,
@@ -21,6 +22,7 @@ const DashboardSidebar = () => {
   const menuItems = [
     { icon: LayoutDashboard, label: t("dashboard.nav.overview"), href: "/dashboard" },
     { icon: Wallet, label: t("dashboard.nav.assets"), href: "/dashboard/assets" },
+    { icon: ArrowDownCircle, label: t("dashboard.nav.deposit"), href: "/dashboard/deposit" },
     { icon: ArrowUpCircle, label: t("dashboard.nav.withdraw"), href: "/dashboard/withdraw" },
     { icon: Bitcoin, label: t("dashboard.nav.fixedDeposit"), href: "/dashboard/fixed-deposit" },
     { icon: ShieldCheck, label: t("dashboard.nav.security"), href: "/dashboard/security" },
