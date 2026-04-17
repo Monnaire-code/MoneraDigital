@@ -95,8 +95,16 @@ export default function Login() {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-black">
-      <Card className="w-full max-w-md">
+    <div className="flex items-center justify-center min-h-screen relative overflow-hidden">
+      {/* Background Effects */}
+      <div className="absolute inset-0 bg-grid-pattern bg-[size:60px_60px] opacity-[0.03]" />
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-[120px] animate-pulse-slow" />
+      <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-primary/5 rounded-full blur-[100px] animate-pulse-slow" />
+      {/* Bottom Gradient */}
+      <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-background to-transparent" />
+      
+      {/* Login Card */}
+      <Card className="w-full max-w-md relative z-10 backdrop-blur-sm bg-card/80">
         <CardHeader>
           <CardTitle>{t("auth.login.title")}</CardTitle>
           <CardDescription>{t("auth.login.description")}</CardDescription>
@@ -125,7 +133,8 @@ export default function Login() {
                 className={cn(emailError && "border-red-500 focus-visible:ring-red-500")}
               />
               {emailError && (
-                <p className="text-xs text-red-500 animate-in fade-in-0 slide-in-from-top-1">
+                <p className="text-sm text-red-500 flex items-center gap-1.5">
+                  <span className="w-1 h-1 rounded-full bg-red-500"></span>
                   {emailError}
                 </p>
               )}
@@ -145,7 +154,8 @@ export default function Login() {
                 className={cn(passwordError && "border-red-500 focus-visible:ring-red-500")}
               />
               {passwordError && (
-                <p className="text-xs text-red-500 animate-in fade-in-0 slide-in-from-top-1">
+                <p className="text-sm text-red-500 flex items-center gap-1.5">
+                  <span className="w-1 h-1 rounded-full bg-red-500"></span>
                   {passwordError}
                 </p>
               )}

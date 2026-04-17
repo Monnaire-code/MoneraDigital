@@ -87,7 +87,7 @@ const DashboardLayout = () => {
             <div className="flex items-center gap-3">
               <div className="text-right hidden sm:block">
                 <div className="text-sm font-semibold truncate max-w-[150px]">{user.email}</div>
-                <div className="text-[10px] text-primary font-bold uppercase tracking-wider">Institutional</div>
+
               </div>
               <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center border border-border">
                 <User size={20} className="text-muted-foreground" />

@@ -23,11 +23,11 @@ func (r *AddressRepository) CreateAddress(ctx context.Context, address *models.W
 	err := r.db.QueryRowContext(ctx,
 		`INSERT INTO withdrawal_address_whitelist (
 			user_id, address_alias, chain_type, wallet_address, verified,
-			verified_at, verification_method, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			verified_at, verification_method, frozen_until, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id`,
 		address.UserID, address.AddressAlias, address.ChainType, address.WalletAddress,
-		address.Verified, address.VerifiedAt, address.VerificationMethod,
+		address.Verified, address.VerifiedAt, address.VerificationMethod, address.FrozenUntil,
 		time.Now(), time.Now(),
 	).Scan(&address.ID)
 	if err != nil {
@@ -46,7 +46,7 @@ func (r *AddressRepository) CreateAddress(ctx context.Context, address *models.W
 func (r *AddressRepository) GetAddressesByUserID(ctx context.Context, userID int) ([]*models.WithdrawalAddress, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, user_id, address_alias, chain_type, wallet_address, verified,
-			verified_at, verification_method, is_deleted, is_primary, created_at, updated_at
+			verified_at, verification_method, is_deleted, is_primary, frozen_until, created_at, updated_at
 		FROM withdrawal_address_whitelist
 		WHERE user_id = $1 AND is_deleted = FALSE`,
 		userID)
@@ -61,7 +61,7 @@ func (r *AddressRepository) GetAddressesByUserID(ctx context.Context, userID int
 		if err := rows.Scan(
 			&addr.ID, &addr.UserID, &addr.AddressAlias, &addr.ChainType, &addr.WalletAddress,
 			&addr.Verified, &addr.VerifiedAt, &addr.VerificationMethod, &addr.IsDeleted, &addr.IsPrimary,
-			&addr.CreatedAt, &addr.UpdatedAt,
+			&addr.FrozenUntil, &addr.CreatedAt, &addr.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -74,12 +74,12 @@ func (r *AddressRepository) GetAddressByID(ctx context.Context, id int) (*models
 	var addr models.WithdrawalAddress
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, user_id, address_alias, chain_type, wallet_address, verified,
-			verified_at, verification_method, is_deleted, is_primary, created_at, updated_at
+			verified_at, verification_method, is_deleted, is_primary, frozen_until, created_at, updated_at
 		FROM withdrawal_address_whitelist WHERE id = $1 AND is_deleted = FALSE`,
 		id).Scan(
 		&addr.ID, &addr.UserID, &addr.AddressAlias, &addr.ChainType, &addr.WalletAddress,
 		&addr.Verified, &addr.VerifiedAt, &addr.VerificationMethod, &addr.IsDeleted, &addr.IsPrimary,
-		&addr.CreatedAt, &addr.UpdatedAt,
+		&addr.FrozenUntil, &addr.CreatedAt, &addr.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, repository.ErrNotFound
@@ -112,12 +112,12 @@ func (r *AddressRepository) GetByAddressAndChain(ctx context.Context, address, c
 	var addr models.WithdrawalAddress
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, user_id, address_alias, chain_type, wallet_address, verified,
-			verified_at, verification_method, is_deleted, created_at, updated_at, is_primary
+			verified_at, verification_method, is_deleted, frozen_until, created_at, updated_at, is_primary
 		FROM withdrawal_address_whitelist WHERE wallet_address = $1 AND chain_type = $2 AND is_deleted = FALSE LIMIT 1`,
 		address, chain).Scan(
 		&addr.ID, &addr.UserID, &addr.AddressAlias, &addr.ChainType, &addr.WalletAddress,
 		&addr.Verified, &addr.VerifiedAt, &addr.VerificationMethod, &addr.IsDeleted,
-		&addr.CreatedAt, &addr.UpdatedAt, &addr.IsPrimary,
+		&addr.FrozenUntil, &addr.CreatedAt, &addr.UpdatedAt, &addr.IsPrimary,
 	)
 	if err == sql.ErrNoRows {
 		return nil, repository.ErrNotFound
@@ -169,4 +169,50 @@ func (r *AddressRepository) SetPrimary(ctx context.Context, userID int, addressI
 	}
 
 	return tx.Commit()
+}
+
+func (r *AddressRepository) UnfreezeExpiredAddresses(ctx context.Context) (int64, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE withdrawal_address_whitelist 
+		SET frozen_until = NULL, updated_at = $1 
+		WHERE frozen_until IS NOT NULL AND frozen_until <= $1`,
+		time.Now())
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (r *AddressRepository) GetFrozenAddresses(ctx context.Context) ([]*models.WithdrawalAddress, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, user_id, address_alias, chain_type, wallet_address, verified,
+			verified_at, verification_method, is_deleted, is_primary, frozen_until, created_at, updated_at
+		FROM withdrawal_address_whitelist
+		WHERE frozen_until IS NOT NULL AND frozen_until > NOW()`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	addresses := make([]*models.WithdrawalAddress, 0, 10)
+	for rows.Next() {
+		var addr models.WithdrawalAddress
+		if err := rows.Scan(
+			&addr.ID, &addr.UserID, &addr.AddressAlias, &addr.ChainType, &addr.WalletAddress,
+			&addr.Verified, &addr.VerifiedAt, &addr.VerificationMethod, &addr.IsDeleted, &addr.IsPrimary,
+			&addr.FrozenUntil, &addr.CreatedAt, &addr.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		addresses = append(addresses, &addr)
+	}
+	return addresses, nil
+}
+
+func (r *AddressRepository) UpdateFrozenUntil(ctx context.Context, id int, frozenUntil sql.NullTime) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE withdrawal_address_whitelist SET frozen_until = $1, updated_at = $2 WHERE id = $3`,
+		frozenUntil, time.Now(), id)
+	return err
 }

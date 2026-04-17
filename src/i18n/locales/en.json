@@ -417,13 +417,29 @@
       "calculating": "Calculating...",
       "processing": "Processing...",
       "address": {
-        "title": "Select Withdrawal Address",
-        "description": "Choose a verified address to withdraw funds to",
+        "title": "Withdrawal Addresses",
+        "description": "Manage your withdrawal addresses for different chains",
         "label": "Withdrawal Address",
         "loading": "Loading addresses...",
-        "empty": "No verified addresses available. Please add a withdrawal address first.",
+        "empty": "No withdrawal addresses added yet.",
         "addButton": "Add Withdrawal Address",
-        "details": "Address Details"
+        "addNew": "Add New",
+        "addFirst": "Add Your First Address",
+        "details": "Address Details",
+        "frozen": "Frozen",
+        "frozenUntil": "Address frozen until",
+        "frozenTimeRemaining": "Time remaining",
+        "frozenInfo": "Some addresses are temporarily unavailable",
+        "frozenDesc": "Addresses may be pending verification or frozen for security reasons.",
+        "pending": "Pending",
+        "delete": "Delete",
+        "deleteTitle": "Delete Address",
+        "deleteDesc": "Are you sure you want to delete this address? This action cannot be undone.",
+        "deleting": "Deleting...",
+        "available": "available",
+        "noAvailable": "No available",
+        "ready": "Ready",
+        "select": "Select"
       },
       "chain": {
         "label": "Withdrawal Chain"
@@ -489,7 +505,7 @@
     },
     "fixedDeposit": {
       "pageTitle": "Structured Products",
-      "pageDesc": "Choose Structured Products products and enjoy stable returns",
+      "pageDesc": "Choose structured products and enjoy stable returns",
       "products": "Products",
       "history": "History",
       "loading": "Loading...",
@@ -682,7 +698,27 @@
     },
     "noHistory": "No deposit history found.",
     "activate": "Activate Account",
-    "activateDesc": "Please activate your wallet account first to get a deposit address."
+    "activateDesc": "Please activate your wallet account first to get a deposit address.",
+    "comingSoon": {
+      "title": "Deposit Service Coming Soon",
+      "description": "Our deposit service is currently being prepared. Please contact us for deposit arrangements.",
+      "howToDeposit": "How to Deposit",
+      "step1": {
+        "title": "Contact Our Team",
+        "desc": "Reach out to us via email with your deposit requirements"
+      },
+      "step2": {
+        "title": "Receive Instructions",
+        "desc": "We will provide you with detailed deposit instructions"
+      },
+      "step3": {
+        "title": "Complete Deposit",
+        "desc": "Transfer funds to the designated address and confirm with us"
+      },
+      "contactUs": "Contact Us",
+      "contactDesc": "For deposit inquiries, please contact our operations team:",
+      "supportedCoins": "Supported Currencies"
+    }
   },
   "wallet": {
     "opening": {

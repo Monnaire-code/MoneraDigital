@@ -430,13 +430,29 @@
       "calculating": "计算中...",
       "processing": "处理中...",
       "address": {
-        "title": "选择提现地址",
-        "description": "选择一个已验证的钱包地址用于提现",
+        "title": "提现地址管理",
+        "description": "管理您在不同链上的提现地址",
         "label": "提现地址",
         "loading": "正在加载地址...",
-        "empty": "暂无可用的已验证地址，请先添加提现地址。",
+        "empty": "暂无提现地址，请添加您的第一个地址。",
         "addButton": "添加提现地址",
-        "details": "地址详情"
+        "addNew": "新增",
+        "addFirst": "添加第一个地址",
+        "details": "地址详情",
+        "frozen": "冻结中",
+        "frozenUntil": "地址冻结至",
+        "frozenTimeRemaining": "剩余时间",
+        "frozenInfo": "部分地址暂时不可用",
+        "frozenDesc": "地址可能正在等待验证或因安全原因被冻结。",
+        "pending": "待验证",
+        "delete": "删除",
+        "deleteTitle": "删除地址",
+        "deleteDesc": "确定要删除此地址吗？此操作无法撤销。",
+        "deleting": "删除中...",
+        "available": "可用",
+        "noAvailable": "无可用",
+        "ready": "可用",
+        "select": "选择"
       },
       "chain": {
         "label": "提现网络"
@@ -761,7 +777,27 @@
     },
     "noHistory": "暂无充值记录",
     "activate": "开通账户",
-    "activateDesc": "请先开通您的钱包账户以获取充值地址。"
+    "activateDesc": "请先开通您的钱包账户以获取充值地址。",
+    "comingSoon": {
+      "title": "充值服务即将上线",
+      "description": "我们正在准备充值服务中。请联系我们以安排充值。",
+      "howToDeposit": "如何充值",
+      "step1": {
+        "title": "联系我们的团队",
+        "desc": "通过电子邮件与我们联系，告知您的充值需求"
+      },
+      "step2": {
+        "title": "接收指示",
+        "desc": "我们将为您提供详细的充值指示"
+      },
+      "step3": {
+        "title": "完成充值",
+        "desc": "将资金转入指定地址并与我们确认"
+      },
+      "contactUs": "联系我们",
+      "contactDesc": "如需充值咨询，请联系我们的运营团队：",
+      "supportedCoins": "支持的币种"
+    }
   },
   "wallet": {
     "opening": {

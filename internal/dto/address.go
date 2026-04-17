@@ -21,6 +21,7 @@ type WithdrawalAddressResponse struct {
 	IsDeleted   bool       `json:"isDeleted"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	VerifiedAt  *time.Time `json:"verifiedAt,omitempty"`
+	FrozenUntil *time.Time `json:"frozenUntil,omitempty"`
 }
 
 // WithdrawalAddressesListResponse DTO for list of withdrawal addresses

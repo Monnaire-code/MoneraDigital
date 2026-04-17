@@ -20,6 +20,7 @@ import (
 	"monera-digital/internal/logger"
 	"monera-digital/internal/repository"
 	"monera-digital/internal/repository/postgres"
+	"monera-digital/internal/scheduler"
 )
 
 func main() {
@@ -69,6 +70,7 @@ func main() {
 	wealthRepo := postgres.NewWealthRepository(database)
 	accountRepo := postgres.NewAccountRepository(database)
 	journalRepo := postgres.NewJournalRepository(database)
+	addressRepo := postgres.NewAddressRepository(database)
 
 	accountV2, ok := accountRepo.(repository.AccountV2)
 	if !ok {
@@ -76,14 +78,15 @@ func main() {
 	}
 
 	priceService := binance.NewPriceService()
-	scheduler := NewStandaloneScheduler(
+	addressScheduler := scheduler.NewAddressScheduler(addressRepo)
+	interestScheduler := NewStandaloneScheduler(
 		wealthRepo,
 		accountV2,
 		journalRepo,
 		priceService,
 	)
 
-	logger.Info("Interest scheduler initialized",
+	logger.Info("Scheduler initialized",
 		"next_run", "00:00:05 UTC (tomorrow)")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -92,9 +95,11 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go scheduler.Start(ctx)
+	go addressScheduler.Start(ctx)
+	go interestScheduler.Start(ctx)
 
-	logger.Info("Interest scheduler started successfully")
+	logger.Info("Schedulers started successfully",
+		"schedulers", []string{"address", "interest"})
 
 	sig := <-sigChan
 	logger.Info("Received shutdown signal",

@@ -125,11 +125,13 @@ export class AddressWhitelistService {
       throw new Error('Not authenticated');
     }
 
-    const response = await fetch(`/api/addresses/${addressId}`, {
-      method: 'DELETE',
+    const response = await fetch(`/api/addresses/${addressId}/deactivate`, {
+      method: 'POST',
       headers: {
+        'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
       },
+      body: JSON.stringify({ addressId }),
     });
 
     if (!response.ok) {

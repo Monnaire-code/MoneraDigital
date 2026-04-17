@@ -22,23 +22,17 @@ func (s *AddressService) GetAddresses(ctx context.Context, userID int) ([]*model
 	return s.repo.GetAddressesByUserID(ctx, userID)
 }
 
-func (s *AddressService) AddAddress(ctx context.Context, userID int, req models.AddAddressRequest) (*models.WithdrawalAddress, error) {
-	// Check if already exists (optional, unique constraint handles it but maybe check alias?)
-	// DB Unique Constraint: (user_id, wallet_address)
+const AddressFreezeDuration = 4 * time.Hour
 
+func (s *AddressService) AddAddress(ctx context.Context, userID int, req models.AddAddressRequest) (*models.WithdrawalAddress, error) {
 	addr := &models.WithdrawalAddress{
 		UserID:        userID,
 		AddressAlias:  req.AddressAlias,
 		ChainType:     req.ChainType,
 		WalletAddress: req.WalletAddress,
-		Verified:      false, // New addresses need verification
-		// VerifiedAt: nil
-		// VerificationMethod: nil
+		Verified:      false,
+		FrozenUntil:   sql.NullTime{Time: time.Now().Add(AddressFreezeDuration), Valid: true},
 	}
-
-	// PRD 4.1: If first time, needs verification. (Default verified=false)
-	// If existing whitelist, maybe skip?
-	// But AddAddress implies adding new.
 
 	createdAddr, err := s.repo.CreateAddress(ctx, addr)
 	if err != nil {
@@ -49,6 +43,18 @@ func (s *AddressService) AddAddress(ctx context.Context, userID int, req models.
 	}
 
 	return createdAddr, nil
+}
+
+func (s *AddressService) UnfreezeExpiredAddresses(ctx context.Context) (int64, error) {
+	return s.repo.UnfreezeExpiredAddresses(ctx)
+}
+
+func (s *AddressService) IsAddressFrozen(ctx context.Context, addressID int) (bool, error) {
+	addr, err := s.repo.GetAddressByID(ctx, addressID)
+	if err != nil {
+		return false, err
+	}
+	return addr.IsFrozen(), nil
 }
 
 func (s *AddressService) VerifyAddress(ctx context.Context, userID int, addressID int, method string) error {

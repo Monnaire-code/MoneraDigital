@@ -103,7 +103,7 @@ export default function Register() {
     } catch (error: any) {
       console.error("Registration error:", error);
       if (!emailError && !passwordError) {
-        toast.error(error.message);
+        toast.error(getLocalizedError(error.message));
       }
     } finally {
       setIsLoading(false);
@@ -117,28 +117,50 @@ export default function Register() {
 
     if (errorMessage.includes("email already registered") || errorCode === "EMAIL_ALREADY_EXISTS") {
       setEmailError(t("auth.errors.emailAlreadyRegistered"));
-    } else if (errorMessage.includes("email") && (errorMessage.includes("invalid") || errorMessage.includes("format"))) {
+      return;
+    }
+    if (errorMessage.includes("email") && (errorMessage.includes("invalid") || errorMessage.includes("format"))) {
       setEmailError(t("auth.errors.invalidEmailFormat"));
-    } else if (errorMessage.includes("password") && (errorMessage.includes("invalid") || errorMessage.includes("format") || errorMessage.includes("too short"))) {
+      return;
+    }
+    if (errorMessage.includes("password") && (errorMessage.includes("invalid") || errorMessage.includes("format") || errorMessage.includes("too short"))) {
       setPasswordError(t("auth.errors.invalidPasswordFormat"));
-    } else if (errorCode === "VALIDATION_ERROR") {
+      return;
+    }
+    if (errorMessage.includes("uppercase, lowercase, and digit") || errorMessage.includes("password must contain")) {
+      setPasswordError(t("auth.errors.passwordComplexity"));
+      return;
+    }
+    if (errorCode === "VALIDATION_ERROR") {
       if (errorDetails === "email") {
         setEmailError(t("auth.errors.invalidEmailFormat"));
-      } else if (errorDetails === "password") {
-        setPasswordError(t("auth.errors.invalidPasswordFormat"));
-      } else {
-        toast.error(t("auth.errors.invalidParameters"));
+        return;
       }
-    } else if (errorCode === "INTERNAL_ERROR" || errorCode === "PANIC_RECOVERED") {
-      toast.error(t("auth.errors.serverError"));
-    } else {
-      toast.error(errorMessage || t("auth.errors.registrationFailed"));
+      if (errorDetails === "password") {
+        setPasswordError(t("auth.errors.invalidPasswordFormat"));
+        return;
+      }
+      toast.error(t("auth.errors.invalidParameters"));
+      return;
     }
+    if (errorCode === "INTERNAL_ERROR" || errorCode === "PANIC_RECOVERED") {
+      toast.error(t("auth.errors.serverError"));
+      return;
+    }
+    toast.error(getLocalizedError(errorMessage) || t("auth.errors.registrationFailed"));
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <Card className="w-full max-w-md">
+    <div className="flex items-center justify-center min-h-screen relative overflow-hidden">
+      {/* Background Effects */}
+      <div className="absolute inset-0 bg-grid-pattern bg-[size:60px_60px] opacity-[0.03]" />
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-[120px] animate-pulse-slow" />
+      <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-primary/5 rounded-full blur-[100px] animate-pulse-slow" />
+      {/* Bottom Gradient */}
+      <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-background to-transparent" />
+      
+      {/* Register Card */}
+      <Card className="w-full max-w-md relative z-10 backdrop-blur-sm bg-card/80">
         <CardHeader>
           <CardTitle>{t("auth.register.title")}</CardTitle>
           <CardDescription>{t("auth.register.description")}</CardDescription>
@@ -167,7 +189,8 @@ export default function Register() {
                 className={cn(emailError && "border-red-500 focus-visible:ring-red-500")}
               />
               {emailError && (
-                <p className="text-xs text-red-500 animate-in fade-in-0 slide-in-from-top-1">
+                <p className="text-sm text-red-500 flex items-center gap-1.5">
+                  <span className="w-1 h-1 rounded-full bg-red-500"></span>
                   {emailError}
                 </p>
               )}
@@ -188,10 +211,17 @@ export default function Register() {
                 required
               />
               <p className={cn(
-                  "text-xs transition-colors duration-200",
-                  passwordError ? "text-red-500 font-medium" : "text-muted-foreground"
+                "text-sm flex items-center gap-1.5",
+                passwordError ? "text-red-500" : "text-muted-foreground"
               )}>
-                {passwordError || t("auth.register.passwordRequirements")}
+                {passwordError ? (
+                  <>
+                    <span className="w-1 h-1 rounded-full bg-red-500"></span>
+                    {passwordError}
+                  </>
+                ) : (
+                  t("auth.register.passwordRequirements")
+                )}
               </p>
             </div>
           </CardContent>
