@@ -41,6 +41,8 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
   'GET /api/addresses': { requiresAuth: true, backendPath: '/api/addresses' },
   'POST /api/addresses': { requiresAuth: true, backendPath: '/api/addresses' },
 
+  // Dynamic address routes: /api/addresses/123, /api/addresses/123/deactivate, /api/addresses/123/verify, etc.
+
   // Wallet endpoints
   'POST /api/wallet/create': { requiresAuth: true, backendPath: '/api/wallet/create' },
   'GET /api/wallet/info': { requiresAuth: true, backendPath: '/api/wallet/info' },
