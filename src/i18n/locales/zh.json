@@ -145,7 +145,7 @@
       "riskDisclosure": "风险披露",
       "compliance": "合规"
     },
-    "copyright": "© {year} Monera Digital. 保留所有权利。",
+    "copyright": "© {{year}} Monera Digital. 保留所有权利。",
     "riskDisclaimer": "数字资产投资存在重大风险。过去的表现不能保证未来的结果。投资前请仔细阅读我们的风险披露。"
   },
   "auth": {
