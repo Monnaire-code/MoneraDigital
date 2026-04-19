@@ -10,7 +10,7 @@ const BACKEND_URL = process.env.BACKEND_URL;
  * Routes all API requests through a single handler.
  * Replaces 11 individual endpoint files.
  *
- * Routing table maps [METHOD PATH] to backend configuration.
+ * Routing table maps [METHOD /path] to backend configuration.
  * Supports both exact matches and pattern matching for dynamic routes.
  */
 
@@ -20,69 +20,78 @@ interface RouteConfig {
 }
 
 // Route configuration: maps "METHOD /path" to backend endpoint
+// Note: Keys must include /api prefix since frontend calls /api/xxx
 const ROUTE_CONFIG: Record<string, RouteConfig> = {
   // Auth endpoints
-  'POST /auth/login': { requiresAuth: false, backendPath: '/api/auth/login' },
-  'POST /auth/register': { requiresAuth: false, backendPath: '/api/auth/register' },
-  'GET /auth/me': { requiresAuth: true, backendPath: '/api/auth/me' },
-  'POST /auth/refresh': { requiresAuth: false, backendPath: '/api/auth/refresh' },
-  'POST /auth/logout': { requiresAuth: true, backendPath: '/api/auth/logout' },
+  'POST /api/auth/login': { requiresAuth: false, backendPath: '/api/auth/login' },
+  'POST /api/auth/register': { requiresAuth: false, backendPath: '/api/auth/register' },
+  'GET /api/auth/me': { requiresAuth: true, backendPath: '/api/auth/me' },
+  'POST /api/auth/refresh': { requiresAuth: false, backendPath: '/api/auth/refresh' },
+  'POST /api/auth/logout': { requiresAuth: true, backendPath: '/api/auth/logout' },
 
   // 2FA endpoints
-  'POST /auth/2fa/setup': { requiresAuth: true, backendPath: '/api/auth/2fa/setup' },
-  'POST /auth/2fa/enable': { requiresAuth: true, backendPath: '/api/auth/2fa/enable' },
-  'POST /auth/2fa/disable': { requiresAuth: true, backendPath: '/api/auth/2fa/disable' },
-  'GET /auth/2fa/status': { requiresAuth: true, backendPath: '/api/auth/2fa/status' },
-  'POST /auth/2fa/verify-login': { requiresAuth: false, backendPath: '/api/auth/2fa/verify-login' },
-  'POST /auth/2fa/skip': { requiresAuth: false, backendPath: '/api/auth/2fa/skip' },
+  'POST /api/auth/2fa/setup': { requiresAuth: true, backendPath: '/api/auth/2fa/setup' },
+  'POST /api/auth/2fa/enable': { requiresAuth: true, backendPath: '/api/auth/2fa/enable' },
+  'POST /api/auth/2fa/disable': { requiresAuth: true, backendPath: '/api/auth/2fa/disable' },
+  'GET /api/auth/2fa/status': { requiresAuth: true, backendPath: '/api/auth/2fa/status' },
+  'POST /api/auth/2fa/verify-login': { requiresAuth: false, backendPath: '/api/auth/2fa/verify-login' },
+  'POST /api/auth/2fa/skip': { requiresAuth: false, backendPath: '/api/auth/2fa/skip' },
 
-  // Address endpoints (base)
-  'GET /addresses': { requiresAuth: true, backendPath: '/api/addresses' },
-  'POST /addresses': { requiresAuth: true, backendPath: '/api/addresses' },
+  // Address endpoints
+  'GET /api/addresses': { requiresAuth: true, backendPath: '/api/addresses' },
+  'POST /api/addresses': { requiresAuth: true, backendPath: '/api/addresses' },
 
-  'POST /wallet/create': { requiresAuth: true, backendPath: '/api/wallet/create' },
-  'GET /wallet/info': { requiresAuth: true, backendPath: '/api/wallet/info' },
-  'POST /wallet/addresses': { requiresAuth: true, backendPath: '/api/wallet/addresses' },
-  'POST /wallet/address/incomeHistory': { requiresAuth: true, backendPath: '/api/wallet/address/incomeHistory' },
-  'POST /wallet/address/get': { requiresAuth: true, backendPath: '/api/wallet/address/get' },
+  // Dynamic address routes: /api/addresses/123, /api/addresses/123/deactivate, /api/addresses/123/verify, etc.
+
+  // Wallet endpoints
+  'POST /api/wallet/create': { requiresAuth: true, backendPath: '/api/wallet/create' },
+  'GET /api/wallet/info': { requiresAuth: true, backendPath: '/api/wallet/info' },
+  'POST /api/wallet/addresses': { requiresAuth: true, backendPath: '/api/wallet/addresses' },
+  'POST /api/wallet/address/incomeHistory': { requiresAuth: true, backendPath: '/api/wallet/address/incomeHistory' },
+  'POST /api/wallet/address/get': { requiresAuth: true, backendPath: '/api/wallet/address/get' },
 
   // Assets endpoints
-  'GET /assets': { requiresAuth: true, backendPath: '/api/assets' },
-  'GET /assets/prices': { requiresAuth: true, backendPath: '/api/assets/prices' },
-  'POST /assets/refresh-prices': { requiresAuth: true, backendPath: '/api/assets/refresh-prices' },
+  'GET /api/assets': { requiresAuth: true, backendPath: '/api/assets' },
+  'GET /api/assets/prices': { requiresAuth: true, backendPath: '/api/assets/prices' },
+  'POST /api/assets/refresh-prices': { requiresAuth: true, backendPath: '/api/assets/refresh-prices' },
 
   // Wealth endpoints
-  'GET /wealth/products': { requiresAuth: true, backendPath: '/api/wealth/products' },
-  'POST /wealth/subscribe': { requiresAuth: true, backendPath: '/api/wealth/subscribe' },
-  'GET /wealth/orders': { requiresAuth: true, backendPath: '/api/wealth/orders' },
-  'POST /wealth/redeem': { requiresAuth: true, backendPath: '/api/wealth/redeem' },
-  'GET /wealth/interest-history': { requiresAuth: true, backendPath: '/api/wealth/interest-history' },
+  'GET /api/wealth/products': { requiresAuth: true, backendPath: '/api/wealth/products' },
+  'POST /api/wealth/subscribe': { requiresAuth: true, backendPath: '/api/wealth/subscribe' },
+  'GET /api/wealth/orders': { requiresAuth: true, backendPath: '/api/wealth/orders' },
+  'POST /api/wealth/redeem': { requiresAuth: true, backendPath: '/api/wealth/redeem' },
+  'GET /api/wealth/interest-history': { requiresAuth: true, backendPath: '/api/wealth/interest-history' },
 
   // Lending endpoints
-  'GET /lending/positions': { requiresAuth: true, backendPath: '/api/lending/positions' },
-  'POST /lending/apply': { requiresAuth: true, backendPath: '/api/lending/apply' },
+  'GET /api/lending/positions': { requiresAuth: true, backendPath: '/api/lending/positions' },
+  'POST /api/lending/apply': { requiresAuth: true, backendPath: '/api/lending/apply' },
 
   // Deposit endpoints
-  'GET /deposits': { requiresAuth: true, backendPath: '/api/deposits' },
+  'GET /api/deposits': { requiresAuth: true, backendPath: '/api/deposits' },
 
   // Withdrawal endpoints
-  'GET /withdrawals': { requiresAuth: true, backendPath: '/api/withdrawals' },
-  'POST /withdrawals': { requiresAuth: true, backendPath: '/api/withdrawals' },
-  'GET /withdrawals/fees': { requiresAuth: true, backendPath: '/api/withdrawals/fees' },
-  'GET /withdrawals/:id': { requiresAuth: true, backendPath: '' },
+  'GET /api/withdrawals': { requiresAuth: true, backendPath: '/api/withdrawals' },
+  'POST /api/withdrawals': { requiresAuth: true, backendPath: '/api/withdrawals' },
+  'GET /api/withdrawals/fees': { requiresAuth: true, backendPath: '/api/withdrawals/fees' },
+  'GET /api/withdrawals/:id': { requiresAuth: true, backendPath: '' },
 };
 
 /**
  * Parse incoming request to extract method and path
  */
-function parseRoute(req: VercelRequest): { method: string; path: string } {
+function parseRoute(req: VercelRequest): { method: string; path: string; query: string } {
   const method = req.method || 'GET';
   const routePath = Array.isArray(req.query.route)
     ? req.query.route.join('/')
     : req.query.route || '';
   const path = `/${routePath}`;
 
-  return { method, path };
+  // Extract query string from full URL
+  const url = req.url || '';
+  const queryIndex = url.indexOf('?');
+  const query = queryIndex >= 0 ? url.substring(queryIndex) : '';
+
+  return { method, path, query };
 }
 
 /**
@@ -95,19 +104,22 @@ function findRoute(method: string, path: string): { found: boolean; config?: Rou
     return { found: true, config: ROUTE_CONFIG[exactKey], backendPath: ROUTE_CONFIG[exactKey].backendPath };
   }
 
-  // Handle dynamic address routes: /addresses/123, /addresses/123/verify, etc.
-  if (path.startsWith('/addresses/')) {
-    const isValidAddressRoute =
-      /^\/addresses\/[\w-]+(\/verify|\/primary)?$/.test(path) &&
-      (method === 'DELETE' || method === 'POST' || method === 'PUT' || method === 'PATCH');
+  // Handle dynamic withdrawal routes: /api/withdrawals/123
+  if (path.match(/^\/api\/withdrawals\/\d+$/)) {
+    return {
+      found: true,
+      config: { requiresAuth: true, backendPath: '' },
+      backendPath: `/api/withdrawals/${path.split('/').pop()}`,
+    };
+  }
 
-    if (isValidAddressRoute) {
-      return {
-        found: true,
-        config: { requiresAuth: true, backendPath: '' },
-        backendPath: `/api${path}`,
-      };
-    }
+  // Handle dynamic address routes: /api/addresses/123, /api/addresses/123/verify, etc.
+  if (path.startsWith('/api/addresses/')) {
+    return {
+      found: true,
+      config: { requiresAuth: true, backendPath: '' },
+      backendPath: `/api${path.replace('/api/addresses/', '/addresses/')}`,
+    };
   }
 
   return { found: false };
@@ -129,14 +141,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Parse request
-    const { method, path } = parseRoute(req);
+    const { method, path, query } = parseRoute(req);
 
     // Log incoming request for debugging
     logger.debug({
       method,
       path,
+      query,
       hasAuth: !!req.headers.authorization,
-      query: req.query,
     }, 'Handling API request');
 
     // Find matching route
@@ -153,20 +165,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const routeConfig = routeMatch.config!;
     const backendPath = routeMatch.backendPath || routeConfig.backendPath;
 
+    // Construct backend URL with query parameters
+    const backendUrl = `${BACKEND_URL}${backendPath}${query}`;
+
     // Debug logging for account opening flow
-    if (path === '/wallet/create') {
-      console.log(`[DEBUG-ACCOUNT-OPENING] Vercel Route matched: ${method} ${path} -> ${backendPath}`);
+    if (path === '/api/wallet/create') {
+      console.log(`[DEBUG-ACCOUNT-OPENING] Vercel Route matched: ${method} ${path} -> ${backendUrl}`);
       console.log(`[DEBUG-ACCOUNT-OPENING] Vercel Request body:`, req.body);
     }
     
     // Debug logging for add address flow
-    if (path === '/wallet/addresses' && method === 'POST') {
-      console.log(`[DEBUG-ADDRESS] Vercel Route matched: ${method} ${path} -> ${backendPath}`);
+    if (path === '/api/wallet/addresses' && method === 'POST') {
+      console.log(`[DEBUG-ADDRESS] Vercel Route matched: ${method} ${path} -> ${backendUrl}`);
       console.log(`[DEBUG-ADDRESS] Vercel Request body:`, JSON.stringify(req.body, null, 2));
-    }
-    if (path === '/wallet/create') {
-      console.log(`[DEBUG-ACCOUNT-OPENING] Vercel Route matched: ${method} ${path} -> ${backendPath}`);
-      console.log(`[DEBUG-ACCOUNT-OPENING] Vercel Request body:`, req.body);
     }
 
     // Check authentication if required
@@ -192,9 +203,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         allowedMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
       });
     }
-
-    // Construct backend URL
-    const backendUrl = `${BACKEND_URL}${backendPath}`;
 
     // Extract all custom headers (excluding host and standard headers)
     const customHeaders: Record<string, string> = {};
@@ -255,7 +263,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Log audit trail for sensitive operations
-    if (method === 'POST' && path === '/auth/2fa/skip') {
+    if (method === 'POST' && path === '/api/auth/2fa/skip') {
       logger.info({ userId: req.body?.userId }, '2FA verification skipped during login');
     }
 

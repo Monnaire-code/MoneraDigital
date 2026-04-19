@@ -209,8 +209,8 @@ const Addresses = () => {
 
     try {
       const token = localStorage.getItem("token");
-      const res = await fetch(`/api/addresses/${deleteAddressId}`, {
-        method: "DELETE",
+      const res = await fetch(`/api/addresses/${deleteAddressId}/deactivate`, {
+        method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
 
