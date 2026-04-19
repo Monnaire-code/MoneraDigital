@@ -84,7 +84,7 @@ function parseRoute(req: VercelRequest): { method: string; path: string; query: 
   const routePath = Array.isArray(req.query.route)
     ? req.query.route.join('/')
     : req.query.route || '';
-  const path = `/${routePath}`;
+  const path = `/api/${routePath}`;
 
   // Extract query string from full URL
   const url = req.url || '';
