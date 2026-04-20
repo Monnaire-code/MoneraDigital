@@ -145,7 +145,7 @@
       "riskDisclosure": "Risk Disclosure",
       "compliance": "Compliance"
     },
-    "copyright": "© {year} Monera Digital. All rights reserved.",
+    "copyright": "© {{year}} Monera Digital. All rights reserved.",
     "riskDisclaimer": "Digital asset investments involve significant risk. Past performance does not guarantee future results. Please review our risk disclosure before investing."
   },
   "auth": {
