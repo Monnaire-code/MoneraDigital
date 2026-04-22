@@ -76,6 +76,12 @@ func main() {
 		logger.Fatal("Container verification failed",
 			"error", err.Error())
 	}
+	
+	// Debug: Check email service status
+	logger.Info("[EmailService] Status check",
+		"enabled", cont.EmailService.IsEnabled(),
+		"RESEND_API_KEY", os.Getenv("RESEND_API_KEY"),
+		"SENDER_EMAIL", os.Getenv("SENDER_EMAIL"))
 
 	// Initialize Gin router
 	r := gin.Default()

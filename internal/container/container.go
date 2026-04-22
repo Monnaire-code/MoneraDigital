@@ -4,6 +4,7 @@ package container
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"os"
 
@@ -156,6 +157,11 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 		os.Getenv("SENDER_EMAIL"),
 	)
 	c.EmailService = emailService
+	
+	fmt.Printf("[EmailService] Initialized - enabled: %v, apiKey: '%s', fromEmail: '%s'\n", 
+		emailService.IsEnabled(), 
+		os.Getenv("RESEND_API_KEY"), 
+		os.Getenv("SENDER_EMAIL"))
 
 	dbRateLimiter := services.NewRateLimiter(db)
 	c.ActivationService = services.NewActivationService(db, dbRateLimiter, emailService, jwtSecret)

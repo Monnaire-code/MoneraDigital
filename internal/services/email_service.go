@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -34,6 +35,8 @@ func (s *EmailService) SendActivationEmail(ctx context.Context, toEmail, code st
 		fmt.Printf("[EmailService] Email disabled, would send activation code %s to %s\n", code, toEmail)
 		return nil
 	}
+	
+	fmt.Printf("[EmailService] Sending activation code %s to %s via Resend API\n", code, toEmail)
 
 	subject := "【Monera Digital】账号激活验证码"
 	htmlContent := fmt.Sprintf(`
@@ -127,11 +130,16 @@ func (s *EmailService) sendEmail(ctx context.Context, to, subject, plainText, ht
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Printf("[EmailService] Failed to send email to %s: %v\n", to, err)
 		return fmt.Errorf("failed to send email: %w", err)
 	}
 	defer resp.Body.Close()
 
+	fmt.Printf("[EmailService] Email sent successfully to %s, status: %d\n", to, resp.StatusCode)
+
 	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("[EmailService] Email API error: status %d, body: %s\n", resp.StatusCode, string(body))
 		return fmt.Errorf("email API returned status %d", resp.StatusCode)
 	}
 
