@@ -27,7 +27,8 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 	err := r.db.QueryRowContext(
 		ctx,
 		`SELECT id, email, password, status, two_factor_enabled, two_factor_secret,
-		        two_factor_backup_codes, created_at, updated_at
+		        two_factor_backup_codes, activation_code, activation_attempts,
+		        activation_expires_at, activated_at, created_at, updated_at
 		 FROM users WHERE email = $1`,
 		email,
 	).Scan(
@@ -38,6 +39,10 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 		&user.TwoFactorEnabled,
 		&user.TwoFactorSecret,
 		&user.TwoFactorBackupCodes,
+		&user.ActivationCode,
+		&user.ActivationAttempts,
+		&user.ActivationExpiresAt,
+		&user.ActivatedAt,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)
@@ -59,7 +64,8 @@ func (r *UserRepository) GetByID(ctx context.Context, id int) (*models.User, err
 	err := r.db.QueryRowContext(
 		ctx,
 		`SELECT id, email, password, status, two_factor_enabled, two_factor_secret,
-		        two_factor_backup_codes, created_at, updated_at
+		        two_factor_backup_codes, activation_code, activation_attempts,
+		        activation_expires_at, activated_at, created_at, updated_at
 		 FROM users WHERE id = $1`,
 		id,
 	).Scan(
@@ -70,6 +76,10 @@ func (r *UserRepository) GetByID(ctx context.Context, id int) (*models.User, err
 		&user.TwoFactorEnabled,
 		&user.TwoFactorSecret,
 		&user.TwoFactorBackupCodes,
+		&user.ActivationCode,
+		&user.ActivationAttempts,
+		&user.ActivationExpiresAt,
+		&user.ActivatedAt,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)

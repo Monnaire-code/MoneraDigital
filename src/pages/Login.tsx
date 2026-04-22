@@ -79,6 +79,15 @@ export default function Login() {
       if (data.user) {
         localStorage.setItem("user", JSON.stringify(data.user));
       }
+
+      // Check if user needs activation
+      if (data.requiresActivation) {
+        localStorage.setItem("pendingActivationEmail", email);
+        toast.warning(t("auth.errors.accountNotActivated"));
+        navigate("/activation", { state: { email, pending: true } });
+        return;
+      }
+
       toast.success(t("auth.login.successMessage"));
       
       // Redirect to validated returnTo or default to /dashboard

@@ -33,10 +33,14 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 		cont.WalletService,
 		cont.WealthService,
 		cont.IdempotencyService,
+		cont.ActivationService,
 	)
 
 	// Create 2FA handler
 	twofaHandler := handlers.NewTwoFAHandler(cont.TwoFAService)
+
+	// Create activation handler
+	activationHandler := handlers.NewActivationHandler(cont.ActivationService)
 
 	// Root health check endpoint (backup)
 	router.GET("/health", func(c *gin.Context) {
@@ -66,6 +70,10 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			auth.POST("/2fa/verify-login", h.Verify2FALogin)
 			// Skip 2FA setup - public endpoint
 			auth.POST("/2fa/skip", h.Skip2FALogin)
+
+			// Activation routes - public endpoints
+			auth.POST("/send-activation", activationHandler.SendActivation)
+			auth.POST("/verify-activation", activationHandler.VerifyActivation)
 		}
 
 		// Webhook routes (public)

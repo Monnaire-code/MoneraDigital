@@ -33,7 +33,14 @@ const DashboardLayout = () => {
       }
       
       try {
-        setUser(JSON.parse(savedUser));
+        const parsedUser = JSON.parse(savedUser);
+        setUser(parsedUser);
+        
+        // Check if user status is PENDING
+        if (parsedUser.status === "PENDING") {
+          navigate("/activation", { state: { email: parsedUser.email, pending: true } });
+          return;
+        }
       } catch (e) {
         console.error("Failed to parse user data:", e);
         // Clean up invalid data

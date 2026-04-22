@@ -37,9 +37,16 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
   'POST /api/auth/2fa/verify-login': { requiresAuth: false, backendPath: '/api/auth/2fa/verify-login' },
   'POST /api/auth/2fa/skip': { requiresAuth: false, backendPath: '/api/auth/2fa/skip' },
 
+  // Activation endpoints
+  'POST /api/auth/send-activation': { requiresAuth: false, backendPath: '/api/auth/send-activation' },
+  'POST /api/auth/verify-activation': { requiresAuth: false, backendPath: '/api/auth/verify-activation' },
+
   // Address endpoints
   'GET /api/addresses': { requiresAuth: true, backendPath: '/api/addresses' },
   'POST /api/addresses': { requiresAuth: true, backendPath: '/api/addresses' },
+
+  // 2FA verify endpoint
+  'POST /api/auth/2fa/verify': { requiresAuth: true, backendPath: '/api/auth/2fa/verify' },
 
   // Dynamic address routes: /api/addresses/123, /api/addresses/123/deactivate, /api/addresses/123/verify, etc.
 

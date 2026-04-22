@@ -91,8 +91,9 @@ export class WalletService {
 
   /**
    * Get wallet info via API
+   * Note: Backend returns wallet info based on JWT token, walletId parameter is ignored
    */
-  static async getWalletInfo(walletId: string) {
+  static async getWalletInfo(walletId?: string) {
     // Debug logging for account opening flow
     console.log(`[DEBUG-ACCOUNT-OPENING] WalletService.getWalletInfo called`, {
       timestamp: new Date().toISOString(),
@@ -106,7 +107,7 @@ export class WalletService {
       throw error;
     }
 
-    const response = await fetch(`/api/wallet/${walletId}`, {
+    const response = await fetch('/api/wallet/info', {
       headers: {
         'Authorization': `Bearer ${token}`,
       },
