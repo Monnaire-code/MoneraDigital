@@ -44,15 +44,16 @@ func (s *AuthService) SetTokenBlacklist(tb *cache.TokenBlacklist) {
 
 // LoginResponse represents the login API response
 type LoginResponse struct {
-	User         *models.User `json:"user,omitempty"`
-	Token        string       `json:"token,omitempty"`
-	AccessToken  string       `json:"accessToken,omitempty"`
-	RefreshToken string       `json:"refreshToken,omitempty"`
-	TokenType    string       `json:"tokenType,omitempty"`
-	ExpiresIn    int          `json:"expiresIn,omitempty"`
-	ExpiresAt    time.Time    `json:"expiresAt,omitempty"`
-	Requires2FA  bool         `json:"requires2FA,omitempty"`
-	UserID       int          `json:"userId,omitempty"`
+	User               *models.User `json:"user,omitempty"`
+	Token              string       `json:"token,omitempty"`
+	AccessToken        string       `json:"accessToken,omitempty"`
+	RefreshToken       string       `json:"refreshToken,omitempty"`
+	TokenType          string       `json:"tokenType,omitempty"`
+	ExpiresIn          int          `json:"expiresIn,omitempty"`
+	ExpiresAt          time.Time    `json:"expiresAt,omitempty"`
+	Requires2FA        bool         `json:"requires2FA,omitempty"`
+	RequiresActivation bool         `json:"requiresActivation,omitempty"`
+	UserID             int          `json:"userId,omitempty"`
 }
 
 // Register handles user registration
@@ -73,15 +74,28 @@ func (s *AuthService) Register(req models.RegisterRequest) (*models.User, error)
 		return nil, err
 	}
 
-	// Insert user into database
+	// Generate activation code
+	activationCode, err := utils.GenerateActivationCode()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate activation code: %w", err)
+	}
+
+	hashedCode, err := utils.HashActivationCode(activationCode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hash activation code: %w", err)
+	}
+
+	expiresAt := time.Now().Add(5 * time.Minute)
+
+	// Insert user into database with PENDING status
 	var user models.User
 	query := `
-		INSERT INTO users (email, password, created_at)
-		VALUES ($1, $2, NOW())
-		RETURNING id, email, created_at, two_factor_enabled`
+		INSERT INTO users (email, password, status, activation_code, activation_expires_at, created_at, updated_at)
+		VALUES ($1, $2, 'PENDING', $3, $4, NOW(), NOW())
+		RETURNING id, email, status, created_at, two_factor_enabled`
 
-	err = s.DB.QueryRow(query, req.Email, hashedPassword).Scan(
-		&user.ID, &user.Email, &user.CreatedAt, &user.TwoFactorEnabled,
+	err = s.DB.QueryRow(query, req.Email, hashedPassword, hashedCode, expiresAt).Scan(
+		&user.ID, &user.Email, &user.Status, &user.CreatedAt, &user.TwoFactorEnabled,
 	)
 	if err != nil {
 		return nil, err
@@ -185,6 +199,14 @@ func (s *AuthService) Login(req models.LoginRequest) (*LoginResponse, error) {
 	// Check if user account is disabled
 	if user.Status == models.UserStatusDisabled {
 		return nil, errors.New("user account is disabled")
+	}
+
+	// Check if user account is pending activation
+	if user.Status == models.UserStatusPending {
+		return &LoginResponse{
+			User:               &user,
+			RequiresActivation: true,
+		}, nil
 	}
 
 	// Generate JWT token directly (no 2FA check during login)

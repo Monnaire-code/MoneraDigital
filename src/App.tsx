@@ -18,6 +18,8 @@ import Withdraw from "./pages/dashboard/Withdraw";
 import Security from "./pages/dashboard/Security";
 import FixedDeposit from "./pages/dashboard/FixedDeposit";
 import Deposit from "./pages/dashboard/Deposit";
+import Activation from "./pages/dashboard/Activation";
+import StructuredProducts from "./pages/StructuredProducts";
 import ComingSoon from "./components/ComingSoon";
 
 const queryClient = new QueryClient();
@@ -33,6 +35,8 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/activation" element={<Activation />} />
+            <Route path="/structured-products" element={<StructuredProducts />} />
             
             <Route path="/dashboard" element={<DashboardLayout />}>
               <Route index element={<Overview />} />

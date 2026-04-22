@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
+	"time"
 
 	"monera-digital/internal/binance"
 	"monera-digital/internal/dto"
@@ -41,10 +44,11 @@ type Handler struct {
 	WalletService      *services.WalletService
 	WealthService      *services.WealthService
 	IdempotencyService *services.IdempotencyService
+	ActivationService  *services.ActivationService
 	Validator          validator.Validator
 }
 
-func NewHandler(auth *services.AuthService, lending *services.LendingService, address *services.AddressService, withdrawal *services.WithdrawalService, deposit *services.DepositService, wallet *services.WalletService, wealth *services.WealthService, idempotency *services.IdempotencyService) *Handler {
+func NewHandler(auth *services.AuthService, lending *services.LendingService, address *services.AddressService, withdrawal *services.WithdrawalService, deposit *services.DepositService, wallet *services.WalletService, wealth *services.WealthService, idempotency *services.IdempotencyService, activation *services.ActivationService) *Handler {
 	return &Handler{
 		AuthService:        auth,
 		LendingService:     lending,
@@ -54,6 +58,7 @@ func NewHandler(auth *services.AuthService, lending *services.LendingService, ad
 		WalletService:      wallet,
 		WealthService:      wealth,
 		IdempotencyService: idempotency,
+		ActivationService:  activation,
 		Validator:          validator.NewValidator(),
 	}
 }
@@ -82,14 +87,15 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 
 	dtoResp := dto.LoginResponse{
-		AccessToken:  resp.AccessToken,
-		RefreshToken: resp.RefreshToken,
-		TokenType:    resp.TokenType,
-		ExpiresIn:    resp.ExpiresIn,
-		ExpiresAt:    resp.ExpiresAt,
-		Token:        resp.Token,
-		Requires2FA:  resp.Requires2FA,
-		UserID:       resp.UserID,
+		AccessToken:        resp.AccessToken,
+		RefreshToken:       resp.RefreshToken,
+		TokenType:          resp.TokenType,
+		ExpiresIn:          resp.ExpiresIn,
+		ExpiresAt:          resp.ExpiresAt,
+		Token:              resp.Token,
+		Requires2FA:        resp.Requires2FA,
+		RequiresActivation: resp.RequiresActivation,
+		UserID:             resp.UserID,
 	}
 	if resp.User != nil {
 		dtoResp.User = &dto.UserInfo{
@@ -128,11 +134,27 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, dto.UserInfo{
-		ID:               user.ID,
-		Email:            user.Email,
-		Status:           string(user.Status),
-		TwoFactorEnabled: user.TwoFactorEnabled,
+	// Send activation email synchronously
+	if h.ActivationService != nil {
+		_, _ = h.ActivationService.SendActivationCode(context.Background(), user.Email, "system")
+	}
+
+	// Generate token for the new user
+	token, _ := utils.GenerateJWT(user.ID, user.Email, os.Getenv("JWT_SECRET"))
+	expiresAt := time.Now().Add(24 * time.Hour)
+
+	// Return login response with token
+	c.JSON(http.StatusCreated, gin.H{
+		"success":            true,
+		"email":              user.Email,
+		"status":             string(user.Status),
+		"requiresActivation": true,
+		"token":              token,
+		"accessToken":        token,
+		"tokenType":          "Bearer",
+		"expiresIn":          86400,
+		"expiresAt":          expiresAt.Format(time.RFC3339),
+		"userId":             user.ID,
 	})
 }
 

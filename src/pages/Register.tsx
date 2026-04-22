@@ -15,6 +15,19 @@ interface RegisterError {
   details?: string;
 }
 
+interface RegisterSuccessResponse {
+  success: boolean;
+  email: string;
+  status: string;
+  requiresActivation: boolean;
+  token?: string;
+  accessToken?: string;
+  tokenType?: string;
+  expiresIn?: number;
+  expiresAt?: string;
+  userId?: number;
+}
+
 export default function Register() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -79,26 +92,32 @@ export default function Register() {
         body: JSON.stringify({ email, password }),
       });
 
-      let data: RegisterError;
-      const contentType = res.headers.get("content-type");
-      if (contentType && contentType.includes("application/json")) {
-        data = await res.json();
-      } else {
-        const text = await res.text();
-        console.error("Non-JSON response received:", text);
-        throw new Error(t("auth.errors.registrationFailed"));
-      }
+      const data = await res.json();
 
       if (!res.ok) {
-        handleApiError(data);
+        handleApiError(data as RegisterError);
         return;
       }
 
       console.log("Registration successful");
       toast.success(t("auth.register.successMessage"));
       
+      // Store token and email for activation page
+      if (data.token || data.accessToken) {
+        localStorage.setItem("token", data.accessToken || data.token);
+      }
+      localStorage.setItem("pendingActivationEmail", email);
+      if (data.userId) {
+        localStorage.setItem("user", JSON.stringify({
+          id: data.userId,
+          email: email,
+          status: "PENDING",
+          twoFactorEnabled: false
+        }));
+      }
+      
       setTimeout(() => {
-        navigate("/login");
+        navigate("/activation", { state: { email, pending: true } });
       }, 1000);
     } catch (error: any) {
       console.error("Registration error:", error);

@@ -63,6 +63,7 @@ type UserStatus string
 const (
 	UserStatusActive   UserStatus = "ACTIVE"
 	UserStatusDisabled UserStatus = "DISABLED"
+	UserStatusPending  UserStatus = "PENDING"
 )
 
 // User model
@@ -74,6 +75,10 @@ type User struct {
 	TwoFactorSecret      sql.NullString `json:"-" db:"two_factor_secret"`
 	TwoFactorEnabled     bool           `json:"twoFactorEnabled" db:"two_factor_enabled"`
 	TwoFactorBackupCodes sql.NullString `json:"-" db:"two_factor_backup_codes"`
+	ActivationCode       sql.NullString `json:"-" db:"activation_code"`
+	ActivationAttempts   int            `json:"-" db:"activation_attempts"`
+	ActivationExpiresAt  sql.NullTime   `json:"-" db:"activation_expires_at"`
+	ActivatedAt          sql.NullTime   `json:"activatedAt" db:"activated_at"`
 	CreatedAt            time.Time      `json:"createdAt" db:"created_at"`
 	UpdatedAt            time.Time      `json:"updatedAt" db:"updated_at"`
 }

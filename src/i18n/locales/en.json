@@ -2,6 +2,7 @@
   "header": {
     "nav": {
       "products": "Products",
+      "structuredProducts": "Structured Products",
       "solutions": "Solutions",
       "about": "About",
       "insights": "Insights"
@@ -56,7 +57,8 @@
         "title": "Flexible Terms",
         "description": "Choose from multiple lending durations and yield tiers to match your investment timeline and risk appetite."
       }
-    ]
+    ],
+    "learnMore": "Learn More"
   },
   "stats": {
     "items": [
@@ -185,6 +187,7 @@
       "userAlreadyExists": "User already exists",
       "invalidEmailOrPassword": "Invalid email or password",
       "accountDisabled": "Your account has been disabled. Please contact support.",
+      "accountNotActivated": "Your account is not activated. Please activate first.",
       "invalidParameters": "Invalid parameters, please check your input",
       "invalidPasswordFormat": "Password must contain uppercase, lowercase, and digit characters",
       "emailAlreadyRegistered": "This email is already registered",
@@ -232,6 +235,32 @@
       "verifying": "Verifying...",
       "verifyButton": "Verify & Confirm",
       "success": "Verification successful"
+    }
+  },
+  "activation": {
+    "title": "Activate Account",
+    "description": "Please enter the 6-digit verification code sent to your email",
+    "emailLabel": "Email Address",
+    "emailPlaceholder": "Please enter your email address",
+    "codeLabel": "Verification Code",
+    "codePlaceholder": "Enter verification code",
+    "verifyButton": "Verify",
+    "verifying": "Verifying...",
+    "resendButton": "Resend Verification Code",
+    "resendCountdown": "Resend in {{seconds}}s",
+    "backToLogin": "Back to Login",
+    "success": "Account activated successfully!",
+    "redirecting": "Redirecting...",
+    "successCodeSent": "Verification code sent",
+    "errors": {
+      "emailRequired": "Please enter your email address",
+      "codeRequired": "Please enter the 6-digit code",
+      "invalidCode": "Invalid verification code",
+      "codeExpired": "Verification code expired. Please request a new one.",
+      "maxAttempts": "Too many attempts. Please request a new code.",
+      "sendFailed": "Failed to send activation email",
+      "tooManyRequests": "Too many requests. Please try again in {{seconds}}s",
+      "verifyFailed": "Verification failed"
     }
   },
   "notFound": {

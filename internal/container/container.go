@@ -87,6 +87,8 @@ type Container struct {
 	WealthService     *services.WealthService
 	EncryptionService *services.EncryptionService
 	TwoFAService      *services.TwoFactorService
+	EmailService      *services.EmailService
+	ActivationService *services.ActivationService
 
 	// 中间件
 	RateLimitMiddleware *middleware.PerEndpointRateLimiter
@@ -147,6 +149,16 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	c.RateLimitMiddleware.AddEndpoint("/api/auth/register", 5, 60)
 	c.RateLimitMiddleware.AddEndpoint("/api/auth/login", 5, 60)
 	c.RateLimitMiddleware.AddEndpoint("/api/auth/refresh", 10, 60)
+
+	// 初始化邮件和激活服务
+	emailService := services.NewEmailService(
+		os.Getenv("RESEND_API_KEY"),
+		os.Getenv("SENDER_EMAIL"),
+	)
+	c.EmailService = emailService
+
+	dbRateLimiter := services.NewRateLimiter(db)
+	c.ActivationService = services.NewActivationService(db, dbRateLimiter, emailService, jwtSecret)
 
 	return c
 }

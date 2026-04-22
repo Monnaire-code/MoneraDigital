@@ -1,5 +1,7 @@
 import { Wallet, LineChart, ShieldCheck, Building2, Layers, Clock } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 
 const iconMap = {
   "Structured Lending": Wallet,
@@ -12,6 +14,7 @@ const iconMap = {
 
 const Features = () => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const rawFeatures = t("features.items", { returnObjects: true });
   const features = Array.isArray(rawFeatures) ? rawFeatures : [];
@@ -37,11 +40,12 @@ const Features = () => {
           {features.map((feature, index) => {
             const iconKey = feature.title as keyof typeof iconMap;
             const Icon = iconMap[iconKey] || Wallet;
+            const isStructuredProducts = feature.title === "结构化产品" || feature.title === "Structured Products";
 
             return (
               <div
                 key={feature.title}
-                className="group p-8 rounded-2xl glass hover:bg-card/80 transition-all duration-300 hover:border-primary/30"
+                className="group p-8 rounded-2xl glass hover:bg-card/80 transition-all duration-300 hover:border-primary/30 flex flex-col"
                 style={{ animationDelay: `${index * 0.1}s` }}
               >
                 <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-6 group-hover:bg-primary/20 transition-colors">
@@ -50,9 +54,18 @@ const Features = () => {
                 <h3 className="text-xl font-semibold text-foreground mb-3">
                   {feature.title}
                 </h3>
-                <p className="text-muted-foreground leading-relaxed">
+                <p className="text-muted-foreground leading-relaxed flex-1">
                   {feature.description}
                 </p>
+                {isStructuredProducts && (
+                  <Button 
+                    variant="outline" 
+                    className="mt-6 w-full"
+                    onClick={() => navigate("/structured-products")}
+                  >
+                    {t("features.learnMore", "了解更多")}
+                  </Button>
+                )}
               </div>
             );
           })}

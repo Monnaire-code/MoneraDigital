@@ -34,6 +34,7 @@ const Header = () => {
 
   const navItems = [
     { label: t("header.nav.products"), href: "#products" },
+    { label: t("header.nav.structuredProducts"), href: "/structured-products" },
     { label: t("header.nav.solutions"), href: "#solutions" },
     { label: t("header.nav.about"), href: "#about" },
     { label: t("header.nav.insights"), href: "#insights" },
@@ -104,14 +105,25 @@ const Header = () => {
           <div className="lg:hidden py-4 border-t border-border animate-fade-in">
             <nav className="flex flex-col gap-4">
               {navItems.map((item) => (
-                <a
-                  key={item.label}
-                  href={item.href}
-                  className="text-muted-foreground hover:text-foreground transition-colors duration-200 text-sm font-medium py-2"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  {item.label}
-                </a>
+                item.href.startsWith("/") ? (
+                  <Link
+                    key={item.label}
+                    to={item.href}
+                    className="text-muted-foreground hover:text-foreground transition-colors duration-200 text-sm font-medium py-2"
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    {item.label}
+                  </Link>
+                ) : (
+                  <a
+                    key={item.label}
+                    href={item.href}
+                    className="text-muted-foreground hover:text-foreground transition-colors duration-200 text-sm font-medium py-2"
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    {item.label}
+                  </a>
+                )
               ))}
               <div className="flex flex-col gap-3 pt-4 border-t border-border">
                 <div className="px-2">
