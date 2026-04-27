@@ -124,7 +124,7 @@ const Addresses = () => {
           await fetchAddresses();
         } else {
           // No 2FA - address added successfully (may still need email verification)
-          toast.success(data.message || t("addresses.addSuccessMessage"));
+          toast.success(t("addresses.addSuccessMessage"));
           setNewAddress("");
           setLabel("");
           setAddressType("ETH");
@@ -167,7 +167,7 @@ const Addresses = () => {
 
       const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || t("addresses.verifySuccess"));
+        toast.success(t("addresses.verifySuccess"));
         setVerificationToken("");
         setIsVerifyDialogOpen(false);
         await fetchAddresses();
@@ -216,7 +216,7 @@ const Addresses = () => {
 
       const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || t("addresses.deactivatedSuccess"));
+        toast.success(t("addresses.deactivatedSuccess"));
         setDeleteAddressId(null);
         await fetchAddresses();
       } else {

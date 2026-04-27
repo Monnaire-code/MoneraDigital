@@ -36,10 +36,26 @@ const DashboardLayout = () => {
         const parsedUser = JSON.parse(savedUser);
         setUser(parsedUser);
         
-        // Check if user status is PENDING
-        if (parsedUser.status === "PENDING") {
-          navigate("/activation", { state: { email: parsedUser.email, pending: true } });
-          return;
+        // Check user status and redirect accordingly
+        switch (parsedUser.status) {
+          case "PENDING":
+            navigate("/activation", { state: { email: parsedUser.email, pending: true } });
+            return;
+          case "EMAIL_VERIFIED":
+            navigate("/contact-info");
+            return;
+          case "INFO_SUBMITTED":
+            navigate("/pending-approval");
+            return;
+          case "ACTIVE":
+            // Allow access to dashboard
+            break;
+          default:
+            // Unknown status, log out
+            localStorage.removeItem("token");
+            localStorage.removeItem("user");
+            navigate("/login");
+            return;
         }
       } catch (e) {
         console.error("Failed to parse user data:", e);

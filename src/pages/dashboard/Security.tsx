@@ -137,7 +137,7 @@ const Security = () => {
       }
     } catch (error: any) {
       console.error("2FA Enable error:", error);
-      toast.error(error.message);
+      toast.error(error.message || t("dashboard.security.failedToEnable2FA"));
     } finally {
       setIsSettingUp(false);
     }
@@ -167,7 +167,7 @@ const Security = () => {
       }
     } catch (error: any) {
       console.error("2FA Disable error:", error);
-      toast.error(error.message);
+      toast.error(error.message || t("dashboard.security.failedToDisable2FA"));
     } finally {
       setIsDisabling(false);
     }

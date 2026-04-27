@@ -20,13 +20,11 @@ export interface SendActivationResponse {
 export interface VerifyActivationResponse {
   success: boolean;
   message: string;
+  status?: string;
+  redirectUrl?: string;
+  userId?: number;
   token?: string;
   accessToken?: string;
-  tokenType?: string;
-  expiresIn?: number;
-  expiresAt?: string;
-  requiresActivation?: boolean;
-  userId?: number;
 }
 
 export interface LoginResponse {
@@ -97,7 +95,8 @@ export class ActivationService {
     const data = await response.json();
 
     if (!response.ok) {
-      const error: any = new Error(data.error || 'Verification failed');
+      const errorMessage = data.error || data.message || 'Verification failed';
+      const error: Error & { code?: string; retryAfter?: number } = new Error(errorMessage);
       error.code = data.code;
       error.retryAfter = data.retryAfter;
       throw error;

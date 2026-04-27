@@ -1,13 +1,13 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"monera-digital/internal/binance"
@@ -134,10 +134,8 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	// Send activation email synchronously
-	if h.ActivationService != nil {
-		_, _ = h.ActivationService.SendActivationCode(context.Background(), user.Email, "system")
-	}
+	// Note: Activation email is NOT sent automatically after registration
+	// User must manually request activation code from the activation page
 
 	// Generate token for the new user
 	token, _ := utils.GenerateJWT(user.ID, user.Email, os.Getenv("JWT_SECRET"))
@@ -171,12 +169,24 @@ func (h *Handler) GetMe(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, dto.UserInfo{
+	response := dto.UserInfo{
 		ID:               user.ID,
 		Email:            user.Email,
 		Status:           string(user.Status),
 		TwoFactorEnabled: user.TwoFactorEnabled,
-	})
+	}
+
+	if user.Phone.Valid {
+		response.Phone = user.Phone.String
+	}
+	if user.Telegram.Valid {
+		response.Telegram = user.Telegram.String
+	}
+	if user.Wechat.Valid {
+		response.Wechat = user.Wechat.String
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // Verify2FALogin verifies 2FA token during login and completes authentication
@@ -278,7 +288,33 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 }
 
 func (h *Handler) Logout(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Logout not yet implemented"})
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
+		return
+	}
+
+	token := ""
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	} else {
+		token = authHeader
+	}
+
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token is required"})
+		return
+	}
+
+	if err := h.AuthService.Logout(token); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to logout"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Logged out successfully",
+	})
 }
 
 // Lending handlers

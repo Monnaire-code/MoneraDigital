@@ -14,6 +14,7 @@ type Config struct {
 	JWTSecret     string
 	EncryptionKey string
 	TimeZone      string
+	CoreAPIURL    string
 }
 
 // 全局时区配置
@@ -43,6 +44,7 @@ func Load() *Config {
 		JWTSecret:     viper.GetString("JWT_SECRET"),
 		EncryptionKey: viper.GetString("ENCRYPTION_KEY"),
 		TimeZone:      viper.GetString("TIME_ZONE"),
+		CoreAPIURL:    viper.GetString("MONNAIRE_CORE_API_URL"),
 	}
 
 	return cfg

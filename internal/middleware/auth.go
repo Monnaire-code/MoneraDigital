@@ -17,13 +17,52 @@ var activationEndpoints = map[string]bool{
 	"/api/auth/verify-activation": true,
 }
 
+// State-specific endpoint permissions
+var stateAllowedEndpoints = map[models.UserStatus][]string{
+	models.UserStatusEmailVerified: {
+		"/api/contact-info",
+		"/api/auth/me",
+	},
+	models.UserStatusInfoSubmitted: {
+		"/api/contact-info",
+		"/api/auth/me",
+	},
+}
+
+func isEndpointAllowedForStatus(path string, status models.UserStatus) bool {
+	allowedPaths, exists := stateAllowedEndpoints[status]
+	if !exists {
+		return false
+	}
+	for _, allowedPath := range allowedPaths {
+		if path == allowedPath || strings.HasPrefix(path, allowedPath+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func getStatusMessage(status models.UserStatus) string {
+	switch status {
+	case models.UserStatusPending:
+		return "Please verify your email first"
+	case models.UserStatusEmailVerified:
+		return "Please submit your contact information"
+	case models.UserStatusInfoSubmitted:
+		return "Your account is under review"
+	case models.UserStatusDisabled:
+		return "User account is disabled"
+	default:
+		return "Account access restricted"
+	}
+}
+
 // AuthMiddleware validates JWT tokens in Authorization header
-// and checks if user account is disabled or pending activation
+// and checks if user account is in a valid state for the requested endpoint
 func AuthMiddleware(jwtSecret string, userRepo repository.User) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Check if this is an activation endpoint - allow PENDING users
 		if activationEndpoints[c.Request.URL.Path] {
-			// For activation endpoints, still validate token but skip PENDING check
 			c.Next()
 			return
 		}
@@ -80,21 +119,37 @@ func AuthMiddleware(jwtSecret string, userRepo repository.User) gin.HandlerFunc 
 		if userRepo != nil {
 			user, err := userRepo.GetByID(context.Background(), claims.UserID)
 			if err == nil {
+				// Check if account is disabled
 				if user.Status == models.UserStatusDisabled {
 					c.JSON(http.StatusForbidden, ErrorResponse{
 						Code:    "USER_DISABLED",
-						Message: "User account is disabled",
+						Message: getStatusMessage(user.Status),
 					})
 					c.Abort()
 					return
 				}
+
+				// Check if user is PENDING
 				if user.Status == models.UserStatusPending {
 					c.JSON(http.StatusForbidden, ErrorResponse{
 						Code:    "ACCOUNT_NOT_ACTIVATED",
-						Message: "Please activate your account first",
+						Message: getStatusMessage(user.Status),
 					})
 					c.Abort()
 					return
+				}
+
+				// Check if user is EMAIL_VERIFIED or INFO_SUBMITTED
+				// Only allow access to specific endpoints based on status
+				if user.Status == models.UserStatusEmailVerified || user.Status == models.UserStatusInfoSubmitted {
+					if !isEndpointAllowedForStatus(c.Request.URL.Path, user.Status) {
+						c.JSON(http.StatusForbidden, ErrorResponse{
+							Code:    "ACCOUNT_STATUS_RESTRICTED",
+							Message: getStatusMessage(user.Status),
+						})
+						c.Abort()
+						return
+					}
 				}
 			}
 		}

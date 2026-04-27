@@ -35,6 +35,9 @@ type UserInfo struct {
 	Email            string `json:"email"`
 	Status           string `json:"status"`
 	TwoFactorEnabled bool   `json:"twoFactorEnabled"`
+	Phone            string `json:"phone,omitempty"`
+	Telegram         string `json:"telegram,omitempty"`
+	Wechat           string `json:"wechat,omitempty"`
 }
 
 // RefreshTokenRequest DTO for token refresh

@@ -238,7 +238,7 @@
     }
   },
   "activation": {
-    "title": "激活账号",
+    "title": "验证邮箱",
     "description": "请输入发送到您邮箱的6位验证码",
     "emailLabel": "邮箱地址",
     "emailPlaceholder": "请输入邮箱地址",
@@ -246,11 +246,15 @@
     "codePlaceholder": "请输入验证码",
     "verifyButton": "验证",
     "verifying": "验证中...",
+    "sendButton": "发送验证码",
+    "sending": "发送中...",
     "resendButton": "重新发送验证码",
     "resendCountdown": "{{seconds}}秒后可重新发送",
     "backToLogin": "返回登录",
-    "success": "账号激活成功！",
+    "success": "邮箱验证成功！",
+    "emailVerified": "邮箱已验证！",
     "redirecting": "正在跳转...",
+    "redirectingToContact": "正在跳转到联系方式填写...",
     "successCodeSent": "验证码已发送",
     "errors": {
       "emailRequired": "请输入邮箱地址",
@@ -260,8 +264,59 @@
       "maxAttempts": "验证次数过多，请重新发送验证码",
       "sendFailed": "发送激活邮件失败",
       "tooManyRequests": "请求过于频繁，请在{{seconds}}秒后重试",
-      "verifyFailed": "验证失败"
+      "verifyFailed": "验证失败",
+      "userLockedOut": "验证次数过多，请在1分钟后重试",
+      "userNotFound": "用户不存在",
+      "alreadyActivated": "邮箱已验证，无需重复验证"
     }
+  },
+  "contactInfo": {
+    "title": "填写联系方式",
+    "description": "请提供您的联系方式，这些信息将用于账户审核。",
+    "email": "邮箱",
+    "emailReadonly": "这是您已验证的邮箱地址，不可修改。",
+    "phone": "手机号",
+    "phoneHelp": "请输入您的手机号码，包含国家代码",
+    "phonePlaceholder": "请输入手机号",
+    "telegram": "Telegram",
+    "telegramPlaceholder": "@用户名",
+    "wechat": "微信",
+    "wechatPlaceholder": "请输入微信号",
+    "optional": "选填",
+    "required": "必填",
+    "submit": "提交联系方式",
+    "submitting": "提交中...",
+    "success": "联系方式提交成功！",
+    "errors": {
+      "phoneRequired": "请输入手机号码",
+      "submitFailed": "提交联系方式失败",
+      "UNAUTHORIZED": "需要身份验证，请先验证邮箱。",
+      "EMAIL_NOT_VERIFIED": "请先验证您的邮箱",
+      "ALREADY_SUBMITTED": "联系方式已提交",
+      "INVALID_PHONE_FORMAT": "手机号格式无效，请使用国际格式（如 +86-13800138000）",
+      "INVALID_REQUEST": "请求无效，请检查输入。",
+      "INTERNAL_ERROR": "服务器错误，请稍后重试。"
+    }
+  },
+  "pendingApproval": {
+    "title": "账户审核中",
+    "description": "您的联系方式已成功提交，我们的团队将审核您的申请。",
+    "expectedReviewTime": "预计审核时间",
+    "expectedReviewDate": "预计于 {{date}} 前完成审核",
+    "submittedInfo": "已提交的信息",
+    "email": "邮箱",
+    "phone": "手机",
+    "telegram": "Telegram",
+    "wechat": "微信",
+    "needHelp": "需要帮助？请联系我们：",
+    "refresh": "检查状态",
+    "checking": "检查中...",
+    "accountActivated": "您的账户已激活！",
+    "redirecting": "正在跳转到控制台...",
+    "accountRejected": "您的账户审核未通过",
+    "rejectedMessage": "很抱歉，您的账户审核未通过。如有疑问，请联系客服。",
+    "reSubmit": "重新提交",
+    "reviewInProgress": "审核中，请耐心等待..."
   },
   "notFound": {
     "title": "404 - 页面未找到",
@@ -748,6 +803,10 @@
       "failedToGenerateQR": "生成二维码失败，请重试。",
       "failedToSetup2FA": "设置两步验证失败",
       "failedToStartSetup": "启动两步验证设置失败",
+      "failedToEnable2FA": "启用两步验证失败",
+      "failedToDisable2FA": "禁用两步验证失败",
+      "enabled": "两步验证已启用",
+      "disabled": "两步验证已禁用",
       "enableEndpointNotFound": "两步验证启用 API 端点未找到 (404)"
     },
     "assets": {

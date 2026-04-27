@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"monera-digital/internal/cache"
+	"monera-digital/internal/config"
 	"monera-digital/internal/models"
 	"monera-digital/internal/utils"
 
@@ -20,6 +21,13 @@ func newMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 		t.Fatalf("Failed to create mock DB: %v", err)
 	}
 	return mockDB, mock
+}
+
+// Helper to create mock config
+func newMockConfig() *config.Config {
+	return &config.Config{
+		CoreAPIURL: "http://localhost:8080",
+	}
 }
 
 // ==================== AuthService Tests ====================
@@ -37,7 +45,7 @@ func TestAuthService_Register_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "created_at", "two_factor_enabled"}).
 			AddRow(1, "test@example.com", time.Now(), false))
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.RegisterRequest{
 		Email:    "test@example.com",
 		Password: "password123",
@@ -71,7 +79,7 @@ func TestAuthService_Register_EmailAlreadyExists(t *testing.T) {
 		WithArgs("existing@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.RegisterRequest{
 		Email:    "existing@example.com",
 		Password: "password123",
@@ -102,7 +110,7 @@ func TestAuthService_Register_DBError(t *testing.T) {
 		WithArgs("test@example.com").
 		WillReturnError(errors.New("database connection failed"))
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.RegisterRequest{
 		Email:    "test@example.com",
 		Password: "password123",
@@ -126,7 +134,7 @@ func TestAuthService_Login_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "password", "two_factor_enabled"}).
 			AddRow(1, "test@example.com", hashedPassword, false))
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.LoginRequest{
 		Email:    "test@example.com",
 		Password: "password123",
@@ -163,7 +171,7 @@ func TestAuthService_Login_UserNotFound(t *testing.T) {
 		WithArgs("nonexistent@example.com").
 		WillReturnError(sql.ErrNoRows)
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.LoginRequest{
 		Email:    "nonexistent@example.com",
 		Password: "password123",
@@ -194,7 +202,7 @@ func TestAuthService_Login_WrongPassword(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "password", "two_factor_enabled"}).
 			AddRow(1, "test@example.com", hashedPassword, false))
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.LoginRequest{
 		Email:    "test@example.com",
 		Password: "wrongpassword",
@@ -222,7 +230,7 @@ func TestAuthService_Login_DBError(t *testing.T) {
 		WithArgs("test@example.com").
 		WillReturnError(errors.New("database connection failed"))
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.LoginRequest{
 		Email:    "test@example.com",
 		Password: "password123",
@@ -239,7 +247,7 @@ func TestAuthService_SetTokenBlacklist(t *testing.T) {
 	db, _ := newMockDB(t)
 	defer db.Close()
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 
 	if service.tokenBlacklist != nil {
 		t.Error("Expected nil tokenBlacklist initially")
@@ -349,7 +357,7 @@ func TestAuthService_Skip2FAAndLogin_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
 			AddRow(1, "test@example.com", false))
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 
 	resp, err := service.Skip2FAAndLogin(1)
 
@@ -386,7 +394,7 @@ func TestAuthService_Skip2FAAndLogin_UserNotFound(t *testing.T) {
 		WithArgs(999).
 		WillReturnError(sql.ErrNoRows)
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 
 	_, err := service.Skip2FAAndLogin(999)
 
@@ -412,7 +420,7 @@ func TestAuthService_Skip2FAAndLogin_2FAEnabled(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
 			AddRow(1, "test@example.com", true))
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 
 	_, err := service.Skip2FAAndLogin(1)
 
@@ -437,7 +445,7 @@ func TestAuthService_Skip2FAAndLogin_DBError(t *testing.T) {
 		WithArgs(1).
 		WillReturnError(errors.New("database connection failed"))
 
-	service := NewAuthService(db, "test-secret")
+	service := NewAuthService(db, "test-secret", newMockConfig())
 
 	_, err := service.Skip2FAAndLogin(1)
 

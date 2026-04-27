@@ -17,6 +17,7 @@ export default function Activation() {
   const [isSending, setIsSending] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [isActivated, setIsActivated] = useState(false);
+  const [hasSentCode, setHasSentCode] = useState(false);
   const navigate = useNavigate();
   const { t } = useTranslation();
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -51,8 +52,8 @@ export default function Activation() {
   useEffect(() => {
     if (isActivated) {
       const timer = setTimeout(() => {
-        navigate("/");
-      }, 2000);
+        navigate("/contact-info");
+      }, 1500);
       return () => clearTimeout(timer);
     }
   }, [isActivated, navigate]);
@@ -107,13 +108,14 @@ export default function Activation() {
       const result = await ActivationService.sendActivationCode(email);
       if (result.success) {
         toast.success(t("activation.successCodeSent"));
-        setCountdown(60);
+        setCountdown(180);
+        setHasSentCode(true);
       } else {
         if (result.retryAfter) {
           setCountdown(result.retryAfter);
           toast.error(t("activation.errors.tooManyRequests", { seconds: result.retryAfter }));
         } else {
-          toast.error(result.message);
+          toast.error(t("activation.errors.sendFailed"));
         }
       }
     } catch (error: any) {
@@ -137,13 +139,13 @@ export default function Activation() {
       const result = await ActivationService.verifyActivationCode(email, code);
       if (result.success) {
         setIsActivated(true);
-        toast.success(t("activation.success"));
+        toast.success(t("activation.emailVerified"));
         localStorage.removeItem("pendingActivationEmail");
         if (result.userId) {
           const userData = {
             id: result.userId,
             email: email,
-            status: "ACTIVE",
+            status: result.status || "EMAIL_VERIFIED",
             twoFactorEnabled: false,
           };
           localStorage.setItem("user", JSON.stringify(userData));
@@ -151,6 +153,7 @@ export default function Activation() {
       }
     } catch (error: any) {
       const errorCode = error.code || error.message;
+      const errorMessage = error.message?.toLowerCase() || "";
       switch (errorCode) {
         case "INVALID_CODE":
         case "CODE_INVALID":
@@ -162,10 +165,26 @@ export default function Activation() {
         case "MAX_ATTEMPTS":
         case "MAX_ATTEMPTS_EXCEEDED":
           setCodeError(t("activation.errors.maxAttempts"));
-          handleSendCode();
+          break;
+        case "USER_LOCKED_OUT":
+          setCodeError(t("activation.errors.userLockedOut"));
+          break;
+        case "USER_NOT_FOUND":
+          setCodeError(t("activation.errors.userNotFound"));
+          break;
+        case "ALREADY_ACTIVATED":
+          setCodeError(t("activation.errors.alreadyActivated"));
           break;
         default:
-          setCodeError(error.message || t("activation.errors.verifyFailed"));
+          if (errorMessage.includes("invalid activation code")) {
+            setCodeError(t("activation.errors.invalidCode"));
+          } else if (errorMessage.includes("expired")) {
+            setCodeError(t("activation.errors.codeExpired"));
+          } else if (errorMessage.includes("maximum attempts")) {
+            setCodeError(t("activation.errors.maxAttempts"));
+          } else {
+            setCodeError(t("activation.errors.verifyFailed"));
+          }
       }
     } finally {
       setIsLoading(false);
@@ -192,8 +211,8 @@ export default function Activation() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <p className="text-lg font-medium text-green-600">{t("activation.success")}</p>
-            <p className="text-sm text-muted-foreground mt-2">{t("activation.redirecting")}</p>
+            <p className="text-lg font-medium text-green-600">{t("activation.emailVerified")}</p>
+            <p className="text-sm text-muted-foreground mt-2">{t("activation.redirectingToContact")}</p>
           </CardContent>
         ) : (
           <form onSubmit={handleVerify}>
@@ -206,7 +225,8 @@ export default function Activation() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder={t("activation.emailPlaceholder")}
-                  disabled={isActivated}
+                  disabled={true}
+                  className="bg-muted cursor-not-allowed"
                 />
               </div>
 
@@ -236,18 +256,29 @@ export default function Activation() {
                 )}
               </div>
 
-              <div className="flex justify-between items-center text-sm">
-                <Button
-                  type="button"
-                  variant="link"
-                  onClick={handleSendCode}
-                  disabled={isSending || countdown > 0}
-                  className="p-0 h-auto"
-                >
-                  {countdown > 0
-                    ? t("activation.resendCountdown", { seconds: countdown })
-                    : t("activation.resendButton")}
-                </Button>
+              <div className="flex justify-center">
+                {hasSentCode ? (
+                  <Button
+                    type="button"
+                    variant="link"
+                    onClick={handleSendCode}
+                    disabled={isSending || countdown > 0}
+                    className="p-0 h-auto text-sm"
+                  >
+                    {countdown > 0
+                      ? t("activation.resendCountdown", { seconds: countdown })
+                      : t("activation.resendButton")}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    onClick={handleSendCode}
+                    disabled={isSending}
+                    className="w-full"
+                  >
+                    {isSending ? t("activation.sending") : t("activation.sendButton")}
+                  </Button>
+                )}
               </div>
             </CardContent>
 

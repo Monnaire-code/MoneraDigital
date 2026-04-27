@@ -22,13 +22,15 @@ type AuthService struct {
 	jwtSecret        string
 	tokenBlacklist   *cache.TokenBlacklist
 	twoFactorService *TwoFactorService
+	cfg              *config.Config
 }
 
 // NewAuthService creates a new AuthService instance
-func NewAuthService(db *sql.DB, jwtSecret string) *AuthService {
+func NewAuthService(db *sql.DB, jwtSecret string, cfg *config.Config) *AuthService {
 	return &AuthService{
 		DB:        db,
 		jwtSecret: jwtSecret,
+		cfg:       cfg,
 	}
 }
 
@@ -53,6 +55,9 @@ type LoginResponse struct {
 	ExpiresAt          time.Time    `json:"expiresAt,omitempty"`
 	Requires2FA        bool         `json:"requires2FA,omitempty"`
 	RequiresActivation bool         `json:"requiresActivation,omitempty"`
+	NeedsContactInfo   bool         `json:"needsContactInfo,omitempty"`
+	PendingApproval    bool         `json:"pendingApproval,omitempty"`
+	Message            string       `json:"message,omitempty"`
 	UserID             int          `json:"userId,omitempty"`
 }
 
@@ -149,8 +154,7 @@ func (s *AuthService) createCoreAccount(userID int, email string) (string, error
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	cfg := config.Load()
-	coreAPIURL := fmt.Sprintf("http://localhost:%s/api/core/accounts/create", cfg.Port)
+	coreAPIURL := s.cfg.CoreAPIURL + "/api/core/accounts/create"
 
 	resp, err := http.Post(coreAPIURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -196,35 +200,53 @@ func (s *AuthService) Login(req models.LoginRequest) (*LoginResponse, error) {
 		return nil, errors.New("invalid credentials")
 	}
 
-	// Check if user account is disabled
-	if user.Status == models.UserStatusDisabled {
+	// Check user account status and return appropriate response
+	switch user.Status {
+	case models.UserStatusDisabled:
 		return nil, errors.New("user account is disabled")
-	}
 
-	// Check if user account is pending activation
-	if user.Status == models.UserStatusPending {
+	case models.UserStatusPending:
 		return &LoginResponse{
 			User:               &user,
 			RequiresActivation: true,
+			Message:            "Please verify your email first",
 		}, nil
+
+	case models.UserStatusEmailVerified:
+		return &LoginResponse{
+			User:             &user,
+			NeedsContactInfo: true,
+			Message:          "Please submit your contact information",
+		}, nil
+
+	case models.UserStatusInfoSubmitted:
+		return &LoginResponse{
+			User:            &user,
+			PendingApproval: true,
+			Message:         "Your account is under review",
+		}, nil
+
+	case models.UserStatusActive:
+		// Normal login - generate JWT token
+		token, err := utils.GenerateJWT(user.ID, user.Email, s.jwtSecret)
+		if err != nil {
+			return nil, err
+		}
+
+		expiresAt := time.Now().Add(24 * time.Hour)
+
+		return &LoginResponse{
+			User:        &user,
+			Token:       token,
+			AccessToken: token,
+			TokenType:   "Bearer",
+			ExpiresIn:   86400,
+			ExpiresAt:   expiresAt,
+		}, nil
+
+	default:
+		return nil, errors.New("invalid account status")
 	}
-
-	// Generate JWT token directly (no 2FA check during login)
-	token, err := utils.GenerateJWT(user.ID, user.Email, s.jwtSecret)
-	if err != nil {
-		return nil, err
-	}
-
-	expiresAt := time.Now().Add(24 * time.Hour)
-
-	return &LoginResponse{
-		User:        &user,
-		Token:       token,
-		AccessToken: token,
-		TokenType:   "Bearer",
-		ExpiresIn:   86400,
-		ExpiresAt:   expiresAt,
-	}, nil
 }
 
 // Verify2FAAndLogin verifies 2FA token and completes login
@@ -314,8 +336,12 @@ func (s *AuthService) Verify2FA(userID int, token string) (bool, error) {
 // GetUserByID retrieves a user by their ID
 func (s *AuthService) GetUserByID(userID int) (*models.User, error) {
 	var user models.User
-	query := `SELECT id, email, two_factor_enabled FROM users WHERE id = $1`
-	err := s.DB.QueryRow(query, userID).Scan(&user.ID, &user.Email, &user.TwoFactorEnabled)
+	query := `SELECT id, email, status, two_factor_enabled, phone, telegram, wechat 
+	          FROM users WHERE id = $1`
+	err := s.DB.QueryRow(query, userID).Scan(
+		&user.ID, &user.Email, &user.Status, &user.TwoFactorEnabled,
+		&user.Phone, &user.Telegram, &user.Wechat,
+	)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, errors.New("user not found")

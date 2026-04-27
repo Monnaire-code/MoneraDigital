@@ -41,6 +41,9 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
   'POST /api/auth/send-activation': { requiresAuth: false, backendPath: '/api/auth/send-activation' },
   'POST /api/auth/verify-activation': { requiresAuth: false, backendPath: '/api/auth/verify-activation' },
 
+  // Contact info endpoint
+  'POST /api/contact-info': { requiresAuth: true, backendPath: '/api/contact-info' },
+
   // Address endpoints
   'GET /api/addresses': { requiresAuth: true, backendPath: '/api/addresses' },
   'POST /api/addresses': { requiresAuth: true, backendPath: '/api/addresses' },

@@ -451,7 +451,7 @@ function Withdraw() {
 
       const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || t("dashboard.withdraw.withdrawalSuccess"));
+        toast.success(t("dashboard.withdraw.withdrawalSuccess"));
         setAmount("");
         setIsConfirming(false);
         setIs2FADialogOpen(false);

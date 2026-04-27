@@ -8,7 +8,9 @@ import (
 	"log"
 	"os"
 
+	"github.com/spf13/viper"
 	"monera-digital/internal/cache"
+	"monera-digital/internal/config"
 	"monera-digital/internal/coreapi"
 	"monera-digital/internal/middleware"
 	"monera-digital/internal/repository"
@@ -90,6 +92,7 @@ type Container struct {
 	TwoFAService      *services.TwoFactorService
 	EmailService      *services.EmailService
 	ActivationService *services.ActivationService
+	ContactService    *services.ContactService
 
 	// 中间件
 	RateLimitMiddleware *middleware.PerEndpointRateLimiter
@@ -110,6 +113,9 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	}
 	c.CoreAPIClient = coreapi.NewClient(coreAPIURL)
 
+	// 加载配置
+	cfg := config.Load()
+
 	// 初始化仓储
 	c.Repository = &repository.Repository{
 		User:          postgres.NewUserRepository(db),
@@ -125,7 +131,7 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	}
 
 	// 初始化核心服务
-	c.AuthService = services.NewAuthService(db, jwtSecret)
+	c.AuthService = services.NewAuthService(db, jwtSecret, cfg)
 	c.AuthService.SetTokenBlacklist(c.TokenBlacklist)
 
 	c.LendingService = services.NewLendingService(db)
@@ -151,10 +157,10 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	c.RateLimitMiddleware.AddEndpoint("/api/auth/login", 5, 60)
 	c.RateLimitMiddleware.AddEndpoint("/api/auth/refresh", 10, 60)
 
-	// 初始化邮件和激活服务
+	// 初始化邮件和激活服务 (使用 viper 读取环境变量以支持 .env 文件)
 	emailService := services.NewEmailService(
-		os.Getenv("RESEND_API_KEY"),
-		os.Getenv("SENDER_EMAIL"),
+		viper.GetString("RESEND_API_KEY"),
+		viper.GetString("SENDER_EMAIL"),
 	)
 	c.EmailService = emailService
 	
@@ -165,6 +171,7 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 
 	dbRateLimiter := services.NewRateLimiter(db)
 	c.ActivationService = services.NewActivationService(db, dbRateLimiter, emailService, jwtSecret)
+	c.ContactService = services.NewContactService(db)
 
 	return c
 }
