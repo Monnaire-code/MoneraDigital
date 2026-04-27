@@ -15,6 +15,8 @@ import (
 	"monera-digital/internal/middleware"
 	"monera-digital/internal/routes"
 	"monera-digital/internal/scheduler"
+	"monera-digital/internal/services"
+	"monera-digital/internal/utils"
 )
 
 func main() {
@@ -43,6 +45,20 @@ func main() {
 	logger.Info("Starting Monera Digital API server",
 		"port", cfg.Port,
 		"environment", env)
+
+	// Initialize encryption key for activation codes
+	if cfg.EncryptionKey != "" {
+		normalizedKey, err := services.DecodeEncryptionKey(cfg.EncryptionKey)
+		if err != nil {
+			logger.Warn("Invalid encryption key for activation codes, using default",
+				"error", err.Error())
+		} else {
+			utils.SetActivationCodeKey([]byte(normalizedKey))
+			logger.Info("Activation code encryption key initialized")
+		}
+	} else {
+		logger.Warn("ENCRYPTION_KEY not set, activation codes will use basic encoding")
+	}
 
 	// Initialize database
 	database, err := db.InitDB(cfg.DatabaseURL)
@@ -76,7 +92,7 @@ func main() {
 		logger.Fatal("Container verification failed",
 			"error", err.Error())
 	}
-	
+
 	// Debug: Check email service status
 	logger.Info("[EmailService] Status check",
 		"enabled", cont.EmailService.IsEnabled(),

@@ -66,6 +66,8 @@ export default function Login() {
         if (errorMessage.includes("invalid credentials") || errorMessage.includes("invalid email") || errorMessage.includes("password")) {
           setEmailError(t("auth.errors.invalidEmailOrPassword"));
           setPasswordError(t("auth.errors.invalidEmailOrPassword"));
+        } else if (errorMessage.includes("disabled")) {
+          toast.error(t("auth.errors.accountDisabled"));
         } else {
           toast.error(t("auth.errors.serverError"));
         }
