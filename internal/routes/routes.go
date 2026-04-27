@@ -42,6 +42,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 	// Create activation handler
 	activationHandler := handlers.NewActivationHandler(cont.ActivationService)
 
+	// Create contact handler
+	contactHandler := handlers.NewContactHandler(cont.ContactService)
+
 	// Root health check endpoint (backup)
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
@@ -102,6 +105,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 				twofa.GET("/status", twofaHandler.Get2FAStatus)
 			}
 		}
+
+		// Contact info routes
+		protected.POST("/contact-info", contactHandler.SubmitContactInfo)
 
 		// Assets routes
 		assets := protected.Group("/assets")

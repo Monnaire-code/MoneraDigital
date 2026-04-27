@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	RateLimitWindowMinutes    = 5
-	RateLimitMaxAttemptsIP    = 5
-	RateLimitMaxAttemptsEmail = 3
+	RateLimitWindowMinutes    = 3 // 3 minutes between activation code sends
+	RateLimitMaxAttemptsIP    = 10
+	RateLimitMaxAttemptsEmail = 10 // Same email can request multiple times in window
 )
 
 type RateLimiter struct {

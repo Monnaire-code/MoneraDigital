@@ -13,7 +13,8 @@ import (
 
 const (
 	ActivationCodeExpiryMinutes = 5
-	MaxActivationAttempts       = 5
+	MaxActivationAttempts       = 3 // Max 3 attempts before 1 minute lockout
+	ActivationLockoutMinutes    = 1 // Lockout duration after max attempts
 )
 
 var (
@@ -22,6 +23,7 @@ var (
 	ErrCodeInvalid          = errors.New("invalid activation code")
 	ErrMaxAttemptsExceeded  = errors.New("maximum activation attempts exceeded")
 	ErrUserAlreadyActivated = errors.New("user already activated")
+	ErrUserLockedOut        = errors.New("user is temporarily locked out due to too many failed attempts")
 )
 
 type ActivationService struct {
@@ -118,7 +120,7 @@ func (s *ActivationService) SendActivationCode(ctx context.Context, email string
 	}, nil
 }
 
-func (s *ActivationService) VerifyActivationCode(ctx context.Context, email string, code string) (*models.LoginResponseWithActivation, error) {
+func (s *ActivationService) VerifyActivationCode(ctx context.Context, email string, code string) (*models.EmailVerifiedResponse, error) {
 	user, err := s.getUserByEmail(ctx, email)
 	if err != nil {
 		return nil, ErrUserNotFound
@@ -128,14 +130,30 @@ func (s *ActivationService) VerifyActivationCode(ctx context.Context, email stri
 		return nil, ErrUserAlreadyActivated
 	}
 
+	// Check if user is locked out (activation_expires_at set to future time means locked)
+	if user.ActivationExpiresAt.Valid && time.Now().Before(user.ActivationExpiresAt.Time) {
+		// Check if this is a lockout (attempts >= MaxActivationAttempts)
+		if user.ActivationAttempts >= MaxActivationAttempts {
+			retryAfter := int(time.Until(user.ActivationExpiresAt.Time).Seconds())
+			if retryAfter < 0 {
+				retryAfter = 0
+			}
+			return nil, ErrUserLockedOut
+		}
+	}
+
+	// Check if activation code has expired (but not locked out)
 	if !user.ActivationExpiresAt.Valid {
+		fmt.Printf("[ActivationService] VerifyActivation: no expiration time for user %d\n", user.ID)
 		return nil, ErrCodeExpired
 	}
 
 	if time.Now().After(user.ActivationExpiresAt.Time) {
+		fmt.Printf("[ActivationService] VerifyActivation: code expired for user %d (expires: %v)\n", user.ID, user.ActivationExpiresAt.Time)
 		return nil, ErrCodeExpired
 	}
 
+	// Check attempts (only if not locked out)
 	if user.ActivationAttempts >= MaxActivationAttempts {
 		return nil, ErrMaxAttemptsExceeded
 	}
@@ -145,7 +163,7 @@ func (s *ActivationService) VerifyActivationCode(ctx context.Context, email stri
 	}
 
 	if !utils.VerifyActivationCode(code, user.ActivationCode.String) {
-		err := s.incrementActivationAttempts(ctx, user.ID)
+		err := s.incrementActivationAttemptsAndMaybeLockout(ctx, user.ID, user.ActivationAttempts)
 		if err != nil {
 			fmt.Printf("[ActivationService] Failed to increment attempts: %v\n", err)
 		}
@@ -156,9 +174,9 @@ func (s *ActivationService) VerifyActivationCode(ctx context.Context, email stri
 		return nil, ErrCodeInvalid
 	}
 
-	err = s.activateUser(ctx, user.ID)
+	err = s.updateUserStatusToEmailVerified(ctx, user.ID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to activate user: %w", err)
+		return nil, fmt.Errorf("failed to update user status: %w", err)
 	}
 
 	token, err := utils.GenerateJWT(user.ID, user.Email, s.jwtSecret)
@@ -166,16 +184,15 @@ func (s *ActivationService) VerifyActivationCode(ctx context.Context, email stri
 		return nil, fmt.Errorf("failed to generate token: %w", err)
 	}
 
-	expiresAt := time.Now().Add(24 * time.Hour)
-
-	return &models.LoginResponseWithActivation{
-		Token:              token,
-		AccessToken:        token,
-		TokenType:          "Bearer",
-		ExpiresIn:          86400,
-		ExpiresAt:          expiresAt.Format(time.RFC3339),
-		RequiresActivation: false,
-		UserID:             user.ID,
+	return &models.EmailVerifiedResponse{
+		Success:     true,
+		Message:     "Email verified successfully. Please submit your contact information.",
+		Status:      string(models.UserStatusEmailVerified),
+		RedirectURL: "/contact-info",
+		UserID:      user.ID,
+		Token:       token,
+		AccessToken: token,
+		ExpiresIn:   86400,
 	}, nil
 }
 
@@ -209,6 +226,33 @@ func (s *ActivationService) updateActivationCode(ctx context.Context, userID int
 	return err
 }
 
+func (s *ActivationService) incrementActivationAttemptsAndMaybeLockout(ctx context.Context, userID int, currentAttempts int) error {
+	newAttempts := currentAttempts + 1
+
+	// Check if we need to lock out the user (after 3 failed attempts)
+	if newAttempts >= MaxActivationAttempts {
+		// Set lockout expiration to 1 minute from now
+		lockoutExpiry := time.Now().Add(ActivationLockoutMinutes * time.Minute)
+		_, err := s.db.ExecContext(ctx, `
+			UPDATE users 
+			SET activation_attempts = $1, activation_expires_at = $2, updated_at = NOW()
+			WHERE id = $3`,
+			newAttempts, lockoutExpiry, userID,
+		)
+		return err
+	}
+
+	// Just increment attempts without lockout
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE users 
+		SET activation_attempts = $1, updated_at = NOW()
+		WHERE id = $2`,
+		newAttempts, userID,
+	)
+	return err
+}
+
+// incrementActivationAttempts increments attempt count without lockout (for backward compatibility)
 func (s *ActivationService) incrementActivationAttempts(ctx context.Context, userID int) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE users 
@@ -223,11 +267,23 @@ func (s *ActivationService) activateUser(ctx context.Context, userID int) error 
 	now := time.Now()
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE users 
-		SET status = 'ACTIVE', activation_code = NULL, 
+		SET status = 'EMAIL_VERIFIED', activation_code = NULL, 
 		    activation_attempts = 0, activation_expires_at = NULL,
 		    activated_at = $1, updated_at = $1
 		WHERE id = $2`,
 		now, userID,
+	)
+	return err
+}
+
+func (s *ActivationService) updateUserStatusToEmailVerified(ctx context.Context, userID int) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE users 
+		SET status = $1, activation_code = NULL, 
+		    activation_attempts = 0, activation_expires_at = NULL,
+		    updated_at = NOW()
+		WHERE id = $2`,
+		models.UserStatusEmailVerified, userID,
 	)
 	return err
 }

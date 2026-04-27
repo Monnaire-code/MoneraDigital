@@ -153,3 +153,150 @@ func (s *EmailService) GetFromEmail() string {
 func (s *EmailService) GetEnvFromEmail() string {
 	return os.Getenv("SENDER_EMAIL")
 }
+
+func (s *EmailService) SendContactInfoSubmittedEmail(ctx context.Context, toEmail string) error {
+	if !s.enabled {
+		fmt.Printf("[EmailService] Email disabled, would send contact info submitted notification to %s\n", toEmail)
+		return nil
+	}
+
+	subject := "【Monera Digital】联系方式已提交"
+	htmlContent := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+    .success-icon { font-size: 48px; text-align: center; margin: 20px 0; }
+    .info { background: white; padding: 15px; border-radius: 8px; margin: 15px 0; }
+    .info-item { margin: 8px 0; color: #666; }
+    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #888; font-size: 14px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Monera Digital</h1>
+  </div>
+  <div class="content">
+    <h2>尊敬的 Monera Digital 用户：</h2>
+    <p>您好！</p>
+    <div class="success-icon">✓</div>
+    <p style="text-align: center; color: #22c55e; font-size: 18px;"><strong>您的联系方式已成功提交！</strong></p>
+    <div class="info">
+      <p><strong>审核说明：</strong></p>
+      <p>我们将在 <strong>1-3 个工作日</strong>内完成审核。</p>
+      <p>审核通过后，您将收到账号激活成功的邮件通知。</p>
+    </div>
+    <div class="info">
+      <p><strong>如有疑问，请联系：</strong></p>
+      <p><a href="mailto:ops@moneradigital.com">ops@moneradigital.com</a></p>
+    </div>
+    <div class="footer">
+      <p>此致</p>
+      <p><strong>Monera Digital 团队</strong></p>
+      <p>发送时间：%s</p>
+    </div>
+  </div>
+</body>
+</html>
+`, time.Now().Format("2006-01-02 15:04:05"))
+
+	plainText := fmt.Sprintf(`
+尊敬的 Monera Digital 用户：
+
+您好！
+
+您的联系方式已成功提交！
+
+审核说明：
+- 我们将在 1-3 个工作日内完成审核
+- 审核通过后，您将收到账号激活成功的邮件通知
+
+如有疑问，请联系：ops@moneradigital.com
+
+此致
+Monera Digital 团队
+发送时间：%s
+`, time.Now().Format("2006-01-02 15:04:05"))
+
+	return s.sendEmail(ctx, toEmail, subject, plainText, htmlContent)
+}
+
+func (s *EmailService) SendAccountActivatedEmail(ctx context.Context, toEmail string) error {
+	if !s.enabled {
+		fmt.Printf("[EmailService] Email disabled, would send account activated notification to %s\n", toEmail)
+		return nil
+	}
+
+	subject := "【Monera Digital】您的账号已成功激活"
+	htmlContent := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #22c55e 0%%, #16a34a 100%%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+    .success-icon { font-size: 64px; text-align: center; margin: 20px 0; }
+    .info { background: white; padding: 15px; border-radius: 8px; margin: 15px 0; }
+    .info-item { margin: 8px 0; color: #666; }
+    .cta-button { display: inline-block; background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%); color: white; padding: 15px 40px; border-radius: 8px; text-decoration: none; font-weight: bold; margin: 20px 0; }
+    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #888; font-size: 14px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🎉 账号激活成功</h1>
+  </div>
+  <div class="content">
+    <h2>尊敬的 Monera Digital 用户：</h2>
+    <p>您好！</p>
+    <div class="success-icon">✓</div>
+    <p style="text-align: center; color: #22c55e; font-size: 20px;"><strong>恭喜！您的账号已审核通过，现在可以正常登录使用了！</strong></p>
+    <div class="info">
+      <p><strong>账号信息：</strong></p>
+      <p><strong>登录邮箱：</strong>%s</p>
+      <p><strong>激活时间：</strong>%s</p>
+    </div>
+    <div style="text-align: center;">
+      <a href="#" class="cta-button">立即登录</a>
+    </div>
+    <div class="info">
+      <p><strong>如有疑问，请联系：</strong></p>
+      <p><a href="mailto:ops@moneradigital.com">ops@moneradigital.com</a></p>
+    </div>
+    <div class="footer">
+      <p>感谢您的耐心等待！</p>
+      <p><strong>Monera Digital 团队</strong></p>
+      <p>发送时间：%s</p>
+    </div>
+  </div>
+</body>
+</html>
+`, toEmail, time.Now().Format("2006-01-02 15:04:05"), time.Now().Format("2006-01-02 15:04:05"))
+
+	plainText := fmt.Sprintf(`
+尊敬的 Monera Digital 用户：
+
+您好！
+
+恭喜！您的账号已审核通过，现在可以正常登录使用了！
+
+账号信息：
+- 登录邮箱：%s
+- 激活时间：%s
+
+如有疑问，请联系：ops@moneradigital.com
+
+感谢您的耐心等待！
+
+Monera Digital 团队
+发送时间：%s
+`, toEmail, time.Now().Format("2006-01-02 15:04:05"), time.Now().Format("2006-01-02 15:04:05"))
+
+	return s.sendEmail(ctx, toEmail, subject, plainText, htmlContent)
+}

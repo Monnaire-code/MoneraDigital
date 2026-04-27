@@ -71,7 +71,6 @@ export default function Register() {
     e.preventDefault();
     clearErrors();
     setIsLoading(true);
-    console.log("Attempting registration for:", email);
 
     if (password.length < 8) {
       setPasswordError(t("auth.errors.passwordTooShort"));
@@ -99,7 +98,6 @@ export default function Register() {
         return;
       }
 
-      console.log("Registration successful");
       toast.success(t("auth.register.successMessage"));
       
       // Store token and email for activation page

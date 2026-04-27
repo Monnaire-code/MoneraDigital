@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
 	"monera-digital/internal/models"
@@ -58,6 +59,8 @@ func (h *ActivationHandler) VerifyActivation(c *gin.Context) {
 
 	resp, err := h.activationService.VerifyActivationCode(c.Request.Context(), req.Email, req.Code)
 	if err != nil {
+		// Log the error for debugging
+		fmt.Printf("[ActivationHandler] VerifyActivation error: %v (type: %T)\n", err, err)
 		switch err {
 		case services.ErrUserNotFound:
 			c.JSON(http.StatusNotFound, gin.H{"error": "user not found", "code": "USER_NOT_FOUND"})
@@ -69,21 +72,22 @@ func (h *ActivationHandler) VerifyActivation(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "maximum attempts exceeded", "code": "MAX_ATTEMPTS"})
 		case services.ErrUserAlreadyActivated:
 			c.JSON(http.StatusBadRequest, gin.H{"error": "user already activated", "code": "ALREADY_ACTIVATED"})
+		case services.ErrUserLockedOut:
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many failed attempts, please wait 1 minute", "code": "USER_LOCKED_OUT", "retryAfter": 60})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "verification failed", "code": "VERIFICATION_FAILED"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "verification failed", "code": "VERIFICATION_FAILED", "details": err.Error()})
 		}
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":            true,
-		"message":            "account activated successfully",
-		"token":              resp.Token,
-		"accessToken":        resp.AccessToken,
-		"tokenType":          resp.TokenType,
-		"expiresIn":          resp.ExpiresIn,
-		"expiresAt":          resp.ExpiresAt,
-		"requiresActivation": resp.RequiresActivation,
-		"userId":             resp.UserID,
+		"success":     true,
+		"message":     resp.Message,
+		"status":      resp.Status,
+		"redirectUrl": resp.RedirectURL,
+		"userId":      resp.UserID,
+		"token":       resp.Token,
+		"accessToken": resp.AccessToken,
+		"expiresIn":   resp.ExpiresIn,
 	})
 }

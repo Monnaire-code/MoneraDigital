@@ -19,6 +19,8 @@ import Security from "./pages/dashboard/Security";
 import FixedDeposit from "./pages/dashboard/FixedDeposit";
 import Deposit from "./pages/dashboard/Deposit";
 import Activation from "./pages/dashboard/Activation";
+import ContactInfo from "./pages/dashboard/ContactInfo";
+import PendingApproval from "./pages/dashboard/PendingApproval";
 import StructuredProducts from "./pages/StructuredProducts";
 import ComingSoon from "./components/ComingSoon";
 
@@ -36,6 +38,8 @@ const App = () => (
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/activation" element={<Activation />} />
+            <Route path="/contact-info" element={<ContactInfo />} />
+            <Route path="/pending-approval" element={<PendingApproval />} />
             <Route path="/structured-products" element={<StructuredProducts />} />
             
             <Route path="/dashboard" element={<DashboardLayout />}>

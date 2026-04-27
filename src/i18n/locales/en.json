@@ -238,7 +238,7 @@
     }
   },
   "activation": {
-    "title": "Activate Account",
+    "title": "Verify Email",
     "description": "Please enter the 6-digit verification code sent to your email",
     "emailLabel": "Email Address",
     "emailPlaceholder": "Please enter your email address",
@@ -246,11 +246,15 @@
     "codePlaceholder": "Enter verification code",
     "verifyButton": "Verify",
     "verifying": "Verifying...",
+    "sendButton": "Send Verification Code",
+    "sending": "Sending...",
     "resendButton": "Resend Verification Code",
     "resendCountdown": "Resend in {{seconds}}s",
     "backToLogin": "Back to Login",
-    "success": "Account activated successfully!",
+    "success": "Email verified successfully!",
+    "emailVerified": "Email verified!",
     "redirecting": "Redirecting...",
+    "redirectingToContact": "Redirecting to contact info...",
     "successCodeSent": "Verification code sent",
     "errors": {
       "emailRequired": "Please enter your email address",
@@ -258,10 +262,57 @@
       "invalidCode": "Invalid verification code",
       "codeExpired": "Verification code expired. Please request a new one.",
       "maxAttempts": "Too many attempts. Please request a new code.",
-      "sendFailed": "Failed to send activation email",
+      "sendFailed": "Failed to send verification email",
       "tooManyRequests": "Too many requests. Please try again in {{seconds}}s",
-      "verifyFailed": "Verification failed"
+      "verifyFailed": "Verification failed",
+      "userLockedOut": "Too many attempts, please wait 1 minute",
+      "userNotFound": "User not found",
+      "alreadyActivated": "Email already verified, no need to verify again"
     }
+  },
+  "contactInfo": {
+    "title": "Submit Contact Information",
+    "description": "Please provide your contact details. This information will be used for account verification purposes.",
+    "email": "Email",
+    "emailReadonly": "This is your verified email address and cannot be modified.",
+    "phone": "Phone Number",
+    "phoneHelp": "Please enter your phone number with country code",
+    "phonePlaceholder": "Enter phone number",
+    "telegram": "Telegram",
+    "telegramPlaceholder": "@username",
+    "wechat": "WeChat",
+    "wechatPlaceholder": "Enter WeChat ID",
+    "optional": "Optional",
+    "required": "Required",
+    "submit": "Submit Contact Info",
+    "submitting": "Submitting...",
+    "success": "Contact information submitted successfully. Your account is under review.",
+    "errors": {
+      "phoneRequired": "Phone number is required",
+      "submitFailed": "Failed to submit contact information",
+      "UNAUTHORIZED": "Authentication required. Please verify your email first.",
+      "EMAIL_NOT_VERIFIED": "Please verify your email first",
+      "ALREADY_SUBMITTED": "Contact information already submitted",
+      "INVALID_PHONE_FORMAT": "Invalid phone number format. Please use international format (e.g., +86-13800138000)",
+      "INVALID_REQUEST": "Invalid request. Please check your input.",
+      "INTERNAL_ERROR": "Server error. Please try again later."
+    }
+  },
+  "pendingApproval": {
+    "title": "Account Under Review",
+    "description": "Your contact information has been submitted successfully. Our team will review your application.",
+    "expectedReviewTime": "Expected Review Time",
+    "expectedReviewDate": "Expected to complete review by {{date}}",
+    "submittedInfo": "Submitted Information",
+    "email": "Email",
+    "phone": "Phone",
+    "telegram": "Telegram",
+    "wechat": "WeChat",
+    "needHelp": "Need help? Contact us at",
+    "refresh": "Check Status",
+    "checking": "Checking...",
+    "accountActivated": "Your account has been activated!",
+    "redirecting": "Redirecting to dashboard..."
   },
   "notFound": {
     "title": "404 - Page Not Found",
@@ -391,6 +442,10 @@
       "failedToGenerateQR": "Failed to generate QR code. Please try again.",
       "failedToSetup2FA": "Failed to setup 2FA",
       "failedToStartSetup": "Failed to start 2FA setup",
+      "failedToEnable2FA": "Failed to enable 2FA",
+      "failedToDisable2FA": "Failed to disable 2FA",
+      "enabled": "Two-factor authentication enabled",
+      "disabled": "Two-factor authentication disabled",
       "enableEndpointNotFound": "2FA Enable API endpoint not found (404)"
     },
     "lending": {

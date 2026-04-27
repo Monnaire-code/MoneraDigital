@@ -61,9 +61,11 @@ const (
 type UserStatus string
 
 const (
-	UserStatusActive   UserStatus = "ACTIVE"
-	UserStatusDisabled UserStatus = "DISABLED"
-	UserStatusPending  UserStatus = "PENDING"
+	UserStatusPending       UserStatus = "PENDING"        // Registered, email not verified
+	UserStatusEmailVerified UserStatus = "EMAIL_VERIFIED" // Email verified, needs contact info
+	UserStatusInfoSubmitted UserStatus = "INFO_SUBMITTED" // Contact info submitted, pending approval
+	UserStatusActive        UserStatus = "ACTIVE"         // Activated by admin, can login
+	UserStatusDisabled      UserStatus = "DISABLED"       // Disabled by admin
 )
 
 // User model
@@ -78,9 +80,15 @@ type User struct {
 	ActivationCode       sql.NullString `json:"-" db:"activation_code"`
 	ActivationAttempts   int            `json:"-" db:"activation_attempts"`
 	ActivationExpiresAt  sql.NullTime   `json:"-" db:"activation_expires_at"`
-	ActivatedAt          sql.NullTime   `json:"activatedAt" db:"activated_at"`
-	CreatedAt            time.Time      `json:"createdAt" db:"created_at"`
-	UpdatedAt            time.Time      `json:"updatedAt" db:"updated_at"`
+	ActivatedAt          sql.NullTime   `json:"activatedAt,omitempty" db:"activated_at"`
+	// Contact information fields
+	Phone              sql.NullString `json:"phone,omitempty" db:"phone"`
+	Telegram           sql.NullString `json:"telegram,omitempty" db:"telegram"`
+	Wechat             sql.NullString `json:"wechat,omitempty" db:"wechat"`
+	ContactSubmittedAt sql.NullTime   `json:"contactSubmittedAt,omitempty" db:"contact_submitted_at"`
+	// Timestamps
+	CreatedAt time.Time `json:"createdAt" db:"created_at"`
+	UpdatedAt time.Time `json:"updatedAt" db:"updated_at"`
 }
 
 // Account model (New)
