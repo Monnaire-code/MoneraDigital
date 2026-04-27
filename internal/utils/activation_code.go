@@ -3,15 +3,13 @@ package utils
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
 	"math/big"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 const (
 	ActivationCodeLength = 6
-	BcryptCost           = 5
 	ActivationCodeMax    = 999999
 )
 
@@ -25,18 +23,32 @@ func GenerateActivationCode() (string, error) {
 }
 
 func HashActivationCode(code string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(code), BcryptCost)
-	if err != nil {
-		return "", fmt.Errorf("failed to hash activation code: %w", err)
-	}
-	return string(hash), nil
+	return EncryptActivationCode(code)
 }
 
 func VerifyActivationCode(code, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(code))
-	return err == nil
+	decryptedCode, err := DecryptActivationCode(hash)
+	if err != nil {
+		return false
+	}
+	return ConstantTimeCompare(code, decryptedCode)
 }
 
 func ConstantTimeCompare(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+func EncryptActivationCode(code string) (string, error) {
+	return base64.StdEncoding.EncodeToString([]byte(code)), nil
+}
+
+func DecryptActivationCode(encryptedCode string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(encryptedCode)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode activation code: %w", err)
+	}
+	return string(data), nil
 }
