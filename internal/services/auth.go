@@ -336,8 +336,12 @@ func (s *AuthService) Verify2FA(userID int, token string) (bool, error) {
 // GetUserByID retrieves a user by their ID
 func (s *AuthService) GetUserByID(userID int) (*models.User, error) {
 	var user models.User
-	query := `SELECT id, email, two_factor_enabled FROM users WHERE id = $1`
-	err := s.DB.QueryRow(query, userID).Scan(&user.ID, &user.Email, &user.TwoFactorEnabled)
+	query := `SELECT id, email, status, two_factor_enabled, phone, telegram, wechat 
+	          FROM users WHERE id = $1`
+	err := s.DB.QueryRow(query, userID).Scan(
+		&user.ID, &user.Email, &user.Status, &user.TwoFactorEnabled,
+		&user.Phone, &user.Telegram, &user.Wechat,
+	)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, errors.New("user not found")

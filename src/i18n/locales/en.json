@@ -312,7 +312,11 @@
     "refresh": "Check Status",
     "checking": "Checking...",
     "accountActivated": "Your account has been activated!",
-    "redirecting": "Redirecting to dashboard..."
+    "redirecting": "Redirecting to dashboard...",
+    "accountRejected": "Your account review was rejected",
+    "rejectedMessage": "Sorry, your account review was not approved. Please contact support if you have questions.",
+    "reSubmit": "Resubmit",
+    "reviewInProgress": "Review in progress, please wait..."
   },
   "notFound": {
     "title": "404 - Page Not Found",

@@ -169,12 +169,24 @@ func (h *Handler) GetMe(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, dto.UserInfo{
+	response := dto.UserInfo{
 		ID:               user.ID,
 		Email:            user.Email,
 		Status:           string(user.Status),
 		TwoFactorEnabled: user.TwoFactorEnabled,
-	})
+	}
+
+	if user.Phone.Valid {
+		response.Phone = user.Phone.String
+	}
+	if user.Telegram.Valid {
+		response.Telegram = user.Telegram.String
+	}
+	if user.Wechat.Valid {
+		response.Wechat = user.Wechat.String
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // Verify2FALogin verifies 2FA token during login and completes authentication

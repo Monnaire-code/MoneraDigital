@@ -312,7 +312,11 @@
     "refresh": "检查状态",
     "checking": "检查中...",
     "accountActivated": "您的账户已激活！",
-    "redirecting": "正在跳转到控制台..."
+    "redirecting": "正在跳转到控制台...",
+    "accountRejected": "您的账户审核未通过",
+    "rejectedMessage": "很抱歉，您的账户审核未通过。如有疑问，请联系客服。",
+    "reSubmit": "重新提交",
+    "reviewInProgress": "审核中，请耐心等待..."
   },
   "notFound": {
     "title": "404 - 页面未找到",
