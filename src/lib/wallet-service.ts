@@ -1,134 +1,77 @@
 import { z } from 'zod';
 import logger from './logger.js';
 
-/**
- * Supported currencies in token_network format
- * Note: USDC_BEP20 uses full backend format for BNB Smart Chain (特例)
- */
-export const SUPPORTED_CURRENCIES = [
-  'USDT_ERC20',
-  'USDT_TRC20',
-  'USDT_BEP20',
-  'USDC_ERC20',
-  'USDC_TRC20',
-  'USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET', // 特例：长格式
-] as const;
+export type NetworkFamily = 'EVM' | 'TRON';
 
-export type SupportedCurrency = typeof SUPPORTED_CURRENCIES[number];
-
-/**
- * Validate if a currency string is valid
- */
-export function isValidCurrency(currency: string): currency is SupportedCurrency {
-  return SUPPORTED_CURRENCIES.includes(currency as SupportedCurrency);
+export interface DepositAddressResponse {
+  networkFamily: NetworkFamily;
+  address: string;
+  supportedCoins: SupportedCoin[];
 }
 
-const createWalletSchema = z.object({
-  userId: z.number().int().positive(),
-  productCode: z.string().min(1),
-  currency: z.string().min(1).refine(isValidCurrency, {
-    message: `Currency must be one of: ${SUPPORTED_CURRENCIES.join(', ')}`,
-  }),
-});
+export interface SupportedCoin {
+  chainCode: string;
+  symbol: string;
+  coinKey: string;
+  minDeposit: string;
+  decimals: number;
+}
+
+export interface SupportedChainsResponse {
+  chains: SupportedCoin[];
+}
+
+const networkFamilySchema = z.enum(['EVM', 'TRON']);
+
+async function authHeaders(): Promise<HeadersInit> {
+  const token = localStorage.getItem('token');
+  if (!token) {
+    throw new Error('Not authenticated');
+  }
+  return { Authorization: `Bearer ${token}` };
+}
+
+async function parseOrThrow<T>(response: Response, action: string): Promise<T> {
+  if (!response.ok) {
+    let message = `Failed to ${action}`;
+    try {
+      const body = await response.json();
+      if (body?.error) message = body.error;
+      else if (body?.message) message = body.message;
+    } catch {
+      // Non-JSON error body — fall through to default message.
+    }
+    throw new Error(message);
+  }
+  return (await response.json()) as T;
+}
 
 export class WalletService {
   /**
-   * Create wallet via API
+   * Get the deposit address for a network family (EVM or TRON).
+   *
+   * Backend returns the user's pool-assigned address; the first call lazily
+   * assigns one. supportedCoins lists which on-chain coins map to the address.
    */
-  static async createWallet(userId: number, productCode: string, currency: string) {
-    // Debug logging for account opening flow
-    console.log(`[DEBUG-ACCOUNT-OPENING] WalletService.createWallet called`, {
-      timestamp: new Date().toISOString(),
-      userId,
-      productCode,
-      currency,
-    });
+  static async getDepositAddress(networkFamily: NetworkFamily): Promise<DepositAddressResponse> {
+    const family = networkFamilySchema.parse(networkFamily);
+    logger.info({ networkFamily: family }, 'Fetching deposit address');
 
-    const validated = createWalletSchema.parse({
-      userId,
-      productCode,
-      currency,
-    });
-
-    logger.info({ userId, productCode, currency }, 'Creating wallet');
-
-    const token = localStorage.getItem('token');
-    if (!token) {
-      const error = new Error('Not authenticated');
-      console.log(`[DEBUG-ACCOUNT-OPENING] WalletService.createWallet: No token found`);
-      throw error;
-    }
-
-    const response = await fetch('/api/wallet/create', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(validated),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.log(`[DEBUG-ACCOUNT-OPENING] WalletService.createWallet: API error`, {
-        status: response.status,
-        error: error,
-      });
-      throw new Error(error.error || 'Failed to create wallet');
-    }
-
-    const data = await response.json();
-    console.log(`[DEBUG-ACCOUNT-OPENING] WalletService.createWallet completed`, {
-      timestamp: new Date().toISOString(),
-      walletId: data.wallet?.id,
-      status: data.status,
-    });
-
-    logger.info({ walletId: data.wallet?.id }, 'Wallet created successfully');
-
-    return data;
+    const response = await fetch(
+      `/api/wallet/deposit-address?networkFamily=${encodeURIComponent(family)}`,
+      { headers: await authHeaders() }
+    );
+    return parseOrThrow<DepositAddressResponse>(response, 'fetch deposit address');
   }
 
   /**
-   * Get wallet info via API
-   * Note: Backend returns wallet info based on JWT token, walletId parameter is ignored
+   * Get all coins/chains the platform currently accepts deposits for.
+   * Used to render the supported-coins reference table.
    */
-  static async getWalletInfo(walletId?: string) {
-    // Debug logging for account opening flow
-    console.log(`[DEBUG-ACCOUNT-OPENING] WalletService.getWalletInfo called`, {
-      timestamp: new Date().toISOString(),
-      walletId,
+  static async getSupportedChains(): Promise<SupportedChainsResponse> {
+    const response = await fetch('/api/wallet/supported-chains', {
+      headers: await authHeaders(),
     });
-
-    const token = localStorage.getItem('token');
-    if (!token) {
-      const error = new Error('Not authenticated');
-      console.log(`[DEBUG-ACCOUNT-OPENING] WalletService.getWalletInfo: No token found`);
-      throw error;
-    }
-
-    const response = await fetch('/api/wallet/info', {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.log(`[DEBUG-ACCOUNT-OPENING] WalletService.getWalletInfo: API error`, {
-        status: response.status,
-        error: error,
-      });
-      throw new Error('Failed to fetch wallet info');
-    }
-
-    const data = await response.json();
-    console.log(`[DEBUG-ACCOUNT-OPENING] WalletService.getWalletInfo completed`, {
-      timestamp: new Date().toISOString(),
-      walletId,
-      status: data.status,
-    });
-
-    return data;
+    return parseOrThrow<SupportedChainsResponse>(response, 'fetch supported chains');
   }
 }

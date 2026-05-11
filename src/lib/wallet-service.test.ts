@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock localStorage
 const localStorageMock = {
   getItem: vi.fn(),
   setItem: vi.fn(),
@@ -12,82 +11,115 @@ Object.defineProperty(global, 'localStorage', {
   writable: true,
 });
 
+function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {}): Response {
+  const ok = init.ok ?? true;
+  const status = init.status ?? (ok ? 200 : 500);
+  return {
+    ok,
+    status,
+    statusText: ok ? 'OK' : 'ERR',
+    headers: new Headers(),
+    redirected: false,
+    json: () => Promise.resolve(body),
+  } as unknown as Response;
+}
+
 describe('WalletService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorageMock.getItem.mockReturnValue('mock-token');
   });
 
-  describe('createWallet validation', () => {
-    it('should throw validation error for negative user_id', async () => {
+  describe('getDepositAddress', () => {
+    it('returns address payload for EVM', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          networkFamily: 'EVM',
+          address: '0xabc',
+          supportedCoins: [
+            { chainCode: 'ETHEREUM', symbol: 'USDC', coinKey: 'k', minDeposit: '0.0001', decimals: 6 },
+          ],
+        })
+      );
+      global.fetch = fetchMock as unknown as typeof fetch;
       const { WalletService } = await import('./wallet-service');
-      const validProductCode = 'X_FINANCE';
-      await expect(WalletService.createWallet(-1, validProductCode, 'USDT_TRC20'))
-        .rejects.toThrow('greater than 0');
+
+      const result = await WalletService.getDepositAddress('EVM');
+
+      expect(result.address).toBe('0xabc');
+      expect(result.supportedCoins).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/wallet/deposit-address?networkFamily=EVM',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'Bearer mock-token' }),
+        })
+      );
     });
 
-    it('should throw validation error for invalid currency format', async () => {
+    it('rejects invalid network family', async () => {
       const { WalletService } = await import('./wallet-service');
-      const validProductCode = 'X_FINANCE';
-      await expect(WalletService.createWallet(1, validProductCode, 'INVALID_CURRENCY'))
-        .rejects.toThrow('Currency must be one of');
+      // @ts-expect-error testing runtime validation
+      await expect(WalletService.getDepositAddress('SOLANA')).rejects.toThrow();
     });
 
-    it('should throw validation error for empty product code', async () => {
+    it('throws backend error message on non-ok response', async () => {
+      global.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({ error: 'ASSIGN_FAILED' }, { ok: false, status: 500 })
+      ) as unknown as typeof fetch;
       const { WalletService } = await import('./wallet-service');
-      await expect(WalletService.createWallet(1, '', 'USDT_TRC20'))
-        .rejects.toThrow('String must contain at least 1 character');
+
+      await expect(WalletService.getDepositAddress('TRON')).rejects.toThrow('ASSIGN_FAILED');
     });
 
-    it('should throw validation error for empty currency', async () => {
+    it('falls back to default message when body is not JSON', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: () => Promise.reject(new Error('not json')),
+      } as unknown as Response) as unknown as typeof fetch;
       const { WalletService } = await import('./wallet-service');
-      const validProductCode = 'X_FINANCE';
-      await expect(WalletService.createWallet(1, validProductCode, ''))
-        .rejects.toThrow('String must contain at least 1 character');
+
+      await expect(WalletService.getDepositAddress('EVM')).rejects.toThrow('Failed to fetch deposit address');
     });
 
-    it('should accept valid currency format (USDT_TRC20)', async () => {
+    it('throws when no token in localStorage', async () => {
+      localStorageMock.getItem.mockReturnValue(null);
       const { WalletService } = await import('./wallet-service');
-      const validProductCode = 'X_FINANCE';
-      try {
-        await WalletService.createWallet(1, validProductCode, 'USDT_TRC20');
-      } catch (e: any) {
-        expect(e.message).not.toContain('Currency must be one of');
-      }
+      await expect(WalletService.getDepositAddress('EVM')).rejects.toThrow('Not authenticated');
+    });
+  });
+
+  describe('getSupportedChains', () => {
+    it('returns chain list', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          chains: [
+            { chainCode: 'ETHEREUM', symbol: 'USDC', coinKey: 'k', minDeposit: '0.0001', decimals: 6 },
+            { chainCode: 'TRON', symbol: 'USDT', coinKey: 'k2', minDeposit: '0.000001', decimals: 6 },
+          ],
+        })
+      );
+      global.fetch = fetchMock as unknown as typeof fetch;
+      const { WalletService } = await import('./wallet-service');
+
+      const result = await WalletService.getSupportedChains();
+
+      expect(result.chains).toHaveLength(2);
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/wallet/supported-chains',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'Bearer mock-token' }),
+        })
+      );
     });
 
-    it('should accept all valid currency formats including USDC_BEP20 long format', async () => {
+    it('propagates backend error', async () => {
+      global.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({ message: 'REGISTRY_UNAVAILABLE' }, { ok: false, status: 503 })
+      ) as unknown as typeof fetch;
       const { WalletService } = await import('./wallet-service');
-      const validProductCode = 'X_FINANCE';
-      const validCurrencies = [
-        'USDT_ERC20',
-        'USDT_TRC20',
-        'USDT_BEP20',
-        'USDC_ERC20',
-        'USDC_TRC20',
-        'USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET' // 特例：长格式
-      ];
 
-      for (const currency of validCurrencies) {
-        try {
-          await WalletService.createWallet(1, validProductCode, currency);
-        } catch (e: any) {
-          expect(e.message).not.toContain('Currency must be one of');
-        }
-      }
-    });
-
-    it('should accept various valid product codes', async () => {
-      const { WalletService } = await import('./wallet-service');
-      const productCodes = ['X_FINANCE', 'DEFAULT', 'TEST', 'prod-123'];
-
-      for (const productCode of productCodes) {
-        try {
-          await WalletService.createWallet(1, productCode, 'USDT_TRC20');
-        } catch (e: any) {
-          expect(e.message).not.toContain('String must contain');
-        }
-      }
+      await expect(WalletService.getSupportedChains()).rejects.toThrow('REGISTRY_UNAVAILABLE');
     });
   });
 });

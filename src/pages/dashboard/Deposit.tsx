@@ -1,9 +1,143 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Mail, Clock, ExternalLink } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { Copy, AlertTriangle } from "lucide-react";
 
-const Deposit = () => {
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  WalletService,
+  type NetworkFamily,
+  type SupportedCoin,
+} from "@/lib/wallet-service";
+
+const NETWORK_FAMILIES: NetworkFamily[] = ["EVM", "TRON"];
+
+function DepositAddressCard({ networkFamily }: { networkFamily: NetworkFamily }) {
   const { t } = useTranslation();
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["deposit-address", networkFamily],
+    queryFn: () => WalletService.getDepositAddress(networkFamily),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
+  const handleCopy = async () => {
+    if (!data?.address) return;
+    try {
+      await navigator.clipboard.writeText(data.address);
+      toast.success(t("deposit.addressCard.copied"));
+    } catch {
+      toast.error(t("deposit.addressCard.copyFailed"));
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-32 w-full" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="border-destructive/30">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-destructive">
+            <AlertTriangle className="h-5 w-5" />
+            {t("deposit.addressCard.errorTitle")}
+          </CardTitle>
+          <CardDescription>
+            {error instanceof Error ? error.message : t("common.error")}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  if (!data) return null;
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("deposit.addressCard.label")}</CardTitle>
+          <CardDescription>{t("deposit.addressCard.hint")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-2 rounded-md border bg-muted/40 p-3 font-mono text-sm break-all">
+            <span data-testid="deposit-address" className="flex-1">
+              {data.address}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCopy}
+              aria-label={t("deposit.addressCard.copy")}
+            >
+              <Copy className="h-4 w-4" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("deposit.supportedCoins.title")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SupportedCoinsTable coins={data.supportedCoins} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function SupportedCoinsTable({ coins }: { coins: SupportedCoin[] }) {
+  const { t } = useTranslation();
+
+  if (coins.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("deposit.supportedCoins.empty")}
+      </p>
+    );
+  }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{t("deposit.supportedCoins.chain")}</TableHead>
+          <TableHead>{t("deposit.supportedCoins.coin")}</TableHead>
+          <TableHead className="text-right">
+            {t("deposit.supportedCoins.minDeposit")}
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {coins.map((coin) => (
+          <TableRow key={`${coin.chainCode}-${coin.coinKey}`}>
+            <TableCell>{coin.chainCode}</TableCell>
+            <TableCell>{coin.symbol}</TableCell>
+            <TableCell className="text-right font-mono">{coin.minDeposit}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+export default function Deposit() {
+  const { t } = useTranslation();
+  const [active, setActive] = useState<NetworkFamily>("EVM");
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -11,84 +145,26 @@ const Deposit = () => {
         <h1 className="text-3xl font-bold tracking-tight">{t("deposit.title")}</h1>
         <p className="text-muted-foreground mt-2">{t("deposit.description")}</p>
       </div>
-      
-      <div className="max-w-2xl mx-auto">
-        <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
-          <CardHeader className="text-center pb-2">
-            <div className="mx-auto mb-4 p-4 bg-primary/10 rounded-full w-fit">
-              <Clock className="w-12 h-12 text-primary" />
-            </div>
-            <CardTitle className="text-2xl">{t("deposit.comingSoon.title")}</CardTitle>
-            <CardDescription className="text-base mt-2">
-              {t("deposit.comingSoon.description")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6 pt-4">
-            <div className="bg-muted/30 rounded-lg p-6 space-y-4">
-              <h3 className="font-semibold text-lg">{t("deposit.comingSoon.howToDeposit")}</h3>
-              <div className="space-y-3">
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-sm font-bold shrink-0">1</div>
-                  <div>
-                    <p className="font-medium">{t("deposit.comingSoon.step1.title")}</p>
-                    <p className="text-sm text-muted-foreground">{t("deposit.comingSoon.step1.desc")}</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-sm font-bold shrink-0">2</div>
-                  <div>
-                    <p className="font-medium">{t("deposit.comingSoon.step2.title")}</p>
-                    <p className="text-sm text-muted-foreground">{t("deposit.comingSoon.step2.desc")}</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-sm font-bold shrink-0">3</div>
-                  <div>
-                    <p className="font-medium">{t("deposit.comingSoon.step3.title")}</p>
-                    <p className="text-sm text-muted-foreground">{t("deposit.comingSoon.step3.desc")}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
 
-            <div className="bg-gradient-to-br from-primary/10 to-primary/5 rounded-lg p-6 border border-primary/20">
-              <h3 className="font-semibold text-lg mb-4 flex items-center gap-2">
-                <Mail className="w-5 h-5" />
-                {t("deposit.comingSoon.contactUs")}
-              </h3>
-              <p className="text-muted-foreground mb-4">
-                {t("deposit.comingSoon.contactDesc")}
-              </p>
-              <div className="flex items-center justify-center gap-3 p-4 bg-background/80 rounded-lg border">
-                <Mail className="w-5 h-5 text-primary" />
-                <a 
-                  href="mailto:ops@moneradigital.com" 
-                  className="text-primary font-semibold text-lg hover:underline flex items-center gap-2"
-                >
-                  ops@moneradigital.com
-                  <ExternalLink className="w-4 h-4" />
-                </a>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="font-semibold mb-3">{t("deposit.comingSoon.supportedCoins")}</h3>
-              <div className="flex flex-wrap gap-2">
-                {["USDT", "USDC", "BTC", "ETH"].map((coin) => (
-                  <span 
-                    key={coin} 
-                    className="px-3 py-1.5 bg-secondary/50 rounded-full text-sm font-medium border"
-                  >
-                    {coin}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <Tabs
+        value={active}
+        onValueChange={(v) => setActive(v as NetworkFamily)}
+        className="w-full"
+      >
+        <TabsList>
+          {NETWORK_FAMILIES.map((family) => (
+            <TabsTrigger key={family} value={family}>
+              {t(`deposit.tabs.${family.toLowerCase()}`)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {NETWORK_FAMILIES.map((family) => (
+          <TabsContent key={family} value={family} className="mt-6">
+            <DepositAddressCard networkFamily={family} />
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
-};
+}
 
-export default Deposit;

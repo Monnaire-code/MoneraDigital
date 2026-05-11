@@ -3,131 +3,118 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
-import i18n from '@/i18n/config';
 import { I18nextProvider } from 'react-i18next';
+
+import i18n from '@/i18n/config';
 import Deposit from './Deposit';
 
-// Network options configuration
-const networkOptions = [
-  { value: "TRON", label: "TRON (TRC20)", name: "TRON" },
-  { value: "ETH", label: "Ethereum (ERC20)", name: "Ethereum" },
-  { value: "BSC", label: "BNB Smart Chain (BEP20)", name: "BNB Smart Chain" },
-];
+const renderDeposit = () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <I18nextProvider i18n={i18n}>
+          <Deposit />
+        </I18nextProvider>
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
+};
 
-describe('Deposit Network Display', () => {
-  describe('networkOptions', () => {
-    it('should have correct network names for display', () => {
-      const tron = networkOptions.find(n => n.value === "TRON");
-      expect(tron?.name).toBe("TRON");
-      expect(tron?.label).toBe("TRON (TRC20)");
+const mockClipboard = { writeText: vi.fn().mockResolvedValue(undefined) };
 
-      const eth = networkOptions.find(n => n.value === "ETH");
-      expect(eth?.name).toBe("Ethereum");
-      expect(eth?.label).toBe("Ethereum (ERC20)");
-
-      const bsc = networkOptions.find(n => n.value === "BSC");
-      expect(bsc?.name).toBe("BNB Smart Chain");
-      expect(bsc?.label).toBe("BNB Smart Chain (BEP20)");
+describe('Deposit page', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.setItem('token', 'mock-token');
+    Object.defineProperty(navigator, 'clipboard', {
+      value: mockClipboard,
+      configurable: true,
     });
 
-    it('should use name for warning message, not label', () => {
-      const selectedNetwork = networkOptions.find(n => n.value === "TRON");
-      const networkName = selectedNetwork ? selectedNetwork.name : "TRON";
-      const networkLabel = selectedNetwork ? selectedNetwork.label : "TRON";
-
-      // Name should be clean (no protocol info)
-      expect(networkName).toBe("TRON");
-      expect(networkName).not.toContain("TRC20");
-
-      // Label should include protocol info for dropdown
-      expect(networkLabel).toContain("TRC20");
-    });
-
-    it('should generate correct warning message', () => {
-      const selectedNetwork = networkOptions.find(n => n.value === "ETH");
-      const networkName = selectedNetwork ? selectedNetwork.name : "ETH";
-
-      const warningMessage = `请务必确认您选择的是 ${networkName} 网络。`;
-      expect(warningMessage).toBe("请务必确认您选择的是 Ethereum 网络。");
-      expect(warningMessage).not.toContain("ERC20");
-    });
-
-    it('should handle all supported networks', () => {
-      networkOptions.forEach(option => {
-        expect(option.value).toBeDefined();
-        expect(option.label).toBeDefined();
-        expect(option.name).toBeDefined();
-        expect(option.name).not.toContain("(");
-        expect(option.name).not.toContain(")");
-      });
-    });
+    global.fetch = vi.fn((url: string | URL | Request) => {
+      const u = typeof url === 'string' ? url : url.toString();
+      if (u.startsWith('/api/wallet/deposit-address?networkFamily=EVM')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            networkFamily: 'EVM',
+            address: '0xEVM00000000000000000000000000000000000001',
+            supportedCoins: [
+              { chainCode: 'ETHEREUM', symbol: 'USDC', coinKey: 'k1', minDeposit: '0.0001', decimals: 6 },
+            ],
+          }),
+        } as unknown as Response);
+      }
+      if (u.startsWith('/api/wallet/deposit-address?networkFamily=TRON')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            networkFamily: 'TRON',
+            address: 'TTRON00000000000000000000000000000001',
+            supportedCoins: [
+              { chainCode: 'TRON', symbol: 'USDT', coinKey: 'k2', minDeposit: '0.000001', decimals: 6 },
+            ],
+          }),
+        } as unknown as Response);
+      }
+      return Promise.reject(new Error(`Unexpected request to ${u}`));
+    }) as unknown as typeof fetch;
   });
 
-  describe('Deposit Component - Network Name Interpolation', () => {
-    let queryClient: QueryClient;
-
-    beforeEach(() => {
-      queryClient = new QueryClient({
-        defaultOptions: {
-          queries: { retry: false },
-        },
-      });
-
-      // Mock wallet API to return wallet info
-      global.fetch = vi.fn((url: string | URL | Request) => {
-        const urlString = typeof url === 'string' ? url : url.toString();
-        if (urlString === '/api/wallet/info') {
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            headers: new Headers(),
-            redirected: false,
-            json: () => Promise.resolve({
-              status: 'SUCCESS',
-              addresses: {
-                Valid: true,
-                String: JSON.stringify({
-                  TRON: 'TQsCtA7CvCEaZVGY17SkP4VN67JkXDLvgJ',
-                  ETH: '0x742d35Cc6634C0532925a3b844Bc08e7A3D8fCb8',
-                  BSC: '0x742d35Cc6634C0532925a3b844Bc08e7A3D8fCb8',
-                }),
-              },
-            }),
-          } as unknown as Response;
-        }
-        if (urlString.startsWith('/api/deposits')) {
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            headers: new Headers(),
-            redirected: false,
-            json: () => Promise.resolve({ deposits: [] }),
-          } as unknown as Response);
-        }
-        return Promise.reject(new Error(`Unexpected request to ${urlString}`));
-      });
-
-      localStorage.setItem('token', 'mock-token');
-    });
-
-    it('should not display placeholder {network} in warning message', async () => {
-      render(
-        <QueryClientProvider client={queryClient}>
-          <BrowserRouter>
-            <I18nextProvider i18n={i18n}>
-              <Deposit />
-            </I18nextProvider>
-          </BrowserRouter>
-        </QueryClientProvider>
+  it('renders the EVM tab address by default', async () => {
+    renderDeposit();
+    await waitFor(() => {
+      expect(screen.getByTestId('deposit-address')).toHaveTextContent(
+        '0xEVM00000000000000000000000000000000000001'
       );
+    });
+    expect(screen.getByText('USDC')).toBeInTheDocument();
+    expect(screen.getByText('ETHEREUM')).toBeInTheDocument();
+  });
 
-      await waitFor(() => {
-        // Check that {network} placeholder is NOT in the DOM
-        const htmlContent = document.body.innerHTML;
-        expect(htmlContent).not.toContain('{network}');
-      });
+  it('switches to TRON tab and loads the TRON address', async () => {
+    renderDeposit();
+    await waitFor(() => screen.getByTestId('deposit-address'));
+
+    const tronTab = screen.getByRole('tab', { name: /TRON/i });
+    await userEvent.click(tronTab);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('deposit-address')).toHaveTextContent(
+        'TTRON00000000000000000000000000000001'
+      );
+    });
+    expect(screen.getByText('USDT')).toBeInTheDocument();
+  });
+
+  it('copies the address when the copy button is clicked', async () => {
+    renderDeposit();
+    await waitFor(() => screen.getByTestId('deposit-address'));
+
+    const copyBtn = screen.getByRole('button', { name: /copy address/i });
+    await userEvent.click(copyBtn);
+
+    expect(mockClipboard.writeText).toHaveBeenCalledWith(
+      '0xEVM00000000000000000000000000000000000001'
+    );
+  });
+
+  it('shows an error card when the backend returns an error', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: () => Promise.resolve({ error: 'POOL_UNAVAILABLE' }),
+    } as unknown as Response) as unknown as typeof fetch;
+
+    renderDeposit();
+
+    await waitFor(() => {
+      expect(screen.getByText(/POOL_UNAVAILABLE/i)).toBeInTheDocument();
     });
   });
 });

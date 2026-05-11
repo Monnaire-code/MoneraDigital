@@ -852,6 +852,25 @@
     "selectAsset": "选择币种",
     "selectNetwork": "选择网络",
     "address": "充值地址",
+    "addressCard": {
+      "label": "充值地址",
+      "hint": "请将下表中支持的资产转入该地址。链上确认后将自动到账。",
+      "copy": "复制地址",
+      "copied": "地址已复制",
+      "copyFailed": "复制失败",
+      "errorTitle": "无法加载充值地址"
+    },
+    "tabs": {
+      "evm": "EVM（ETH / BSC）",
+      "tron": "TRON"
+    },
+    "supportedCoins": {
+      "title": "支持的资产",
+      "chain": "链",
+      "coin": "币种",
+      "minDeposit": "最小金额",
+      "empty": "当前网络暂未开放充值。"
+    },
     "copy": "复制地址",
     "copied": "已复制！",
     "minDeposit": "最小充值金额：10 USDT",
