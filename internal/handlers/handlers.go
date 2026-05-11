@@ -45,6 +45,8 @@ type Handler struct {
 	WealthService      *services.WealthService
 	IdempotencyService *services.IdempotencyService
 	ActivationService  *services.ActivationService
+	PoolManager        DepositPoolManager
+	WalletRegistry     ChainsRegistry
 	Validator          validator.Validator
 }
 
@@ -60,6 +62,18 @@ func NewHandler(auth *services.AuthService, lending *services.LendingService, ad
 		IdempotencyService: idempotency,
 		ActivationService:  activation,
 		Validator:          validator.NewValidator(),
+	}
+}
+
+// SetSafeheronDeps wires the optional Safeheron-backed deposit pool + chain
+// registry dependencies. Passing nil leaves the handler in the 503-fallback
+// state used by environments that haven't provisioned Safeheron yet.
+func (h *Handler) SetSafeheronDeps(pm DepositPoolManager, reg ChainsRegistry) {
+	if pm != nil {
+		h.PoolManager = pm
+	}
+	if reg != nil {
+		h.WalletRegistry = reg
 	}
 }
 

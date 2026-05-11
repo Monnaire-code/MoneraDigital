@@ -53,12 +53,20 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
 
   // Dynamic address routes: /api/addresses/123, /api/addresses/123/deactivate, /api/addresses/123/verify, etc.
 
-  // Wallet endpoints
+  // Wallet endpoints — Safeheron Phase 1
+  'GET /api/wallet/deposit-address': { requiresAuth: true, backendPath: '/api/wallet/deposit-address' },
+  'GET /api/wallet/supported-chains': { requiresAuth: true, backendPath: '/api/wallet/supported-chains' },
+
+  // Legacy wallet endpoints — backend returns 410 Gone. Kept here so the
+  // frontend rollout window gets a clear migration message instead of 404.
   'POST /api/wallet/create': { requiresAuth: true, backendPath: '/api/wallet/create' },
   'GET /api/wallet/info': { requiresAuth: true, backendPath: '/api/wallet/info' },
   'POST /api/wallet/addresses': { requiresAuth: true, backendPath: '/api/wallet/addresses' },
   'POST /api/wallet/address/incomeHistory': { requiresAuth: true, backendPath: '/api/wallet/address/incomeHistory' },
   'POST /api/wallet/address/get': { requiresAuth: true, backendPath: '/api/wallet/address/get' },
+
+  // Webhook endpoints (public, verified via Safeheron signature)
+  'POST /api/webhooks/safeheron': { requiresAuth: false, backendPath: '/api/webhooks/safeheron' },
 
   // Assets endpoints
   'GET /api/assets': { requiresAuth: true, backendPath: '/api/assets' },

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/spf13/viper"
 	"monera-digital/internal/cache"
@@ -15,7 +16,10 @@ import (
 	"monera-digital/internal/middleware"
 	"monera-digital/internal/repository"
 	"monera-digital/internal/repository/postgres"
+	"monera-digital/internal/safeheron"
 	"monera-digital/internal/services"
+	walletconfig "monera-digital/internal/wallet/config"
+	"monera-digital/internal/wallet/pool"
 )
 
 // ContainerOption 配置选项函数
@@ -38,6 +42,90 @@ func WithEncryption(key string) ContainerOption {
 		}
 		c.EncryptionService = encryptionService
 		c.TwoFAService = services.NewTwoFactorService(c.DB, encryptionService)
+	}
+}
+
+// WithSafeheronPool wires the Safeheron SDK client, chain registry, address
+// pool manager, and replenisher background goroutine. Missing env config logs a
+// warning and leaves the deposit-address endpoint returning 503 — useful in
+// environments where Safeheron credentials aren't provisioned yet.
+//
+// Callers must pass a long-lived ctx (typically the server lifecycle ctx); the
+// replenisher goroutine exits when ctx is cancelled. The SDK client's temp PEM
+// files are cleaned up via Container.Close().
+func WithSafeheronPool(ctx context.Context) ContainerOption {
+	return func(c *Container) {
+		baseURL := viper.GetString("SAFEHERON_API_BASE_URL")
+		apiKey := viper.GetString("SAFEHERON_API_KEY")
+		privKey := viper.GetString("SAFEHERON_PRIVATE_KEY_PEM")
+		platKey := viper.GetString("SAFEHERON_PLATFORM_PUBLIC_KEY_PEM")
+		whPub := viper.GetString("SAFEHERON_WEBHOOK_PUBLIC_KEY_PEM")
+		whPriv := viper.GetString("SAFEHERON_WEBHOOK_PRIVATE_KEY_PEM")
+
+		if apiKey == "" || privKey == "" || platKey == "" {
+			log.Printf("Safeheron pool disabled: SAFEHERON_API_KEY/PRIVATE_KEY/PLATFORM_PUBLIC_KEY not configured")
+			return
+		}
+
+		registry := walletconfig.NewRegistry(walletconfig.NewDBRepository(c.DB), 0)
+		if err := registry.Load(ctx); err != nil {
+			log.Printf("Safeheron pool disabled: registry load failed: %v", err)
+			return
+		}
+		registry.StartBackgroundRefresh(ctx)
+		c.WalletRegistry = registry
+
+		client, err := safeheron.NewClient(safeheron.Config{
+			BaseURL:              baseURL,
+			APIKey:               apiKey,
+			PrivateKeyPEM:        privKey,
+			PlatformPublicKeyPEM: platKey,
+			WebhookPublicKeyPEM:  whPub,
+			WebhookPrivateKeyPEM: whPriv,
+			RequestTimeoutMS:     30000,
+		})
+		if err != nil {
+			log.Printf("Safeheron pool disabled: client init failed: %v", err)
+			return
+		}
+		c.SafeheronClient = client
+
+		poolRepo := pool.NewRepository(c.DB)
+		c.PoolManager = pool.NewManager(poolRepo, client, registry)
+
+		interval := viper.GetDuration("POOL_REPLENISH_INTERVAL")
+		if interval <= 0 {
+			interval = 10 * time.Minute
+		}
+		low := map[string]int{
+			"EVM":  viper.GetInt("POOL_REPLENISH_LOW_EVM"),
+			"TRON": viper.GetInt("POOL_REPLENISH_LOW_TRON"),
+		}
+		target := map[string]int{
+			"EVM":  viper.GetInt("POOL_REPLENISH_TARGET_EVM"),
+			"TRON": viper.GetInt("POOL_REPLENISH_TARGET_TRON"),
+		}
+		// Sensible defaults if env not configured.
+		applyDefault(low, "EVM", 50)
+		applyDefault(low, "TRON", 50)
+		applyDefault(target, "EVM", 100)
+		applyDefault(target, "TRON", 100)
+
+		c.PoolReplenisher = pool.NewReplenisher(c.PoolManager, pool.ReplenisherConfig{
+			Interval: interval,
+			Low:      low,
+			Target:   target,
+		})
+		go c.PoolReplenisher.Run(ctx)
+
+		log.Printf("Safeheron pool enabled: replenisher interval=%s low=%v target=%v",
+			interval, low, target)
+	}
+}
+
+func applyDefault(m map[string]int, key string, def int) {
+	if v, ok := m[key]; !ok || v <= 0 {
+		m[key] = def
 	}
 }
 
@@ -75,10 +163,16 @@ type Container struct {
 	IdempotencyRepository *postgres.IdempotencyRepository
 
 	// 外部 API 客户端
-	CoreAPIClient *coreapi.Client
+	CoreAPIClient   *coreapi.Client
+	SafeheronClient safeheron.SafeheronClient
 
 	// 仓储
 	Repository *repository.Repository
+
+	// Safeheron Phase 1 模块
+	WalletRegistry *walletconfig.Registry
+	PoolManager    *pool.Manager
+	PoolReplenisher *pool.Replenisher
 
 	// 服务
 	AuthService       *services.AuthService

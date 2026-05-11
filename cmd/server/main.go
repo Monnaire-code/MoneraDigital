@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -82,10 +83,17 @@ func main() {
 		}
 	}
 
+	// Background context for long-lived workers (registry refresh,
+	// pool replenisher). Cancelled on process exit via signal handler
+	// (not yet wired — best-effort cleanup on SIGINT).
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+
 	// Initialize container
 	cont := container.NewContainer(database, cfg.JWTSecret,
 		container.WithEncryption(cfg.EncryptionKey),
-		container.WithRedisCache(redisCache))
+		container.WithRedisCache(redisCache),
+		container.WithSafeheronPool(bgCtx))
 
 	// Verify container
 	if err := cont.Verify(); err != nil {
