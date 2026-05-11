@@ -48,3 +48,14 @@ nohup.out
 test-artifacts/
 openspec/
 main
+
+# Go binaries
+/migrate
+
+# Coverage reports (vitest html + Go cover.out)
+coverage.html
+coverage.out
+
+# Test artifacts & Playwright reports
+/artifacts/
+/playwright-report/

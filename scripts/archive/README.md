@@ -18,9 +18,9 @@ git log --follow scripts/archive/<subdir>/<file>
 | 子目录 | 数量 | 内容 |
 |---|---|---|
 | [`sql/`](sql/) | 3 | 一次性 DB 修复 SQL / 包装 Shell |
-| [`tests/`](tests/) | 6 | 手写驱动测试脚本（不是 vitest/playwright 的 spec） |
-| [`verify/`](verify/) | 4 | 一次性诊断 / 验证 / 工具脚本 |
-| **合计** | **13** | |
+| [`tests/`](tests/) | 25 | 手写驱动测试脚本（2FA / auth / agent-browser / i18n / wealth / login / regression 等） |
+| [`verify/`](verify/) | 7 | 一次性诊断 / 验证 / mock server / TOTP 生成等工具 |
+| **合计** | **35** | |
 
 ### `sql/`
 

@@ -18,18 +18,19 @@ git log --follow docs/archive/<subdir>/<file>.md
 | 子目录 | 数量 | 内容主题 |
 |--------|------|---------|
 | [`2fa/`](2fa/) | 24 | 2FA 功能历次修复、QR 码、OTPAuth、Skip 流程、测试报告 |
-| [`auth/`](auth/) | 8 | 登录 401/405/500 错误修复、地址 401 修复 |
+| [`auth/`](auth/) | 9 | 登录 401/405/500 错误修复、地址 401 修复 |
 | [`deployment/`](deployment/) | 6 | Vercel/Replit 部署历次修复与指南 |
-| [`tests/`](tests/) | 22 | 各模块 E2E/集成测试报告（Core Account/Deposit/Lending/Withdrawal/Wealth/I18n 等） |
+| [`tests/`](tests/) | 28 | 各模块 E2E/集成测试报告（Core Account/Deposit/Lending/Withdrawal/Wealth/I18n 等）+ HTML/TXT 测试报告 |
 | [`fixes/`](fixes/) | 6 | 单点 bug 修复（500/404/Invalid Date/currency-format 等） |
 | [`encryption/`](encryption/) | 2 | 加密改动验证 |
 | [`i18n/`](i18n/) | 3 | JSON 命名约定统一（snake_case → camelCase）相关修复 |
 | [`architecture/`](architecture/) | 8 | 架构统一（Unified API Router/Serverless Function）、代码优化、schema 更新 |
 | [`usdc/`](usdc/) | 2 | USDC_BEP20 Core API 长格式相关排查 |
 | [`agent-browser/`](agent-browser/) | 3 | Agent Browser 接入与测试 |
-| [`misc/`](misc/) | 7 | 杂项（documentation/findings/progress/task_plan/前端安全审计/数据库修复 README） |
+| [`proposals/`](proposals/) | 7 | 旧 proposals/ 目录的 FIX_* 提案（405/Address/Duplicate/Withdrawal/2FA Status/Login 500） |
+| [`misc/`](misc/) | 8 | 杂项（documentation/findings/progress/task_plan/前端安全审计/数据库修复 README/ralph PRD JSON） |
 
-**合计**：91 个文件
+**合计**：106 个文件
 
 ---
 
