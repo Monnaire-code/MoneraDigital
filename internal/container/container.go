@@ -7,18 +7,22 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
+	"monera-digital/internal/alert"
 	"monera-digital/internal/cache"
 	"monera-digital/internal/config"
 	"monera-digital/internal/coreapi"
+	"monera-digital/internal/handlers"
 	"monera-digital/internal/middleware"
 	"monera-digital/internal/repository"
 	"monera-digital/internal/repository/postgres"
 	"monera-digital/internal/safeheron"
 	"monera-digital/internal/services"
 	walletconfig "monera-digital/internal/wallet/config"
+	"monera-digital/internal/wallet/deposit"
 	"monera-digital/internal/wallet/pool"
 )
 
@@ -120,7 +124,46 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 
 		log.Printf("Safeheron pool enabled: replenisher interval=%s low=%v target=%v",
 			interval, low, target)
+
+		// Alert sink (Feishu webhook + email recipients).
+		feishuURL := viper.GetString("ALERT_WEBHOOK_URL")
+		recipients := splitNonEmpty(viper.GetString("ALERT_EMAIL_RECIPIENTS"))
+		c.AlertService = alert.NewAlertService(feishuURL, recipients, c.EmailService)
+		c.PoolManager.SetAlertFunc(func(level, title, message string) {
+			c.AlertService.Send(level, title, map[string]string{"message": message})
+		})
+
+		// Deposit pipeline: webhook handler (sync) + worker (async).
+		depRepo := deposit.NewRepository(c.DB)
+		c.DepositEventRepo = depRepo
+		c.DepositPipeline = deposit.NewService(depRepo, registry, c.AlertService.Send)
+		c.SafeheronWebhookHandler = handlers.NewSafeheronWebhookHandler(client, depRepo)
+
+		workerInterval := viper.GetDuration("DEPOSIT_WORKER_INTERVAL")
+		if workerInterval <= 0 {
+			workerInterval = time.Second
+		}
+		c.DepositWorker = deposit.NewWorker(c.DepositPipeline, deposit.WorkerConfig{
+			Interval: workerInterval,
+		})
+		go c.DepositWorker.Run(ctx)
+
+		log.Printf("Safeheron deposit pipeline enabled: worker interval=%s", workerInterval)
 	}
+}
+
+func splitNonEmpty(csv string) []string {
+	if csv == "" {
+		return nil
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func applyDefault(m map[string]int, key string, def int) {
@@ -170,9 +213,14 @@ type Container struct {
 	Repository *repository.Repository
 
 	// Safeheron Phase 1 模块
-	WalletRegistry *walletconfig.Registry
-	PoolManager    *pool.Manager
-	PoolReplenisher *pool.Replenisher
+	WalletRegistry          *walletconfig.Registry
+	PoolManager             *pool.Manager
+	PoolReplenisher         *pool.Replenisher
+	DepositEventRepo        deposit.Repository
+	DepositPipeline         *deposit.Service
+	DepositWorker           *deposit.Worker
+	SafeheronWebhookHandler *handlers.SafeheronWebhookHandler
+	AlertService            *alert.AlertService
 
 	// 服务
 	AuthService       *services.AuthService

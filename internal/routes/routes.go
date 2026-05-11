@@ -89,6 +89,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 		webhooks := public.Group("/webhooks")
 		{
 			webhooks.POST("/core/deposit", h.HandleDepositWebhook)
+			if cont.SafeheronWebhookHandler != nil {
+				webhooks.POST("/safeheron", cont.SafeheronWebhookHandler.Receive)
+			}
 		}
 	}
 

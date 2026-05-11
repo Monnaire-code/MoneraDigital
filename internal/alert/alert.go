@@ -1,0 +1,111 @@
+package alert
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+)
+
+// AlertService dispatches Safeheron Phase 1 alerts (MANUAL_REVIEW / FAILED) to
+// Feishu webhook + an optional email distribution list. Both sinks are
+// best-effort: a failure on either is logged but does not propagate.
+type AlertService struct {
+	feishuURL  string
+	recipients []string
+	emailSvc   alertEmailer
+	httpClient *http.Client
+}
+
+// alertEmailer is the narrow EmailService surface used here so the AlertService
+// can be unit-tested without spinning up Resend.
+type alertEmailer interface {
+	SendActivationEmail(ctx context.Context, toEmail, code string) error
+}
+
+// NewAlertService configures a Feishu+email alert dispatcher.
+func NewAlertService(feishuURL string, recipients []string, email alertEmailer) *AlertService {
+	return &AlertService{
+		feishuURL:  feishuURL,
+		recipients: recipients,
+		emailSvc:   email,
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+	}
+}
+
+// Send fires an alert. Safe to pass an empty fields map. Level conventions:
+// "INFO" / "WARN" / "ERROR". Errors from the underlying sinks are logged only.
+func (a *AlertService) Send(level, title string, fields map[string]string) {
+	if a == nil {
+		return
+	}
+	msg := formatAlert(level, title, fields)
+	a.sendFeishu(msg)
+	a.sendEmail(title, msg)
+}
+
+func (a *AlertService) sendFeishu(msg string) {
+	if a.feishuURL == "" {
+		return
+	}
+	body, err := json.Marshal(map[string]any{
+		"msg_type": "text",
+		"content":  map[string]string{"text": msg},
+	})
+	if err != nil {
+		log.Printf("alert: feishu marshal failed: %v", err)
+		return
+	}
+	req, err := http.NewRequest(http.MethodPost, a.feishuURL, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("alert: feishu request build failed: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		log.Printf("alert: feishu send failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		log.Printf("alert: feishu non-2xx status: %d", resp.StatusCode)
+	}
+}
+
+func (a *AlertService) sendEmail(title, body string) {
+	if a.emailSvc == nil || len(a.recipients) == 0 {
+		return
+	}
+	// EmailService.SendActivationEmail repurposed as a generic single-arg
+	// sender for Phase 1 (Resend templates aren't wired yet). The "code"
+	// argument carries the alert body.
+	for _, addr := range a.recipients {
+		if err := a.emailSvc.SendActivationEmail(context.Background(), addr, body); err != nil {
+			log.Printf("alert: email send to %s failed: %v", addr, err)
+		}
+	}
+	_ = title // reserved for future subject formatting
+}
+
+// formatAlert renders a deterministic plain-text body. fields are sorted so
+// snapshot tests stay stable.
+func formatAlert(level, title string, fields map[string]string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "【Phase1告警】level=%s\n", level)
+	fmt.Fprintf(&b, "title=%s\n", title)
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s=%s\n", k, fields[k])
+	}
+	return b.String()
+}
