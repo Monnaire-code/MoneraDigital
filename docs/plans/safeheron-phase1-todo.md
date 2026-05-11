@@ -1,6 +1,6 @@
 # Safeheron Phase 1 任务清单
 
-> 配套文档: `tasks/plan.md`（含决策记录、依赖图、验收基线）
+> 配套文档: `docs/plans/safeheron-phase1-plan.md`（含决策记录、依赖图、验收基线）
 > SPEC: `docs/spec/safeheron-phase1-spec.md` v1.4
 > Last updated: 2026-05-11
 
@@ -107,7 +107,7 @@
 ### T1.8 — `.env.example` 更新
 
 - 文件：`.env.example`
-- 按 `tasks/plan.md` §3.10 追加全部新增变量，私钥占位符 `<paste-pem-here>`
+- 按 `docs/plans/safeheron-phase1-plan.md` §3.10 追加全部新增变量，私钥占位符 `<paste-pem-here>`
 - 注释每个变量的取值约束
 
 **DoD**：

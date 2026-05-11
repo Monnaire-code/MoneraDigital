@@ -3,7 +3,7 @@
 > Status: **Draft for review**
 > Last updated: 2026-05-11
 > 对应 SPEC: `docs/spec/safeheron-phase1-spec.md` v1.4
-> 任务清单: `tasks/todo.md`
+> 任务清单: `docs/plans/safeheron-phase1-todo.md`
 
 ---
 
@@ -277,7 +277,7 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 
 ## 5. 任务列表（详见 todo.md）
 
-任务编号、依赖、验收摘要详见 `tasks/todo.md`。本文档只汇总：
+任务编号、依赖、验收摘要详见 `docs/plans/safeheron-phase1-todo.md`。本文档只汇总：
 
 | Task | 名称 | 依赖 | 估时 |
 |------|------|------|------|

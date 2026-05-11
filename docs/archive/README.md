@@ -51,8 +51,8 @@ git log --follow docs/archive/<subdir>/<file>.md
 | 类型 | 路径 |
 |------|------|
 | 当前 Safeheron Phase 1 SPEC | `docs/spec/safeheron-phase1-spec.md` |
-| 当前实施计划 | `tasks/plan.md` |
-| 当前任务清单 | `tasks/todo.md` |
+| 当前实施计划 | `docs/plans/safeheron-phase1-plan.md` |
+| 当前任务清单 | `docs/plans/safeheron-phase1-todo.md` |
 | API 文档 | `docs/static-finance-api*.md`, `docs/openapi.yaml`, `docs/safeheron-wallet-openapi.yaml` |
-| PRD | `docs/static-finance-prd*.md`, `tasks/prd-*.md` |
+| PRD | `docs/static-finance-prd*.md`, `docs/tasks/prd-*.md` |
 | 架构审计 | `docs/ARCHITECT-AUDIT-REPORT*.md`, `docs/audit/` |
