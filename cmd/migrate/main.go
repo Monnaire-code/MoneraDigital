@@ -32,6 +32,15 @@ func main() {
 	migrator.Register(&migrations.CreateDepositsTable{})
 	migrator.Register(&migrations.AddFrozenUntilToWhitelist{})
 
+	// Safeheron Phase 1 migrations (015-021)
+	migrator.Register(&migrations.CreateChainsTable{})
+	migrator.Register(&migrations.CreateCoinsTable{})
+	migrator.Register(&migrations.CreateCoinChainsTable{})
+	migrator.Register(&migrations.CreateAddressPoolTable{})
+	migrator.Register(&migrations.CreateSafeheronWebhookEventsTable{})
+	migrator.Register(&migrations.ExtendDepositsForSafeheron{})
+	migrator.Register(&migrations.SeedSafeheronPhase1{})
+
 	if err := migrator.Migrate(); err != nil {
 		log.Fatal("Migration failed:", err)
 	}
