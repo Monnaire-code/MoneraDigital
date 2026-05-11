@@ -51,6 +51,7 @@ main
 
 # Go binaries
 /migrate
+/pool_init
 
 # Coverage reports (vitest html + Go cover.out)
 coverage.html
