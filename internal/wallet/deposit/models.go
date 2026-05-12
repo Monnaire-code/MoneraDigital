@@ -28,6 +28,10 @@ const (
 	ReasonAddressUnassigned = "ADDRESS_UNASSIGNED"
 	ReasonCoinUnsupported   = "COIN_UNSUPPORTED"
 	ReasonBelowMinAmount    = "BELOW_MIN_AMOUNT"
+	// ReasonInvalidCoinConfig surfaces when coin_chains.min_deposit_amount fails
+	// to parse — typically an operator typo. Routing such events to MANUAL_REVIEW
+	// prevents silently accepting deposits against a broken config. T7-S-4.
+	ReasonInvalidCoinConfig = "INVALID_COIN_CONFIG"
 )
 
 // JournalBizTypeDeposit identifies deposit ledger rows in account_journal.
@@ -50,7 +54,7 @@ type Event struct {
 // eventDetail). The Safeheron SDK returns this layer to us after verifying the
 // signature and AES-GCM decrypting the outer envelope.
 type PayloadEnvelope struct {
-	EventType   string            `json:"eventType"`
+	EventType   string             `json:"eventType"`
 	EventDetail PayloadEventDetail `json:"eventDetail"`
 }
 
@@ -76,16 +80,20 @@ type PayloadEventDetail struct {
 // guard against out-of-order webhooks (e.g. COMPLETED arriving before
 // CONFIRMING). Higher = later in the lifecycle.
 //
-// Values follow SPEC §4.6 / §6.4. Unknown statuses get 0 so they don't poison
-// a partially-credited deposit row.
+// Values locked by plan §3.1 / SPEC §4.6:
+//
+//	SUBMITTED=10, SIGNING=20, BROADCASTING=30, CONFIRMING=50,
+//	FAILED/CANCELLED/REJECTED=90, COMPLETED=100
+//
+// Unknown statuses get 0 so they don't poison a partially-credited row.
 func StatusRank(status string) int {
 	switch status {
-	case "CREATED":
-		return 5
 	case "SUBMITTED":
 		return 10
-	case "BROADCASTING":
+	case "SIGNING":
 		return 20
+	case "BROADCASTING":
+		return 30
 	case "CONFIRMING":
 		return 50
 	case "FAILED", "CANCELLED", "REJECTED":
@@ -100,6 +108,12 @@ func StatusRank(status string) int {
 // ErrNoPending signals that the worker found no PENDING event to process — the
 // happy-path "sleep until next tick" outcome.
 var ErrNoPending = errors.New("no pending event")
+
+// ErrMarkErrorFailed signals that processing failed AND the subsequent
+// MarkEventError call also failed, so the event remains PENDING. The worker
+// detects this with errors.Is and yields to its ticker interval to avoid
+// hot-looping on the same un-markable row. T7-I-5.
+var ErrMarkErrorFailed = errors.New("mark event error failed; event remains pending")
 
 // MarshalRawPayload helper for tests / fakes.
 func MarshalRawPayload(env PayloadEnvelope) ([]byte, error) {

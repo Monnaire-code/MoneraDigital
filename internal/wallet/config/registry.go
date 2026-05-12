@@ -182,12 +182,17 @@ func (r *Registry) SafeheronCoinKeysByFamily(family string) []string {
 	return keys
 }
 
+// AllChains returns the enabled chains. Disabled chains are filtered out so
+// the supported-chains endpoint never advertises a chain the ops team has
+// turned off (e.g. during incident response). T6-S-1.
 func (r *Registry) AllChains() []*Chain {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make([]*Chain, 0, len(r.chains))
 	for _, c := range r.chains {
-		result = append(result, c)
+		if c.Enabled {
+			result = append(result, c)
+		}
 	}
 	return result
 }

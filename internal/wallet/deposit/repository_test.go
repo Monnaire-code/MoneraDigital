@@ -259,27 +259,33 @@ func TestWriteJournal(t *testing.T) {
 func TestUpsertDeposit_NewRow(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
-	cols := []string{"id", "user_id", "safeheron_tx_key", "amount", "asset",
+	// R2-I-1: safeheron_coin_key column now scanned alongside safeheron_tx_key.
+	cols := []string{"id", "user_id", "safeheron_tx_key", "safeheron_coin_key",
+		"amount", "asset",
 		"chain_code", "coin_chain_id", "safeheron_status", "safeheron_sub_status",
 		"status_rank", "block_height", "block_hash", "status"}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO deposits").
 		WillReturnRows(sqlmock.NewRows(cols).
-			AddRow(1, 42, "tk-1", "1.5", "ETH", "ETHEREUM", 11,
+			AddRow(1, 42, "tk-1", "USDT_ERC20", "1.5", "ETH", "ETHEREUM", 11,
 				"COMPLETED", "CONFIRMED", 100, 0, "", "PENDING"))
 	mock.ExpectCommit()
 
 	r := NewRepository(db)
 	tx, _ := r.BeginTx(context.Background())
 	out, err := r.UpsertDeposit(context.Background(), tx, &DepositRow{
-		UserID: 42, SafeheronTxKey: "tk-1", Amount: "1.5", Asset: "ETH",
+		UserID: 42, SafeheronTxKey: "tk-1", SafeheronCoinKey: "USDT_ERC20",
+		Amount: "1.5", Asset: "ETH",
 		ChainCode: "ETHEREUM", CoinChainID: 11,
 		SafeheronStatus: "COMPLETED", SafeheronSubStatus: "CONFIRMED",
 		StatusRank: 100, Status: "PENDING",
 	})
 	if err != nil || out.ID != 1 {
 		t.Fatalf("unexpected: %+v %v", out, err)
+	}
+	if out.SafeheronCoinKey != "USDT_ERC20" {
+		t.Errorf("expected SafeheronCoinKey to round-trip through Scan, got %q", out.SafeheronCoinKey)
 	}
 	_ = tx.Commit()
 }

@@ -100,6 +100,36 @@ func TestRegistry_Load_Success(t *testing.T) {
 	}
 }
 
+// TestRegistry_AllChains_FiltersDisabled verifies disabled chains are not
+// exposed by AllChains so supported-chains never advertises a chain ops has
+// turned off. Regression: T6-S-1.
+func TestRegistry_AllChains_FiltersDisabled(t *testing.T) {
+	chains, coins, ccs := testData()
+	// Disable TRON
+	for _, c := range chains {
+		if c.Code == "TRON" {
+			c.Enabled = false
+		}
+	}
+	repo := &mockRepo{
+		loadAllFn: func(_ context.Context) ([]*Chain, []*Coin, []*CoinChain, error) {
+			return chains, coins, ccs, nil
+		},
+	}
+	reg := NewRegistry(repo, 60*time.Second)
+	if err := reg.Load(context.Background()); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	got := reg.AllChains()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 enabled chain, got %d", len(got))
+	}
+	if got[0].Code != "ETHEREUM" {
+		t.Errorf("expected ETHEREUM remaining, got %s", got[0].Code)
+	}
+}
+
 func TestRegistry_Load_ChainCoinReferences(t *testing.T) {
 	chains, coins, ccs := testData()
 	repo := &mockRepo{

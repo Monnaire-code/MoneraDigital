@@ -56,6 +56,54 @@ func TestWorker_DrainsUntilEmpty(t *testing.T) {
 	<-done
 }
 
+// TestWorker_BacksOffWhenMarkErrorFails simulates the pathological branch:
+// processEvent fails AND MarkEventError fails. The event stays PENDING.
+// Without back-off the worker would relock the same row in a tight loop,
+// burning CPU + DB connections. drainSafely must exit on ErrMarkErrorFailed
+// and yield to the ticker interval — observable as exactly one BeginTx call
+// instead of an unbounded number.
+// Regression: T7-I-5.
+func TestWorker_BacksOffWhenMarkErrorFails(t *testing.T) {
+	repo := newMockRepo()
+	repo.markErrorErr = errors.New("db down")
+	// One un-processable event (invalid JSON forces processEvent to fail).
+	// LockNextPendingEvent pops from repo.pending, but with markErrorErr the
+	// tx rolls back so subsequent LockNextPendingEvent in the same drainSafely
+	// would relock the same row in a real DB. Our mock pops, so we re-seed
+	// every Begin: simplest is to fail the BeginTx after the first call.
+	repo.pending = []*Event{{
+		ID:         1,
+		EventType:  "TRANSACTION_STATUS_CHANGED",
+		RawPayload: []byte(`{not-json`),
+	}}
+
+	w := NewWorker(NewService(repo, nil, nil), WorkerConfig{Interval: time.Second})
+	done := make(chan struct{})
+	go func() {
+		w.drainSafely(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// pass
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("drainSafely did not return after MarkErrorFailed — hot-loop bug")
+	}
+
+	repo.mu.Lock()
+	beginCalls := repo.beginTxCalls
+	errored := len(repo.errorIDs)
+	repo.mu.Unlock()
+
+	if beginCalls != 1 {
+		t.Errorf("drainSafely must exit after one BeginTx, got %d (hot-loop)", beginCalls)
+	}
+	if errored != 0 {
+		t.Errorf("MarkEventError must not have recorded the ID (it failed), got %d errored IDs", errored)
+	}
+}
+
 func TestWorker_PanicRecovered(t *testing.T) {
 	repo := newMockRepo()
 	repo.owners["0xdest"] = 42

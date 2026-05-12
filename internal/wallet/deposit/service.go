@@ -83,11 +83,12 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 
 	var alerts []alertPayload
 	if procErr := s.processEvent(ctx, tx, evt, &alerts); procErr != nil {
-		// Mark event as ERROR + reset balances. Best-effort: if MarkEventError
-		// itself fails we let the worker retry on next tick (the tx rolls
-		// back, the event stays PENDING).
+		// Mark event as ERROR + reset balances. If MarkEventError itself fails
+		// the event stays PENDING — wrap ErrMarkErrorFailed so the worker can
+		// detect this pathological branch and back off to its ticker interval
+		// (otherwise we'd hot-loop locking + failing the same row).
 		if markErr := s.repo.MarkEventError(ctx, tx, evt.ID, procErr.Error()); markErr != nil {
-			return true, fmt.Errorf("process event (and mark-error failed: %v): %w", markErr, procErr)
+			return true, fmt.Errorf("%w: mark-error=%v procErr=%v", ErrMarkErrorFailed, markErr, procErr)
 		}
 		if err := tx.Commit(); err != nil {
 			return true, fmt.Errorf("commit error state: %w", err)
@@ -147,7 +148,7 @@ func (s *Service) processEvent(ctx context.Context, tx Tx, evt *Event, alerts *[
 		return fmt.Errorf("lookup address owner: %w", err)
 	}
 	if !found {
-		return s.flagManualReview(ctx, tx, evt, &d, 0, "", 0, ReasonAddressUnassigned, alerts)
+		return s.flagManualReview(ctx, tx, evt, &d, 0, "", "", 0, ReasonAddressUnassigned, alerts)
 	}
 
 	var coinChain *walletconfig.CoinChain
@@ -157,33 +158,38 @@ func (s *Service) processEvent(ctx context.Context, tx Tx, evt *Event, alerts *[
 		}
 	}
 	if coinChain == nil {
-		return s.flagManualReview(ctx, tx, evt, &d, userID, "", 0, ReasonCoinUnsupported, alerts)
+		return s.flagManualReview(ctx, tx, evt, &d, userID, "", "", 0, ReasonCoinUnsupported, alerts)
 	}
 
 	amount, err := decimal.NewFromString(d.TxAmount)
 	if err != nil {
 		return fmt.Errorf("parse txAmount %q: %w", d.TxAmount, err)
 	}
-	minAmount, _ := decimal.NewFromString(coinChain.MinDepositAmount)
-	if amount.LessThan(minAmount) {
-		var symbol string
-		if coinChain.Coin != nil {
-			symbol = coinChain.Coin.Symbol
-		}
-		return s.flagManualReview(ctx, tx, evt, &d, userID, symbol, coinChain.ID, ReasonBelowMinAmount, alerts)
-	}
-
-	var coinSymbol string
+	var symbol string
 	if coinChain.Coin != nil {
-		coinSymbol = coinChain.Coin.Symbol
+		symbol = coinChain.Coin.Symbol
+	}
+	// T7-S-4: a malformed coin_chains.min_deposit_amount must NOT silently
+	// default to 0 — operators set the floor specifically to catch dust /
+	// misconfigured chains, and treating a typo as "no minimum" would let those
+	// deposits credit accounts. Route to MANUAL_REVIEW so ops can fix config.
+	minAmount, err := decimal.NewFromString(coinChain.MinDepositAmount)
+	if err != nil {
+		return s.flagManualReview(ctx, tx, evt, &d, userID, coinChain.ChainCode, symbol, coinChain.ID, ReasonInvalidCoinConfig, alerts)
+	}
+	if amount.LessThan(minAmount) {
+		return s.flagManualReview(ctx, tx, evt, &d, userID, coinChain.ChainCode, symbol, coinChain.ID, ReasonBelowMinAmount, alerts)
 	}
 
 	// UPSERT deposits with status_rank guard.
+	// R2-I-1: SafeheronCoinKey comes from the registry (canonical) — never the
+	// raw webhook payload — so the column reconciles against coin_chains.
 	row := &DepositRow{
 		UserID:             userID,
 		SafeheronTxKey:     d.TxKey,
+		SafeheronCoinKey:   coinChain.SafeheronCoinKey,
 		Amount:             d.TxAmount,
-		Asset:              coinSymbol,
+		Asset:              symbol,
 		ChainCode:          coinChain.ChainCode,
 		CoinChainID:        coinChain.ID,
 		SafeheronStatus:    d.TransactionStatus,
@@ -206,7 +212,7 @@ func (s *Service) processEvent(ctx context.Context, tx Tx, evt *Event, alerts *[
 		d.TransactionSubStatus == "CONFIRMED" &&
 		dep.Status == DepositStatusPending {
 
-		accountID, _, err := s.repo.FindOrCreateAccountForUpdate(ctx, tx, userID, coinSymbol)
+		accountID, _, err := s.repo.FindOrCreateAccountForUpdate(ctx, tx, userID, symbol)
 		if err != nil {
 			return fmt.Errorf("lock account: %w", err)
 		}
@@ -231,8 +237,12 @@ func (s *Service) processEvent(ctx context.Context, tx Tx, evt *Event, alerts *[
 		return nil
 	}
 
-	// Failed terminal branch.
-	if isFailedStatus(d.TransactionStatus) && dep.Status != DepositStatusCredited && dep.Status != DepositStatusFailed {
+	// Failed terminal branch. T7-S-2: also skip MANUAL_REVIEW so the failure
+	// signal doesn't overwrite the operator's investigation context.
+	if isFailedStatus(d.TransactionStatus) &&
+		dep.Status != DepositStatusCredited &&
+		dep.Status != DepositStatusFailed &&
+		dep.Status != DepositStatusManualReview {
 		if err := s.repo.MarkDepositFailed(ctx, tx, dep.ID, d.TransactionSubStatus); err != nil {
 			return fmt.Errorf("mark failed: %w", err)
 		}
@@ -243,7 +253,7 @@ func (s *Service) processEvent(ctx context.Context, tx Tx, evt *Event, alerts *[
 				"userId":            fmt.Sprintf("%d", userID),
 				"txKey":             d.TxKey,
 				"amount":            d.TxAmount,
-				"symbol":            coinSymbol,
+				"symbol":            symbol,
 				"transactionStatus": d.TransactionStatus,
 				"reason":            d.TransactionSubStatus,
 			},
@@ -261,6 +271,7 @@ func (s *Service) flagManualReview(
 	evt *Event,
 	d *PayloadEventDetail,
 	userID int,
+	chainCode string,
 	symbol string,
 	coinChainID int,
 	reason string,
@@ -269,12 +280,22 @@ func (s *Service) flagManualReview(
 	// Insert a placeholder deposits row so the operator UI has something to
 	// link to. user_id may be 0 when the address is unassigned — that's the
 	// MANUAL_REVIEW signal the operator dashboard filters on.
+	//
+	// T7-S-1: chain_code stays empty when the registry can't resolve the
+	// coinKey — the previous code stored d.CoinKey into chain_code, which
+	// confused operators (coinKey != chain code). The original coinKey is
+	// preserved in the alert payload below.
+	//
+	// R2-I-1: SafeheronCoinKey gets the raw webhook coinKey (signature-verified)
+	// so ops can pivot from a MANUAL_REVIEW row back to the originating coin —
+	// even when the registry can't resolve it.
 	row := &DepositRow{
 		UserID:             userID,
 		SafeheronTxKey:     d.TxKey,
+		SafeheronCoinKey:   d.CoinKey,
 		Amount:             d.TxAmount,
 		Asset:              symbol,
-		ChainCode:          d.CoinKey, // best-effort when registry miss
+		ChainCode:          chainCode,
 		CoinChainID:        coinChainID,
 		SafeheronStatus:    d.TransactionStatus,
 		SafeheronSubStatus: d.TransactionSubStatus,

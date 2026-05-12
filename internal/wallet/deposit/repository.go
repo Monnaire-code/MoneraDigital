@@ -40,6 +40,7 @@ type DepositRow struct {
 	ID                 int64
 	UserID             int
 	SafeheronTxKey     string
+	SafeheronCoinKey   string // registry.SafeheronCoinKey — written so deposits ⇆ coin_chains reconciles. R2-I-1.
 	Amount             string
 	Asset              string
 	ChainCode          string
@@ -149,6 +150,7 @@ func (r *DBRepository) UpsertDeposit(ctx context.Context, tx Tx, d *DepositRow) 
 		 ON CONFLICT (safeheron_tx_key)
 		   WHERE safeheron_tx_key IS NOT NULL
 		 DO UPDATE SET
+		   safeheron_coin_key   = EXCLUDED.safeheron_coin_key,
 		   safeheron_status     = EXCLUDED.safeheron_status,
 		   safeheron_sub_status = EXCLUDED.safeheron_sub_status,
 		   status_rank          = EXCLUDED.status_rank,
@@ -158,20 +160,22 @@ func (r *DBRepository) UpsertDeposit(ctx context.Context, tx Tx, d *DepositRow) 
 		   tx_hash              = COALESCE(EXCLUDED.tx_hash, deposits.tx_hash),
 		   updated_at           = NOW()
 		 WHERE deposits.status_rank <= EXCLUDED.status_rank
-		 RETURNING id, user_id, COALESCE(safeheron_tx_key, ''), amount, asset,
+		 RETURNING id, user_id, COALESCE(safeheron_tx_key, ''),
+		           COALESCE(safeheron_coin_key, ''), amount, asset,
 		           COALESCE(chain_code, ''), COALESCE(coin_chain_id, 0),
 		           COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
 		           status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
 		           status`,
 		d.UserID, nullableTxHash(d.TxHash, d.SafeheronTxKey), d.Amount, d.Asset, d.ChainCode,
-		d.SafeheronTxKey, "", d.ChainCode, d.CoinChainID,
+		d.SafeheronTxKey, d.SafeheronCoinKey, d.ChainCode, d.CoinChainID,
 		d.SafeheronStatus, d.SafeheronSubStatus, d.StatusRank,
 		d.BlockHeight, d.BlockHash, d.Status,
 		d.FromAddress, d.ToAddress,
 	)
 	out := &DepositRow{}
 	if err := row.Scan(
-		&out.ID, &out.UserID, &out.SafeheronTxKey, &out.Amount, &out.Asset,
+		&out.ID, &out.UserID, &out.SafeheronTxKey, &out.SafeheronCoinKey,
+		&out.Amount, &out.Asset,
 		&out.ChainCode, &out.CoinChainID,
 		&out.SafeheronStatus, &out.SafeheronSubStatus,
 		&out.StatusRank, &out.BlockHeight, &out.BlockHash, &out.Status,
@@ -186,7 +190,8 @@ func (r *DBRepository) UpsertDeposit(ctx context.Context, tx Tx, d *DepositRow) 
 
 func (r *DBRepository) fetchDepositByTxKey(ctx context.Context, tx *sql.Tx, txKey string) (*DepositRow, error) {
 	row := tx.QueryRowContext(ctx,
-		`SELECT id, user_id, COALESCE(safeheron_tx_key, ''), amount, asset,
+		`SELECT id, user_id, COALESCE(safeheron_tx_key, ''),
+		        COALESCE(safeheron_coin_key, ''), amount, asset,
 		        COALESCE(chain_code, ''), COALESCE(coin_chain_id, 0),
 		        COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
 		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
@@ -196,7 +201,8 @@ func (r *DBRepository) fetchDepositByTxKey(ctx context.Context, tx *sql.Tx, txKe
 	)
 	out := &DepositRow{}
 	err := row.Scan(
-		&out.ID, &out.UserID, &out.SafeheronTxKey, &out.Amount, &out.Asset,
+		&out.ID, &out.UserID, &out.SafeheronTxKey, &out.SafeheronCoinKey,
+		&out.Amount, &out.Asset,
 		&out.ChainCode, &out.CoinChainID,
 		&out.SafeheronStatus, &out.SafeheronSubStatus,
 		&out.StatusRank, &out.BlockHeight, &out.BlockHash, &out.Status,

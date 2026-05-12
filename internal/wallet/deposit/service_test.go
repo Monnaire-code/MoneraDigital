@@ -40,9 +40,11 @@ type mockRepo struct {
 		id  int64
 		msg string
 	}
+	markErrorErr error // forces MarkEventError to fail (T7-I-5)
 
 	commitCalls   int
 	rollbackCalls int
+	beginTxCalls  int // tracks how many tx were begun (T7-I-5 hot-loop check)
 
 	// Force ProcessOne to error before MarkEventDone runs.
 	forceErrorAfter string
@@ -59,6 +61,9 @@ func newMockRepo() *mockRepo {
 }
 
 func (m *mockRepo) BeginTx(_ context.Context) (Tx, error) {
+	m.mu.Lock()
+	m.beginTxCalls++
+	m.mu.Unlock()
 	if m.beginTxErr != nil {
 		return nil, m.beginTxErr
 	}
@@ -126,6 +131,7 @@ func (m *mockRepo) UpsertDeposit(_ context.Context, _ Tx, d *DepositRow) (*Depos
 			merged.StatusRank = d.StatusRank
 			merged.BlockHeight = d.BlockHeight
 			merged.BlockHash = d.BlockHash
+			merged.SafeheronCoinKey = d.SafeheronCoinKey // R2-I-1: mirror SQL DO UPDATE SET
 			m.deposits[d.SafeheronTxKey] = &merged
 			return &merged, nil
 		}
@@ -218,6 +224,9 @@ func (m *mockRepo) MarkEventDone(_ context.Context, _ Tx, id int64) error {
 func (m *mockRepo) MarkEventError(_ context.Context, _ Tx, id int64, msg string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.markErrorErr != nil {
+		return m.markErrorErr
+	}
 	m.errorIDs = append(m.errorIDs, struct {
 		id  int64
 		msg string
@@ -240,6 +249,7 @@ func newTestRegistry(symbol, chainCode, safeheronKey, minAmount string, coinID i
 				ID:               coinID,
 				ChainCode:        chainCode,
 				Coin:             &walletconfig.Coin{ID: coinID, Symbol: symbol},
+				SafeheronCoinKey: safeheronKey,
 				MinDepositAmount: minAmount,
 			},
 		},
@@ -351,6 +361,43 @@ func TestProcessOne_CompletedConfirmedCredits(t *testing.T) {
 	}
 	if len(*alerts) != 0 {
 		t.Fatalf("happy path should not alert, got %+v", *alerts)
+	}
+}
+
+// TestProcessOne_PopulatesSafeheronCoinKey verifies that deposits rows carry
+// the registry's safeheron_coin_key so the deposits table can be reconciled
+// against coin_chains.safeheron_coin_key for dashboard / ops reporting.
+// Regression: R2-I-1 (continuation of T7-I-2) — repository previously stored
+// an empty string for this column unconditionally.
+func TestProcessOne_PopulatesSafeheronCoinKey(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	reg := newTestRegistry("USDT", "ETHEREUM", "USDT_ERC20", "1", 4)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-coin-key",
+			CoinKey:              "USDT_ERC20",
+			TxAmount:             "10",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	row := repo.deposits["tx-coin-key"]
+	if row == nil {
+		t.Fatal("expected deposit row to be written")
+	}
+	if row.SafeheronCoinKey != "USDT_ERC20" {
+		t.Errorf("deposit.SafeheronCoinKey must equal registry coin key for reconciliation; got %q want %q",
+			row.SafeheronCoinKey, "USDT_ERC20")
 	}
 }
 
@@ -543,6 +590,47 @@ func TestProcessOne_BelowMinAmount_FlagsManualReview(t *testing.T) {
 	}
 }
 
+// TestProcessOne_InvalidMinAmountConfig_FlagsManualReview verifies that a
+// malformed coin_chains.min_deposit_amount (e.g. operator typo) routes the
+// event to MANUAL_REVIEW instead of silently defaulting to 0 (which would
+// credit accounts despite a broken config). Regression: T7-S-4.
+func TestProcessOne_InvalidMinAmountConfig_FlagsManualReview(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	// MinDepositAmount is non-numeric — decimal.NewFromString returns an error.
+	reg := newTestRegistry("ETH", "ETHEREUM", "K", "not-a-number", 11)
+	alertFn, alerts := newAlertCollector()
+	svc := newSvc(t, repo, reg, alertFn)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-1",
+			CoinKey:              "K",
+			TxAmount:             "0.5",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(*alerts))
+	}
+	if (*alerts)[0].fields["reason"] != ReasonInvalidCoinConfig {
+		t.Errorf("expected INVALID_COIN_CONFIG alert, got %+v", *alerts)
+	}
+	if len(repo.journalCalls) != 0 {
+		t.Errorf("invalid min_amount must NOT credit account; got %d journal entries", len(repo.journalCalls))
+	}
+	if len(repo.manualUpdates) != 1 {
+		t.Errorf("expected deposit marked MANUAL_REVIEW, got %v", repo.manualUpdates)
+	}
+}
+
 // ------------------- failed-terminal branch -------------------
 
 func TestProcessOne_FailedStatusTransitionsAndAlerts(t *testing.T) {
@@ -667,14 +755,56 @@ func TestProcessOne_DepositErrorMarksEventErrorAndReturnsErr(t *testing.T) {
 	}
 }
 
+// TestProcessOne_MarkEventErrorFailWrapsSentinel verifies that when MarkEventError
+// itself fails (the most pathological branch: DB outage during error-handling),
+// ProcessOne returns an error wrapping ErrMarkErrorFailed so the worker can back
+// off to its ticker interval instead of hot-looping on the same PENDING row.
+// Regression: T7-I-5.
+func TestProcessOne_MarkEventErrorFailWrapsSentinel(t *testing.T) {
+	repo := newMockRepo()
+	repo.pending = []*Event{{
+		ID:         1,
+		EventType:  "TRANSACTION_STATUS_CHANGED",
+		RawPayload: []byte(`not-json`), // forces unmarshal failure inside processEvent
+	}}
+	repo.markErrorErr = errors.New("db connection dropped")
+
+	svc := NewService(repo, nil, nil)
+	processed, err := svc.ProcessOne(context.Background())
+
+	if !processed {
+		t.Errorf("expected processed=true so worker accounts the attempt")
+	}
+	if err == nil {
+		t.Fatalf("expected error when MarkEventError fails")
+	}
+	if !errors.Is(err, ErrMarkErrorFailed) {
+		t.Errorf("err must wrap ErrMarkErrorFailed for worker back-off detection, got: %v", err)
+	}
+}
+
+// TestStatusRank verifies the monotonic ordering of Safeheron transactionStatus
+// values. Locked by plan §3.1 / SPEC §4.6:
+//
+//	SUBMITTED=10, SIGNING=20, BROADCASTING=30, CONFIRMING=50,
+//	FAILED/CANCELLED/REJECTED=90, COMPLETED=100, unknown→0.
+//
+// "CREATED" is NOT a Safeheron transactionStatus and must fall through to 0
+// so it never poisons a partially-credited row.
 func TestStatusRank(t *testing.T) {
 	cases := []struct {
 		in  string
 		out int
 	}{
-		{"CREATED", 5}, {"SUBMITTED", 10}, {"BROADCASTING", 20},
-		{"CONFIRMING", 50}, {"FAILED", 90}, {"CANCELLED", 90}, {"REJECTED", 90},
-		{"COMPLETED", 100}, {"UNKNOWN", 0}, {"", 0},
+		{"SUBMITTED", 10},
+		{"SIGNING", 20},
+		{"BROADCASTING", 30},
+		{"CONFIRMING", 50},
+		{"FAILED", 90}, {"CANCELLED", 90}, {"REJECTED", 90},
+		{"COMPLETED", 100},
+		{"CREATED", 0}, // not part of plan §3.1, treated as unknown
+		{"UNKNOWN", 0},
+		{"", 0},
 	}
 	for _, c := range cases {
 		if got := StatusRank(c.in); got != c.out {

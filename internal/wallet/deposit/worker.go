@@ -2,6 +2,7 @@ package deposit
 
 import (
 	"context"
+	"errors"
 	"log"
 	"runtime/debug"
 	"time"
@@ -73,9 +74,13 @@ func (w *Worker) drainSafely(ctx context.Context) {
 		processed, err := w.svc.ProcessOne(ctx)
 		if err != nil {
 			log.Printf("deposit worker process error: %v", err)
-			// Treat as "continue draining" — the failed event is already
-			// marked ERROR in its own tx, so the next iteration picks the
-			// next PENDING row.
+			// T7-I-5: if MarkEventError itself failed the row stays PENDING.
+			// Yield to the ticker interval so we don't hot-loop relocking it.
+			if errors.Is(err, ErrMarkErrorFailed) {
+				return
+			}
+			// Other errors mean the event was committed in ERROR state — safe
+			// to continue draining the next PENDING row.
 			continue
 		}
 		if !processed {
