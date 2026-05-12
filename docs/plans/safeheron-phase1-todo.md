@@ -1,8 +1,8 @@
 # Safeheron Phase 1 任务清单
 
 > 配套文档: `docs/plans/safeheron-phase1-plan.md`（含决策记录、依赖图、验收基线）
-> SPEC: `docs/spec/safeheron-phase1-spec.md` v1.4
-> Last updated: 2026-05-11
+> SPEC: `docs/spec/safeheron-phase1-spec.md` v1.5
+> Last updated: 2026-05-12（v1.5 KYT 合规筛查补充）
 
 任务格式约定：
 - **依赖**：必须先完成的 task ID
@@ -11,7 +11,21 @@
 
 ---
 
-## T1. 数据库迁移 + Seed
+## 施工现状（2026-05-12）
+
+| 任务 | 状态 | 说明 |
+|------|------|------|
+| **T1 ~ T9** | ✅ **已完成并合并到 dev 分支** | 见 `git log --oneline | grep "feat(safeheron)"`：T2/T3 SDK Adapter + Registry、T4/T5 Pool Init + Manager + Replenisher、T6 用户 API、T7 Webhook 同步 + 异步 worker、T8 前端切换、T9 充值页面 UX 重构都已 commit |
+| **T10** | 🚧 **本次待施工** | v1.5 spec 新增的 KYT 合规筛查，明天接手 |
+| **T11** | ⏸️ 待 T10 完成后验收 | Sandbox 端到端 + 灰度上线（原 T10 顺延） |
+
+> **施工者必读**：T10 改造 `internal/wallet/deposit/service.go` 现有的 `ProcessOne` 方法，**这是已上线代码**（仅本地 dev 环境，prod 还未上线），改造时必须保证原 T7 测试用例（`service_test.go`）全部不退化（见 T10.9）。
+
+> **本地数据库状态**：`monera_local` 已经跑过 migration 015，开发者本地需要手动 ALTER 补 KYT 字段（T10.1 给出命令）；prod 还未跑过任何 Phase 1 migration，部署时 015 一次到位。
+
+---
+
+## T1. 数据库迁移 + Seed [✅ 已完成]
 
 **依赖**：无
 **估时**：1d
@@ -116,7 +130,7 @@
 
 ---
 
-## T2. Safeheron SDK Adapter
+## T2. Safeheron SDK Adapter [✅ 已完成]
 
 **依赖**：无（但 §3.2 的 SDK 决策见 plan.md 已锁定）
 **估时**：0.5d
@@ -205,7 +219,7 @@ func (c *Client) WebhookConvert(rawBody []byte) (plaintext string, err error)
 
 ---
 
-## T3. Registry
+## T3. Registry [✅ 已完成]
 
 **依赖**：T1
 **估时**：0.5d
@@ -259,7 +273,7 @@ func (r *Repo) LoadAll(ctx) (chains []*Chain, coins []*Coin, coinChains []*CoinC
 
 ---
 
-## T4. `cmd/pool_init/main.go` 预生成脚本
+## T4. `cmd/pool_init/main.go` 预生成脚本 [✅ 已完成]
 
 **依赖**：T1, T2, T3
 **估时**：0.5d
@@ -288,7 +302,7 @@ func (r *Repo) LoadAll(ctx) (chains []*Chain, coins []*Coin, coinChains []*CoinC
 
 ---
 
-## T5. Pool Manager + Replenisher
+## T5. Pool Manager + Replenisher [✅ 已完成]
 
 **依赖**：T1, T2, T3, T4
 **估时**：0.5d
@@ -355,7 +369,7 @@ func (r *Replenisher) Run(ctx context.Context) {
 
 ---
 
-## T6. 用户侧 API + Vercel 路由
+## T6. 用户侧 API + Vercel 路由 [✅ 已完成]
 
 **依赖**：T5
 **估时**：0.5d
@@ -418,7 +432,7 @@ r.GET("/api/wallet/supported-chains", authMiddleware, walletHandler.GetSupported
 
 ---
 
-## T7. Webhook 处理（同步 + 异步 worker）
+## T7. Webhook 处理（同步 + 异步 worker） [✅ 已完成]
 
 **依赖**：T1, T2, T3, T6
 **估时**：1.5d
@@ -578,7 +592,7 @@ func (a *AlertService) Send(ctx, level, title, fields map[string]string) error
 
 ---
 
-## T8. 前端切换
+## T8. 前端切换 [✅ 已完成]
 
 **依赖**：T6, T7
 **估时**：0.5d
@@ -646,7 +660,7 @@ i18n（同步加到 `en.json` + `zh.json`）：
 
 ---
 
-## T9. 充值页面 UX 重构（选币 → 选链 → 展示地址）
+## T9. 充值页面 UX 重构（选币 → 选链 → 展示地址） [✅ 已完成]
 
 **依赖**：T6（deposit-address 端点）, T8（前端 service + Deposit 页面）
 **估时**：1d
@@ -815,15 +829,1150 @@ function explorerTxUrl(explorerUrl, txHash): string
 
 ---
 
-## T10. Sandbox 端到端 + 灰度上线
+## T10. KYT 合规筛查（v1.5 spec 新增）
 
-> **注**：原 T9，2026-05-12 T9 充值页面 UX 重构插入后顺延为 T10。子任务 T9.X → T10.X。
+**依赖**：T7（webhook 入账闭环）；建议在 T9 之后施工以避免与前端冲突
+**估时**：1.5d
+**输出**：015 migration 追加 AML 字段 + `ProcessOne` 两阶段重构 + KytReport adapter + AML_KYT_ALERT webhook 分支 + 超时兜底扫描 + 前端文案
 
-**依赖**：T1-T9
+**全局约束**（plan.md §3.11 + §4 D-31~D-40）：
+- DB 变动**全部并入 `015_safeheron_phase1.go`**，**不**新增 016+ migration（用户决策）
+- ALTER SQL 用 `ADD COLUMN IF NOT EXISTS` 保持幂等（防 migrator 中途失败重跑）
+- 本地 monera_local 数据库已经跑过 015，由开发者手动 ALTER 补字段（用户授权直接 SQL）
+- 拆 `ProcessOne` 为三事务结构：(T-α) 锁事件 → (T-β KYT API，事务外) → (T-γ 入账/MR + 标 DONE)
+- KYT 失败 / API error 不标 DONE，事件回 PENDING 自动重试，超过 `KYT_ORPHAN_ALERT_MAX_RETRY=100` 转 MR
+- KYT API mirror 类型放 `internal/safeheron/types.go`，**不暴露 SDK 类型**
+- **代码注释要详细**：明天用户去公司电脑配 Safeheron 密钥实测，注释清楚减少沟通歧义
+
+### T10.1 — Migration 015 追加 AML 字段（不新增文件）
+
+**目标**：本地手动 ALTER + 改 `015_safeheron_phase1.go` 让生产首次执行一次到位。
+
+**文件**：
+- 修改 `internal/migration/migrations/015_safeheron_phase1.go`
+
+**Up 追加 SQL**（在现有 ALTER TABLE deposits 之后）：
+```sql
+-- T10 KYT 合规筛查字段（v1.5 spec 新增）
+ALTER TABLE deposits
+    ADD COLUMN IF NOT EXISTS aml_screening_state VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS aml_risk_level      VARCHAR(8),
+    ADD COLUMN IF NOT EXISTS aml_evaluated_at    TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS aml_list            JSONB;
+
+-- KYT_PENDING 状态: 链上 COMPLETED 但 KYT 评估未结束
+ALTER TABLE deposits DROP CONSTRAINT IF EXISTS ck_deposits_status;
+ALTER TABLE deposits ADD CONSTRAINT ck_deposits_status
+    CHECK (status IN ('PENDING', 'CHAIN_VERIFYING', 'CHAIN_VERIFIED',
+                      'KYT_PENDING',
+                      'CREDITED', 'FAILED', 'MANUAL_REVIEW'));
+
+-- 超时扫描索引（仅 KYT_PENDING 行，节省空间）
+CREATE INDEX IF NOT EXISTS idx_deposits_kyt_pending
+    ON deposits(updated_at)
+    WHERE status = 'KYT_PENDING';
+```
+
+**Down 追加 SQL**：DROP 4 个 column + DROP index + 恢复原 CHECK 约束。
+
+**本地数据库手动补字段命令**（开发者本地执行）：
+```bash
+psql "$LOCAL_DATABASE_URL" <<'EOF'
+ALTER TABLE deposits
+    ADD COLUMN IF NOT EXISTS aml_screening_state VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS aml_risk_level      VARCHAR(8),
+    ADD COLUMN IF NOT EXISTS aml_evaluated_at    TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS aml_list            JSONB;
+ALTER TABLE deposits DROP CONSTRAINT IF EXISTS ck_deposits_status;
+ALTER TABLE deposits ADD CONSTRAINT ck_deposits_status
+    CHECK (status IN ('PENDING','CHAIN_VERIFYING','CHAIN_VERIFIED','KYT_PENDING','CREDITED','FAILED','MANUAL_REVIEW'));
+CREATE INDEX IF NOT EXISTS idx_deposits_kyt_pending ON deposits(updated_at) WHERE status='KYT_PENDING';
+EOF
+```
+
+**DoD**：
+- [ ] `psql $LOCAL_DATABASE_URL -c "\d deposits"` 显示 4 个新字段
+- [ ] CHECK 约束包含 `KYT_PENDING`
+- [ ] `psql -c "SELECT indexdef FROM pg_indexes WHERE indexname='idx_deposits_kyt_pending'"` 含 `WHERE` 子句
+- [ ] 重跑 015 migration（幂等）不报错
+- [ ] Down 能干净回滚
+
+### T10.2 — Safeheron Adapter 扩展 KytReport
+
+**目标**：项目内 mirror KYT 类型 + adapter 包装 SDK `ComplianceApi.KytReport()`。
+
+**SDK 真实签名（已实测确认，无需明天再验）**：
+
+源码位置：`/Users/linden/workbench/src/github.com/safeheron/safeheron-api-sdk-go/safeheron/api/compliance_api.go`
+
+```go
+// SDK 源码原文：
+package api
+
+type ComplianceApi struct {
+    Client safeheron.Client   // 注意是 safeheron 包的 Client, 不是 *Client
+}
+
+type KytReportRequest struct {
+    TxKey         string `json:"txKey,omitempty"`
+    CustomerRefId string `json:"customerRefId,omitempty"`
+}
+
+type KytReportResponse struct {
+    TxKey                      string      `json:"txKey"`
+    CustomerRefId              string      `json:"customerRefId"`
+    AmlScreeningTriggeredState string      `json:"amlScreeningTriggeredState"`
+    AmlList                    []AmlReport `json:"amlList"`
+}
+
+type AmlReport struct {
+    Provider       string `json:"provider"`
+    Timestamp      string `json:"timestamp"`
+    Status         string `json:"status"`
+    RiskLevel      string `json:"riskLevel"`
+    LastUpdateTime string `json:"lastUpdateTime"`
+    Payload        any    `json:"payload"`   // SDK 用 any, 项目 mirror 用 json.RawMessage
+}
+
+// 关键：方法签名不带 ctx (与现有 CoinApi.ListCoin / AccountApi.* 一致)
+func (e *ComplianceApi) KytReport(d KytReportRequest, r *KytReportResponse) error {
+    return e.Client.SendRequest(d, r, "/v1/compliance/kyt/report")
+}
+```
+
+**改造文件**（确认现有目录布局：`internal/safeheron/` 下只有 `iface.go` + `client.go` + `types.go` + `client_test.go`，**没有** `safeheron_client.go` / `client_impl.go`）：
+
+1. **修改 `internal/safeheron/types.go`**：新增 mirror 类型
+  ```go
+  // KytReportResponse 是 /v1/compliance/kyt/report 的项目内 mirror,
+  // 与 SDK api.KytReportResponse 字段对齐, 但不暴露 SDK 类型给业务层。
+  type KytReportResponse struct {
+      TxKey                      string      `json:"txKey"`
+      CustomerRefID              string      `json:"customerRefId"`
+      // IN_PROGRESS / TRIGGERED / UNTRIGGERED, 见 SPEC §6.5.1
+      AmlScreeningTriggeredState string      `json:"amlScreeningTriggeredState"`
+      AmlList                    []AmlReport `json:"amlList"`
+  }
+
+  // AmlReport 是单个 provider (MistTrack / Chainalysis / Elliptic) 的筛查结果。
+  // Phase 1 只接 MistTrack 一家, AmlList 数组长度恒为 1。
+  type AmlReport struct {
+      Provider       string          `json:"provider"`        // MistTrack / Chainalysis / Elliptic
+      Timestamp      string          `json:"timestamp"`       // UNIX 毫秒
+      Status         string          `json:"status"`          // PENDING / COMPLETED / SKIPPED / FAILED
+      RiskLevel      string          `json:"riskLevel"`       // LOW / MEDIUM / HIGH / SEVERE / UNKNOWN
+      LastUpdateTime string          `json:"lastUpdateTime"`  // UNIX 毫秒
+      // 各 provider 详细数据 (SDK 是 any, mirror 用 RawMessage 避免业务层意外解析),
+      // 业务层仅存档到 deposits.aml_list JSONB
+      Payload        json.RawMessage `json:"payload"`
+  }
+  ```
+
+2. **修改 `internal/safeheron/iface.go`**：`SafeheronClient` 接口加方法
+  ```go
+  // KytReport 查询交易的 KYT/AML 筛查报告。
+  //
+  // 调用时机仅两处 (Phase 1 主路径配合 AML_KYT_ALERT webhook 使用, 节省 API 配额):
+  //   1. ProcessOne 初查 (COMPLETED+CONFIRMED 时)
+  //   2. 超时兜底扫描 (KYT_PENDING 超过 KYTTimeout 后)
+  // 详见 SPEC §6.5.3。
+  //
+  // 注意: ctx 在此接口层保留 (内部不会传给 SDK——SDK 方法不接受 ctx),
+  // 仅用于 caller 端的取消传递和未来扩展。
+  KytReport(ctx context.Context, txKey string) (*KytReportResponse, error)
+  ```
+
+3. **修改 `internal/safeheron/client.go`**：`Client` struct 实现 adapter
+  ```go
+  // 在文件顶部 import 块加 (与现有 import 别名风格一致, 现有用的就是 api):
+  //   safeheronapi "github.com/Safeheron/safeheron-api-sdk-go/safeheron/api"
+  // 实际上现有 client.go 直接用 `api` 别名, 但 deposit 包等业务层也用了 api 别名
+  // 容易冲突——KYT 这块用 `safeheronapi` 别名更安全, 不影响现有方法。
+
+  func (c *Client) KytReport(_ context.Context, txKey string) (*KytReportResponse, error) {
+      complianceAPI := safeheronapi.ComplianceApi{Client: c.sdkClient}
+      var sdkResp safeheronapi.KytReportResponse
+      // SDK 方法不带 ctx——已实测确认 (compliance_api.go:33)
+      if err := complianceAPI.KytReport(safeheronapi.KytReportRequest{TxKey: txKey}, &sdkResp); err != nil {
+          return nil, fmt.Errorf("safeheron KytReport txKey=%s: %w", txKey, err)
+      }
+      // SDK → 项目 mirror 类型转换 (隔离 SDK 类型)
+      out := &KytReportResponse{
+          TxKey:                      sdkResp.TxKey,
+          CustomerRefID:              sdkResp.CustomerRefId,  // SDK 用 CustomerRefId, mirror 用 CustomerRefID
+          AmlScreeningTriggeredState: sdkResp.AmlScreeningTriggeredState,
+          AmlList:                    make([]AmlReport, 0, len(sdkResp.AmlList)),
+      }
+      for _, r := range sdkResp.AmlList {
+          payload, _ := json.Marshal(r.Payload)   // SDK any → mirror RawMessage
+          out.AmlList = append(out.AmlList, AmlReport{
+              Provider:       r.Provider,
+              Timestamp:      r.Timestamp,
+              Status:         r.Status,
+              RiskLevel:      r.RiskLevel,
+              LastUpdateTime: r.LastUpdateTime,
+              Payload:        payload,
+          })
+      }
+      return out, nil
+  }
+  ```
+
+  **⚠️ 重要：必须先新增 `sdkClient` 字段**（实测 `client.go:35-39` 确认）：
+
+  现有 `Client` struct **只有 3 个字段**：
+  ```go
+  type Client struct {
+      account     accountAPIClient   // *api.AccountApi 实现
+      webhookConv webhookConverter
+      tempFiles   []string
+  }
+  ```
+
+  现有 `NewClient` 里的 `baseClient := sdk.Client{...}`（client.go:67-73）是**局部变量**，没存进 struct。要实现 `KytReport`，**必须**：
+
+  1. 在 `Client` struct 加字段：
+     ```go
+     type Client struct {
+         account     accountAPIClient
+         webhookConv webhookConverter
+         tempFiles   []string
+         sdkClient   sdk.Client   // 新增 — 给 ComplianceApi 等后续 API 复用
+     }
+     ```
+
+  2. 在 `NewClient` 内 `baseClient := sdk.Client{...}` 之后加一行赋值：
+     ```go
+     c := &Client{
+         account:   sdkAccount,
+         tempFiles: tempFiles,
+         sdkClient: baseClient,   // 新增
+     }
+     ```
+
+  3. `KytReport` 实现里用 `c.sdkClient`（而非 `c.account.Client`，因为 `accountAPIClient` 是窄接口不暴露底层 Client）：
+     ```go
+     complianceAPI := safeheronapi.ComplianceApi{Client: c.sdkClient}
+     ```
+
+4. **`internal/safeheron/client_test.go` 新增测试**（保持现有测试文件，不另起 `client_kyt_test.go`）：
+   - mock 一个实现 `safeheron.Client.SendRequest` 行为的 fake，断言：(a) 正常 path → 字段一一对应；(b) `sdkResp.AmlList[].Payload any` → mirror `json.RawMessage` 序列化正确；(c) SDK 返回 error → adapter 包装错误信息含 txKey
+
+**DoD**：
+- [ ] `go build ./...` 通过
+- [ ] `internal/safeheron/client_test.go` 新增 3 个 KytReport 用例全过
+- [ ] 业务代码（deposit 包）只 import `internal/safeheron`，不直接 import `safeheron-api-sdk-go/safeheron/api`
+- [ ] `go test ./internal/safeheron/... -race -cover` 覆盖率 ≥ 80%
+- [ ] `grep -r "safeheronapi" internal/` 只命中 `internal/safeheron/client.go`（不污染业务层）
+
+### T10.3 — KYT 决策核心 (`internal/wallet/deposit/kyt.go`)
+
+**目标**：实现 `SummarizeRiskLevel` 函数 + 风险等级常量 + 告警级别映射。
+
+**文件**：新建 `internal/wallet/deposit/kyt.go`
+
+```go
+package deposit
+
+import "monera-digital/internal/safeheron"
+
+// KYT 风险等级 (业务汇总, 来自 SPEC §6.5.1 处置矩阵)。
+// SummarizeRiskLevel 的返回值, 也是 deposits.aml_risk_level 列的取值。
+const (
+    KytLow     = "LOW"      // 全部 provider COMPLETED 且最高 riskLevel=LOW → CREDITED
+    KytMedium  = "MEDIUM"
+    KytHigh    = "HIGH"
+    KytSevere  = "SEVERE"
+    KytUnknown = "UNKNOWN"
+    KytFailed  = "FAILED"   // 任一 provider status=FAILED, 服务商不可用
+    KytSkipped = "SKIPPED"  // 任一 provider 被人工跳过
+    KytPending = "PENDING"  // 任一 provider status=PENDING, 尚未完成评估
+)
+
+// KYT 失败原因码 (写入 deposits.failed_reason, 用于运营人工审核分辨)
+//
+// 命名约定 (I-5 决策, 选项 A):
+//   - 初查路径 (ProcessOne 内): 不带后缀 — 例如 KYT_UNTRIGGERED / KYT_RISK_HIGH
+//   - 超时兜底路径 (ScanKYTTimeouts 内): 带 _AFTER_TIMEOUT 后缀
+//   - 这样运营从 failed_reason 一眼就能区分: 初查直接转人工 vs 等了 20min 仍未完成才转人工
+//     后者意味着 Safeheron / MistTrack 响应慢, 可能需要联系 Safeheron support
+const (
+    // ============ 初查路径 (ProcessOne, COMPLETED+CONFIRMED 时调用) ============
+    ReasonKytUntriggered          = "KYT_UNTRIGGERED"           // amlScreeningTriggeredState=UNTRIGGERED, 该币种不支持 KYT
+    ReasonKytRiskPrefix           = "KYT_RISK_"                 // 拼接 risk level: KYT_RISK_HIGH / KYT_RISK_MEDIUM ...
+    ReasonKytProviderFailed       = "KYT_PROVIDER_FAILED"       // 服务商不可用 / 8h 未完成
+    ReasonKytSkipped              = "KYT_SKIPPED"               // 人工跳过筛查
+
+    // ============ 超时兜底路径 (ScanKYTTimeouts, KYT_PENDING > 20min 时调用) ============
+    // 注: 风险等级原因码 (KYT_RISK_HIGH_AFTER_TIMEOUT 等) 不另立常量,
+    //     统一用 BuildKytTimeoutRiskReason(riskLevel) 在调用点拼接 — 避免与
+    //     ReasonKytRiskPrefix 完全同值的冗余常量混淆 (N-S1 修正)。
+    ReasonKytUntriggeredAfterTimeout    = "KYT_UNTRIGGERED_AFTER_TIMEOUT"    // 超时后再查仍 UNTRIGGERED (异常状态)
+    ReasonKytProviderFailedAfterTimeout = "KYT_PROVIDER_FAILED_AFTER_TIMEOUT"
+    ReasonKytSkippedAfterTimeout        = "KYT_SKIPPED_AFTER_TIMEOUT"
+    ReasonKytTimeoutStillPending        = "KYT_TIMEOUT_STILL_PENDING"        // 20min 超时兜底 API 仍返回 IN_PROGRESS, K-19 不延长
+
+    // ============ 系统异常路径 ============
+    ReasonKytOrphanAlert          = "KYT_ORPHAN_ALERT"          // AML_KYT_ALERT 找不到 deposit 超过 100 次
+    ReasonKytApiFailed            = "KYT_API_FAILED"            // KytReport API 调用失败 > 100 次
+)
+
+// BuildKytRiskReason 构造初查路径的风险原因码: KYT_RISK_HIGH / KYT_RISK_MEDIUM 等
+func BuildKytRiskReason(riskLevel string) string {
+    return ReasonKytRiskPrefix + riskLevel
+}
+
+// BuildKytTimeoutRiskReason 构造超时兜底路径的风险原因码: KYT_RISK_HIGH_AFTER_TIMEOUT 等
+func BuildKytTimeoutRiskReason(riskLevel string) string {
+    return ReasonKytRiskPrefix + riskLevel + "_AFTER_TIMEOUT"
+}
+
+// SummarizeRiskLevel 取 amlList 中所有 provider riskLevel 的最高严重度,
+// 同时处理 status=PENDING/FAILED/SKIPPED 的优先返回。
+//
+// 优先级 (从高到低):
+//   1. 任一 status=PENDING       → PENDING       (整体未完成, 进 KYT_PENDING)
+//   2. 任一 status=FAILED        → FAILED        (MR)
+//   3. 任一 status=SKIPPED       → SKIPPED       (MR)
+//   4. 全部 COMPLETED, 最高 riskLevel:
+//      SEVERE > HIGH > MEDIUM > UNKNOWN > LOW
+//
+// Phase 1 只接 MistTrack 一家, amlList 长度恒为 1, 但算法已按"任一"写好,
+// 未来三家服务商扩展时无需改逻辑。
+func SummarizeRiskLevel(amlList []safeheron.AmlReport) string {
+    // ... 实现
+}
+
+// AlertLevelForKyt 把 KYT 风险等级映射到 alert 告警级别 (K-17)。
+// HIGH/SEVERE → ERROR, 其余 → WARN。
+func AlertLevelForKyt(riskLevel string) string {
+    switch riskLevel {
+    case KytHigh, KytSevere:
+        return "ERROR"
+    default:
+        return "WARN"
+    }
+}
+
+// KytDecisionAction 表示根据 KYT 数据应该采取的下一步行动 (S-2 决策)。
+type KytDecisionAction int
+
+const (
+    KytActionCredit       KytDecisionAction = iota  // 放行入账 (status=CREDITED)
+    KytActionKeepPending                            // 保持 KYT_PENDING 等下一条 AML_KYT_ALERT 或超时
+    KytActionManualReview                           // 转人工审核 (status=MANUAL_REVIEW)
+)
+
+// KytDecision 是 DecideKYT 的返回值。
+type KytDecision struct {
+    Action       KytDecisionAction
+    RiskLevel    string  // SummarizeRiskLevel 返回值, 写入 deposits.aml_risk_level
+    Reason       string  // 仅当 Action=ManualReview 时填; failed_reason 列的值
+    AlertLevel   string  // 仅当 Action=ManualReview 时填; "WARN" 或 "ERROR"
+}
+
+// DecideKYT 根据 amlScreeningState 和 amlList 决定下一步动作 (S-2 决策)。
+//
+// 两条调用路径共用同一函数, 输入参数统一为 (state, amlList) 而非 *KytReportResponse:
+//   1. ProcessOne 初查: state=report.AmlScreeningTriggeredState, amlList=report.AmlList
+//   2. processKYTAlert (AML_KYT_ALERT webhook): state="TRIGGERED" (隐含, 因为收到 alert),
+//                                                amlList=alert.AmlList
+//
+// isAfterTimeout 决定 reason 是否带 _AFTER_TIMEOUT 后缀:
+//   - false → 初查路径 + AML_KYT_ALERT 路径 (默认)
+//   - true  → 超时兜底扫描路径 (ScanKYTTimeouts)
+//
+// 处置矩阵见 SPEC §6.5.1 (与 K-1 / K-5 / K-6 / K-7 / K-8 决策对齐):
+//   UNTRIGGERED                   → ManualReview (WARN)
+//   TRIGGERED, all COMPLETED+LOW  → Credit
+//   TRIGGERED, any PENDING        → KeepPending
+//   TRIGGERED, any MEDIUM         → ManualReview (WARN)
+//   TRIGGERED, any HIGH           → ManualReview (ERROR)
+//   TRIGGERED, any SEVERE         → ManualReview (ERROR)
+//   TRIGGERED, any UNKNOWN        → ManualReview (WARN)
+//   TRIGGERED, any FAILED         → ManualReview (WARN)
+//   TRIGGERED, any SKIPPED        → ManualReview (WARN)
+//   IN_PROGRESS                   → KeepPending
+func DecideKYT(state string, amlList []safeheron.AmlReport, isAfterTimeout bool) KytDecision {
+    // 实现见伪代码 §6.5.1 处置矩阵; isAfterTimeout=true 时所有 Reason 走 BuildKytTimeoutRiskReason / ReasonKyt*AfterTimeout
+}
+
+// maxLastUpdateTime 取 amlList 中 lastUpdateTime (UNIX 毫秒字符串) 的最大值, 写入
+// deposits.aml_evaluated_at。被 T10.4 (T-γ) / T10.5 (ScanKYTTimeouts) / T10.6 (processKYTAlert)
+// 三处共用。
+//
+// 解析失败回退 time.Now() (容忍 Safeheron 偶发字段缺失 / 测试事件 lastUpdateTime 为空)。
+// Phase 1 只 1 个 provider, amlList 长度恒为 1; 多 provider 时取最新评估时间最稳健。
+func maxLastUpdateTime(amlList []safeheron.AmlReport) time.Time {
+    var max int64
+    for _, r := range amlList {
+        if ts, err := strconv.ParseInt(r.LastUpdateTime, 10, 64); err == nil && ts > max {
+            max = ts
+        }
+    }
+    if max == 0 {
+        return time.Now()
+    }
+    return time.UnixMilli(max)
+}
+```
+
+**DoD**：
+- [ ] `internal/wallet/deposit/kyt_test.go` 单测覆盖 8 个 `SummarizeRiskLevel` 分支（5 个 riskLevel + 3 个特殊 status），表驱动
+- [ ] `DecideKYT` 单测覆盖 10 个分支 × 2 (isAfterTimeout=false/true) = 20 行表驱动用例
+- [ ] `maxLastUpdateTime` 单测：(a) 1 条正常 → 解析正确；(b) 1 条 LastUpdateTime="" → fallback time.Now()；(c) 3 条 → 取最大；(d) 所有解析失败 → fallback
+- [ ] `go test ./internal/wallet/deposit/... -run "SummarizeRiskLevel|DecideKYT|AlertLevelForKyt|MaxLastUpdateTime" -race` 全绿
+- [ ] 单测覆盖率 100%（纯函数）
+
+### T10.4 — Service.ProcessOne 拆三事务
+
+**目标**：把现有单事务 `ProcessOne` 拆为 (T-α 锁事件 + 临时 KYT_PENDING) → (T-β KYT API，事务外) → (T-γ 入账或 MR + 标 DONE)。
+
+**文件**：修改 `internal/wallet/deposit/service.go`、`internal/wallet/deposit/repository.go`、`internal/wallet/deposit/models.go`
+
+#### 改造点 1：`models.go`
+
+新增常量：
+```go
+const StatusKYTPending = "KYT_PENDING"   // SPEC §7.1 新增
+```
+MANUAL_REVIEW 原因码引用 `kyt.go` 定义（T10.3）。
+
+#### 改造点 2：`repository.go` 新增方法
+
+**⚠️ 必须同时改 2 处**（不改会导致编译错误，因为现有文件末尾有 `var _ Repository = (*DBRepository)(nil)` 断言）：
+
+1. **`Repository` interface（`repository.go:22-36`，紧跟 `MarkDepositManualReview` 之后）加 5 个新方法签名**，前后加 `// === AML/KYT (Phase 1 v1.5) ===` 区块注释
+2. **`DBRepository` struct 同步加 5 个新方法实现**
+3. **`DepositRow` struct（`repository.go:39-57`）追加 4 个 AML 字段，并同步改 SELECT/INSERT/UPDATE SQL 列**
+
+> **方案锁定（R3-C1+C2）**：5 个新方法**全部进 Repository interface**（含 `IncrementEventAttemptsNoTx`，方案 A）。
+> - 不再走「Service 加 db 字段 + NewService 签名扩 4 参数」路线（已废弃）；
+> - 不再走类型断言 `repo.(*DBRepository)` 路线；
+> - 所有调用点统一 `s.repo.X(...)`，与现有所有 Repository 方法调用风格一致；
+> - 接口"全部 write 接 Tx"惯例被破坏一处，但用方法名后缀 `NoTx` 显式标注，可读性高于隐式类型断言。
+
+**所有方法签名（返回类型用现有 `*DepositRow`）**：
+
+```go
+// DepositRow 在 T10 追加 4 个 AML 字段 (与 SPEC §4.6 一致):
+//   AMLScreeningState string    `db:"aml_screening_state"`   // UNTRIGGERED/TRIGGERED, nullable → ""
+//   AMLRiskLevel      string    `db:"aml_risk_level"`        // LOW/MEDIUM/HIGH/SEVERE/UNKNOWN/FAILED/SKIPPED/PENDING, nullable → ""
+//   AMLEvaluatedAt    time.Time `db:"aml_evaluated_at"`      // amlList[].lastUpdateTime 的最大值, nullable → zero
+//   AMLListJSON       []byte    `db:"aml_list"`              // JSONB raw bytes; 业务端按需 unmarshal
+//
+// 现有 SELECT * / INSERT / UPDATE 语句要同步加上新列, 否则 sqlx StructScan 会 panic。
+```
+
+
+```go
+// === AML/KYT (Phase 1 v1.5) — 5 个全部进 Repository interface ===
+
+// UpdateAMLFields 写入 4 个 AML 字段 (来自 KYT API 或 AML_KYT_ALERT)。
+// amlListJSON 是 json.Marshal([]AmlReport) 的字节, 直接存进 deposits.aml_list JSONB。
+UpdateAMLFields(ctx context.Context, tx Tx, depositID int64, screeningState, riskLevel string,
+                evaluatedAt time.Time, amlListJSON []byte) error
+
+// MoveToKYTPending 将 deposit 临时置为 KYT_PENDING (T-α 末尾, KYT_ENABLED=true 时)。
+// UPDATE deposits SET status='KYT_PENDING', updated_at=NOW() WHERE id=? AND status='PENDING'
+// 注意 AND status='PENDING' 守卫: 防止竞态下重复推进。
+MoveToKYTPending(ctx context.Context, tx Tx, depositID int64) error
+
+// LockOneKYTPendingTimeout 超时扫描用 (T10.5), 单行加锁拉取一笔 KYT_PENDING 超时的:
+// SELECT * FROM deposits WHERE status='KYT_PENDING' AND updated_at < NOW() - threshold
+//   ORDER BY updated_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
+// 返回 (nil, ErrNoPending) 表示无超时行 (与现有 LockNextPendingEvent 风格一致)。
+// 返回非 nil *DepositRow 时, **该行已持有 FOR UPDATE 行锁直到调用方 tx Commit/Rollback**;
+// 调用方可直接 creditDepositFromRow / MarkDepositManualReview 而无需二次 SELECT FOR UPDATE。(R3-S3)
+LockOneKYTPendingTimeout(ctx context.Context, tx Tx, threshold time.Duration) (*DepositRow, error)
+
+// FindDepositByTxKey 用于 AML_KYT_ALERT 关联 (T10.6)。
+// 内部用 SELECT ... FOR UPDATE 持锁; 返回 (nil, false, nil) 表示未找到 (乱序场景), 不是 error。
+// 行锁与外层 tx 同生命周期; 调用方可直接 creditDepositFromRow / MarkDepositManualReview 不需二次锁。
+FindDepositByTxKey(ctx context.Context, tx Tx, txKey string) (*DepositRow, bool, error)
+
+// IncrementEventAttemptsNoTx 在 ROLLBACK 场景下推进 process_attempts (C-3 + R3-C2 修正)。
+//
+// 关键设计: **独立非事务 UPDATE** — DBRepository 内部用 r.db.ExecContext 直接执行,
+//   不挂任何外层 tx, 因为调用时机是主事务 ROLLBACK 之后, 必须脱离外层事务才能让 UPDATE 持久化:
+//     UPDATE safeheron_webhook_events SET process_attempts = process_attempts + 1 WHERE id = ?
+//
+// 方法名后缀 `NoTx` 显式标注违反"接口所有 write 都接 Tx"的惯例 — 这是有意设计,
+// 仅 2 个场景需要它: (a) 乱序 AML_KYT_ALERT 找不到 deposit (T10.6); (b) KytReport API 失败 (T10.4)。
+//
+// 现有 MarkEventDone / MarkEventError 已经包含 attempts++, 此方法仅在**不 Mark Done/Error**的
+// 场景使用; 调用顺序通常是: ROLLBACK → IncrementEventAttemptsNoTx → return processed (让事件回 PENDING)。
+//
+// 实现细节: mock 实现按需返回 nil 即可 (测试不验证持久化, 用 sqlmock 拦 SQL)。
+IncrementEventAttemptsNoTx(ctx context.Context, eventID int64) error
+```
+
+> **NewService 签名保持不变**（现有 `NewService(repo Repository, reg ChainsRegistry, alertFn AlertFunc) *Service`）— Service 通过 `s.repo.IncrementEventAttemptsNoTx(...)` 调用，无需新增 `db *sql.DB` 字段。所有 KYT 依赖通过 `SetKYTDeps` setter 注入（见改造点 4）。
+
+#### 改造点 3：`service.go` 改 `ProcessOne` 主流程
+
+> **风格约定（R3-C3）**：所有 Deposit 状态写都通过 `s.repo.MarkDeposit*` 方法**直调**，不在 Service 层另起小写 helper（与现有 T7 风格一致）。例外只有 `creditDepositFromRow` 和 `markOrphanAlertDone` 两个 Service-level helper，它们组合多个 Repository 方法且有专门 doc 说明。
+
+```go
+// ProcessOne 是 KYT 改造后的入账状态机入口 (SPEC §6.4 + §6.5)。
+//
+// 三事务结构 (v1.5 新增, D-33):
+//   T-α: BEGIN → LockNextPendingEvent FOR UPDATE → 解析 + 路由判定 + UPSERT deposits;
+//        if needsKYT && kytEnabled: MoveToKYTPending; COMMIT (释放行锁, 不标 DONE)
+//        else (KYT_ENABLED=false 或不需要 KYT): 走原有入账逻辑 + MarkEventDone + COMMIT
+//   T-β: 调 KytReport API (事务外, 无 DB 连接占用)
+//        失败 → handleKYTApiFailure (见下), 不进 T-γ
+//   T-γ: BEGIN → UpdateAMLFields + DecideKYT → 三选一执行 → MarkEventDone + COMMIT
+//
+// 崩溃重启行为 (C-4 修正):
+//   - T-α 已 COMMIT, T-β 进行中或之前进程崩溃 → 重启后 deposit 状态=KYT_PENDING,
+//     webhook event 仍 PENDING。worker 再次拉取该 event 时, 主流程会重新走到
+//     "UPSERT deposits + dep.Status != PENDING 判定", 不会再次进入 KYT 初查 (避免重复调用 API)。
+//     此时事件会被静默标 DONE (event 已无实际推进作用), deposit 留给 T10.5 超时扫描兜底。
+//   - 这是有意设计: 超时扫描 (KYTScanInterval=1m, KYTTimeout=20m) 是 KYT_PENDING 的终极兜底,
+//     不依赖 ProcessOne 二次进入。
+func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
+
+    // ========== T-α START ==========
+    tx1, _ := s.repo.BeginTx(ctx)
+    committed := false
+    defer func() { if !committed { _ = tx1.Rollback() } }()
+
+    evt, err := s.repo.LockNextPendingEvent(ctx, tx1)
+    if errors.Is(err, ErrNoPending) { return false, nil }
+
+    // 解析 envelope — 现有写法保留 (service.go:128-132)
+    var env PayloadEnvelope
+    if err := json.Unmarshal(evt.RawPayload, &env); err != nil {
+        // payload 损坏: MarkEventError + Commit (现有早退逻辑)
+        // ...
+        committed = true; return true, fmt.Errorf("unmarshal raw_payload: %w", err)
+    }
+
+    // === Dispatch by EventType (R3-I1 合并 — 与 T10.6 改造点 2 写法保持一致) ===
+    switch evt.EventType {
+    case "AML_KYT_ALERT":
+        // AML_KYT_ALERT 的 eventDetail 字段集与 PayloadEventDetail 不同 (无 transactionStatus,
+        // 多 amlList), 走二次 unmarshal 到独立 struct, 整个流程在 T-α 内完成, 不进 T-β/T-γ
+        var w struct {
+            EventDetail AMLKYTAlertDetail `json:"eventDetail"`
+        }
+        if err := json.Unmarshal(evt.RawPayload, &w); err != nil {
+            committed = true; return true, fmt.Errorf("unmarshal AML_KYT_ALERT: %w", err)
+        }
+        return s.processKYTAlert(ctx, tx1, evt, &w.EventDetail)   // 见 T10.6
+    case "TRANSACTION_CREATED", "TRANSACTION_STATUS_CHANGED":
+        // 现有 T7 TRANSACTION_* 处理路径, 走 T-β/T-γ — 落入下方主流程
+    default:
+        // 其他 12 种 eventType (UNVERIFIED_TX / KYC_* / ...) 静默 MarkEventDone, 不处理
+        if err := s.repo.MarkEventDone(ctx, tx1, evt.ID); err != nil { return true, err }
+        if err := tx1.Commit(); err != nil { return true, err }
+        committed = true; return true, nil
+    }
+
+    // 以下是 TRANSACTION_CREATED / TRANSACTION_STATUS_CHANGED 的主路径
+    d := env.EventDetail   // PayloadEventDetail (现有 service.go:139)
+
+    // 早退: direction != INFLOW
+    if d.TransactionDirection != "INFLOW" {
+        if err := s.repo.MarkEventDone(ctx, tx1, evt.ID); err != nil { return true, err }
+        if err := tx1.Commit(); err != nil { return true, err }
+        committed = true; return true, nil
+    }
+
+    // 路由判定 (地址无主 / 币种不支持 / 金额异常 → MR + Commit; return)
+    // ... 现有 service.go:146-180 逻辑保留, 共用 d ...
+
+    // UPSERT deposits (status_rank 守卫, 现有逻辑保留)
+    dep, _ := s.repo.UpsertDeposit(ctx, tx1, /* DepositRow from d */)
+
+    // KYT 初查触发条件
+    needsKYT := (d.TransactionStatus == "COMPLETED"
+              && d.TransactionSubStatus == "CONFIRMED"
+              && dep.Status == "PENDING")   // 注意此处会拒绝崩溃重启后的 status=KYT_PENDING (C-4 设计)
+
+    if !needsKYT {
+        // 现有 FAILED/中间态分支, 不变
+        // ... 现有逻辑 ...
+        MarkEventDone + Commit; committed=true; return true, nil
+    }
+
+    // KYT_ENABLED=false: 直接入账 (本地/sandbox, D-35)
+    if !s.kytEnabled {
+        CreditAccount + WriteJournal + UPDATE deposits SET status='CREDITED'
+        MarkEventDone + Commit; committed=true; return true, nil
+    }
+
+    // KYT_ENABLED=true: 临时 KYT_PENDING, 提交 T-α
+    if err := s.repo.MoveToKYTPending(ctx, tx1, dep.ID); err != nil { return true, err }
+    if err := tx1.Commit(); err != nil { return true, err }
+    committed = true
+    // ========== T-α END (committed, row lock released) ==========
+
+
+    // ========== T-β START (no DB transaction) ==========
+    report, kytErr := s.safeheronClient.KytReport(ctx, d.TxKey)
+    if kytErr != nil {
+        // I-7 / C-3 修正: 展开 handleKYTApiFailure 内联实现, 让施工者看清完整逻辑
+        return s.handleKYTApiFailure(ctx, evt, dep, kytErr)
+    }
+    // ========== T-β END ==========
+
+
+    // ========== T-γ START ==========
+    tx2, _ := s.repo.BeginTx(ctx)
+    committed2 := false
+    defer func() { if !committed2 { _ = tx2.Rollback() } }()
+
+    amlListJSON, _ := json.Marshal(report.AmlList)
+    evaluatedAt := maxLastUpdateTime(report.AmlList)   // 取 amlList[].lastUpdateTime 最大值
+    riskLevel := SummarizeRiskLevel(report.AmlList)
+    if err := s.repo.UpdateAMLFields(ctx, tx2, dep.ID,
+        report.AmlScreeningTriggeredState, riskLevel, evaluatedAt, amlListJSON); err != nil { return true, err }
+
+    decision := DecideKYT(report.AmlScreeningTriggeredState, report.AmlList, false /* isAfterTimeout */)
+
+    var alerts []alertPayload
+    switch decision.Action {
+    case KytActionCredit:
+        // 复用 creditDepositFromRow (T10.4 新增 helper, 见改造点 3 末尾):
+        //   account upsert + journal + UPDATE deposits SET status='CREDITED', 不需要 parsed envelope,
+        //   因为 user_id/asset/amount 已挂在 dep 上 (UpsertDeposit 已落库)
+        if err := s.creditDepositFromRow(ctx, tx2, dep); err != nil { return true, err }
+    case KytActionKeepPending:
+        // 保持 KYT_PENDING (理论上初查路径不会进此分支, Phase 1 只 1 个 provider,
+        // 一次 KytReport 应返回完整或 IN_PROGRESS——后者已在 SummarizeRiskLevel 返回 PENDING)
+        // 仅 UpdateAMLFields, 不动 deposit.status
+    case KytActionManualReview:
+        if err := s.repo.MarkDepositManualReview(ctx, tx2, dep.ID, decision.Reason); err != nil { return true, err }
+        alerts = append(alerts, alertPayload{level: decision.AlertLevel, title: "KYT manual review", fields: ...})
+    }
+
+    if err := s.repo.MarkEventDone(ctx, tx2, evt.ID); err != nil { return true, err }
+    if err := tx2.Commit(); err != nil { return true, err }
+    committed2 = true
+    // ========== T-γ END ==========
+
+    s.fireAlerts(alerts)
+    return true, nil
+}
+
+// handleKYTApiFailure 处理 T-β KYT API 调用失败 (I-7 修正展开伪代码, C-3 计数推进)。
+//
+// 期望行为:
+//   1. 用独立非事务 UPDATE 推进 webhook event 的 process_attempts (C-3 必须, 否则上限永不触发)
+//   2. 如果 process_attempts < KYTOrphanAlertMaxRetry (默认 100):
+//        deposit 保持 KYT_PENDING; webhook event 保持 PENDING;
+//        下次 worker 轮询会重新拉到, 主流程的 needsKYT 判定为 false (因 dep.Status='KYT_PENDING'),
+//        事件会被静默 MarkEventDone; deposit 留给超时扫描兜底 (C-4)
+//      - 注: 这意味着 KYT API 短期故障只会让事件被消费, 不会无限重试 KytReport;
+//        超时扫描会在 20min 后重新调 API 兜底, 这是符合 K-19 的设计
+//   3. 如果 process_attempts >= KYTOrphanAlertMaxRetry (说明持续失败超过 ~100 次):
+//        开新 tx 标 deposit MANUAL_REVIEW(KYT_API_FAILED) + ERROR 告警 + MarkEventDone
+func (s *Service) handleKYTApiFailure(ctx context.Context, evt *Event, dep *DepositRow, kytErr error) (bool, error) {
+    log.Printf("KYT API failed: txKey=%s err=%v attempts=%d", dep.SafeheronTxKey, kytErr, evt.ProcessAttempts)
+
+    // 步骤 1: 独立非事务推进 attempts (C-3)
+    if err := s.repo.IncrementEventAttemptsNoTx(ctx, evt.ID); err != nil {
+        // 推进失败 → 仅日志, 不阻塞 (worker 下次 tick 会重新拉)
+        log.Printf("IncrementEventAttempts failed: %v", err)
+    }
+
+    // 步骤 2: 判断阈值 (字段名与 T10.4 改造点 4 Service struct 一致, 不走 s.cfg)
+    if evt.ProcessAttempts+1 < s.kytOrphanMaxRetry {
+        // 还没到上限, 让 worker 自然重试; 当前事件保持 PENDING
+        // 返回值语义 (R3-S2):
+        //   processed=true → worker drainQueue 继续拉下一条, 不进入 sleep
+        //   err=kytErr 非 nil → 触发 worker ERROR 日志 (含 attempts 计数), 但 drainQueue 内只 log 不 return,
+        //                     worker 主循环不会因此退出。
+        //   对比 T10.6 orphan AML_KYT_ALERT 返回 (true, nil): 静默不打 ERROR 日志, 因为乱序是预期行为。
+        return true, kytErr
+    }
+
+    // 步骤 3: 超过上限, 强转 MANUAL_REVIEW + 标 DONE
+    tx3, _ := s.repo.BeginTx(ctx)
+    committed3 := false
+    defer func() { if !committed3 { _ = tx3.Rollback() } }()
+
+    if err := s.repo.MarkDepositManualReview(ctx, tx3, dep.ID, ReasonKytApiFailed); err != nil { return true, err }
+    if err := s.repo.MarkEventDone(ctx, tx3, evt.ID); err != nil { return true, err }
+    if err := tx3.Commit(); err != nil { return true, err }
+    committed3 = true
+
+    s.fireAlerts([]alertPayload{{level: "ERROR", title: "KYT API failed after retries",
+        fields: map[string]string{"depositId": fmt.Sprint(dep.ID), "txKey": dep.SafeheronTxKey,
+                                  "attempts": fmt.Sprint(evt.ProcessAttempts+1)}}})
+    return true, nil
+}
+
+// creditDepositFromRow 入账 helper, T10.4/T10.5/T10.6 三处入账路径共用 (N-I3 修正)。
+//
+// 复用现有 4 个 Repository 方法的组合 (与改造前 ProcessOne 入账段逻辑一致):
+//   1. repo.FindOrCreateAccountForUpdate(ctx, tx, dep.UserID, dep.Asset)  — 行锁拿/建账户
+//   2. repo.CreditAccount(ctx, tx, accountID, dep.Amount)                  — 余额 +amount
+//   3. repo.WriteJournal(ctx, tx, JournalEntry{BizType: 10, RefID: dep.ID, Amount: dep.Amount, ...})
+//   4. repo.MarkDepositCredited(ctx, tx, dep.ID)                           — UPDATE deposits SET status='CREDITED'
+//
+// 不需要 parsed webhook envelope, 因为 user_id/asset/amount 在 UpsertDeposit (T-α) 时已落到
+// deposits 行上, 此后超时扫描/AML_KYT_ALERT 路径都能直接从 dep 取到。
+//
+// 注意: 调用方必须已经持有 dep 行锁 (SELECT ... FOR UPDATE), 否则并发场景会导致重复入账。
+// T-γ / ScanKYTTimeouts / processKYTAlert 三处都已通过 LockNextPendingEvent / LockOneKYTPendingTimeout
+// / FindDepositByTxKey(tx) 持锁, 直接调用即安全。
+func (s *Service) creditDepositFromRow(ctx context.Context, tx Tx, dep *DepositRow) error {
+    // 实现照搬原 ProcessOne 入账段, 仅签名变化
+}
+```
+
+#### 改造点 4：Service struct + setter 风格依赖注入（I-2 修正）
+
+**保持现有 `NewService(repo, reg, alertFn)` 签名不变**，新增 setter（与现有 `SetSerialFunc` 风格一致）：
+
+```go
+type Service struct {
+    repo         Repository
+    registry     ChainsRegistry
+    alertFn      AlertFunc
+    serialFn     SerialNoFunc
+    allowedTypes map[string]bool
+    // === KYT 字段 (v1.5 T10) ===
+    kytEnabled       bool
+    safeheronClient  KYTClient         // 仅依赖 KytReport 方法, 见下
+    kytOrphanMaxRetry int
+    kytTimeout        time.Duration    // KYT_PENDING 超时阈值, 仅 ScanKYTTimeouts 用; ProcessOne 不读
+}
+
+// KYTClient 是 Service 需要的最小 Safeheron 接口 (依赖倒置, 便于测试 mock)。
+// 实际实现是 internal/safeheron.Client; 测试用 fake 即可。
+type KYTClient interface {
+    KytReport(ctx context.Context, txKey string) (*safeheron.KytReportResponse, error)
+}
+
+// SetKYTDeps 注入 KYT 相关依赖 (容器在 container.go 内调用, 时机: NewService 之后, Worker.Run 之前)。
+// 与现有 SetSerialFunc 风格一致, 避免重构为 functional options。
+// 参数说明:
+//   client            — Safeheron adapter (Phase 1 接 MistTrack); 必填, 否则 KYT 流程会 panic
+//   enabled           — true 走完整 KYT 路径; false 仅本地/sandbox 用 (生产启动校验阻止 false)
+//   orphanMaxRetry    — AML_KYT_ALERT 找不到 deposit / KytReport API 失败的最大重试次数, 默认 100
+//   timeout           — KYT_PENDING 超时阈值, 默认 20min
+// 任一参数 zero 值时使用默认值。
+func (s *Service) SetKYTDeps(client KYTClient, enabled bool, orphanMaxRetry int, timeout time.Duration) {
+    s.safeheronClient = client
+    s.kytEnabled = enabled
+    if orphanMaxRetry <= 0 { orphanMaxRetry = 100 }
+    s.kytOrphanMaxRetry = orphanMaxRetry
+    if timeout <= 0 { timeout = 20 * time.Minute }
+    s.kytTimeout = timeout
+}
+```
+
+**注释要求**（明天用户实测，必须清楚）：
+- 每个事务边界标注 `// ========== T-α START ==========` / `// ========== T-α END (committed) ==========` 注释
+- `ProcessOne` 顶部 doc comment 解释三事务结构 + 崩溃重启行为（已给出，照搬即可）
+- 处置矩阵代码段配上 SPEC §6.5.1 行号注释（每个 case 标对应行）
+- `handleKYTApiFailure` 内三个步骤都加单行注释
+- KYT_ENABLED 分支加注释解释何时进入（仅本地/sandbox 且显式关闭）
+
+**DoD**：
+- [ ] `go test ./internal/wallet/deposit/... -race` 全绿（含 15 个 F-KYT 用例 + 原 T7 用例不退化）
+- [ ] 单测覆盖 ≥ 80%
+- [ ] 代码审阅时事务边界注释清晰可见
+- [ ] `handleKYTApiFailure` 单测：(a) attempts < max → 返回 processed=true，attempts 已 +1，deposit 仍 KYT_PENDING；(b) attempts >= max → deposit MANUAL_REVIEW(KYT_API_FAILED) + ERROR alert
+
+### T10.5 — Worker 超时扫描分支
+
+**目标**：在 `Worker.Run` 主循环加 `kytScanTicker` 分支，周期扫描 `status=KYT_PENDING AND updated_at < NOW() - INTERVAL '20 min'` 的 deposit，逐行调 KYT Report API 兜底。
+
+**文件**：修改 `internal/wallet/deposit/worker.go`
+
+```go
+type WorkerConfig struct {
+    Interval         time.Duration  // 主轮询间隔 (现有, 1s)
+    KYTScanInterval  time.Duration  // 超时扫描 ticker 间隔 (新增, 默认 1m)
+    PanicBackoff     time.Duration
+    // 注: KYTTimeout 阈值不放 Worker 配置, 由 Service 通过 SetKYTDeps 持有;
+    //     Service.ScanKYTTimeouts() 内部直接读 s.kytTimeout, 避免双份字段歧义。(R3-I5)
+}
+
+func (w *Worker) Run(ctx context.Context) {
+    mainTicker := time.NewTicker(w.cfg.Interval)
+    kytScanTicker := time.NewTicker(w.cfg.KYTScanInterval)
+    defer mainTicker.Stop()
+    defer kytScanTicker.Stop()
+
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-mainTicker.C:
+            w.drainQueue(ctx)  // 现有逻辑
+        case <-kytScanTicker.C:
+            w.scanKYTTimeouts(ctx)  // 新增
+        }
+    }
+}
+
+func (w *Worker) scanKYTTimeouts(ctx context.Context) {
+    // 调用 Service.ScanKYTTimeouts(ctx) — timeout 阈值由 Service 自持, Worker 不传
+    // 复用现有 panic recover 包装
+}
+```
+
+`Service.ScanKYTTimeouts(ctx)` 实现（I-4 修正：**每行独立 tx**，FOR UPDATE 持续保护到处理完毕）：
+
+```go
+// ScanKYTTimeouts 扫描 KYT_PENDING 超时行, 每次最多处理 N 行;
+// 每行用独立 tx 处理: tx 持续到该行处理完毕, FOR UPDATE 锁全程有效, 防多 worker race。
+//
+// 注意: 不是"先批量 SELECT 拿一批再 COMMIT 锁释放然后逐行处理" (那样会 race);
+//      而是"循环 N 次, 每次单独 BEGIN → LockOneKYTPendingTimeout (LIMIT 1 FOR UPDATE) → 处理 → COMMIT"。
+//
+// 这样即使 worker A 在处理第 3 行 KYT API 调用时 (慢调用 ~5s), worker B 也能拉到第 4 行处理,
+// 不会重复处理同一行。
+func (s *Service) ScanKYTTimeouts(ctx context.Context) {
+    const maxPerTick = 50    // 单次 tick 最多处理 50 个超时, 防 KYT API 突发流量
+    for i := 0; i < maxPerTick; i++ {
+        processed, err := s.scanOneKYTTimeout(ctx)
+        if err != nil { log.Printf("scan KYT timeout: %v", err) }
+        if !processed { break }   // 没有更多超时行, 退出
+    }
+}
+
+func (s *Service) scanOneKYTTimeout(ctx context.Context) (processed bool, err error) {
+    tx1, _ := s.repo.BeginTx(ctx)
+    committed := false
+    defer func() { if !committed { _ = tx1.Rollback() } }()
+
+    // 单行加锁拉取 — LockOneKYTPendingTimeout SQL:
+    //   SELECT * FROM deposits WHERE status='KYT_PENDING' AND updated_at < NOW() - $1
+    //     ORDER BY updated_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
+    dep, err := s.repo.LockOneKYTPendingTimeout(ctx, tx1, s.kytTimeout)
+    if errors.Is(err, ErrNoPending) || dep == nil { return false, nil }
+    if err != nil { return false, err }
+
+    // KYT API 调用 (事务**外**? 这里是关键决策):
+    //   选项 A: API 调用放事务内 — 5s 慢调用持续占行锁, 但保证状态切换原子
+    //   选项 B: COMMIT tx1 释放锁, 调 API, 开 tx2 写结果 — 但中间另一 worker 又拉到同行会重复
+    //
+    // 决策: **选 A**, 让行锁全程保护, 避免重复 API 调用。
+    //       50 行 × 5s = 250s 最坏情况, 但实际 Safeheron API ~300ms, 不影响吞吐。
+    //       相比 ProcessOne 主路径 (T-α 后释放锁, 因为入账事务窗口窄), 超时扫描的事务窗口可以更长。
+    report, kytErr := s.safeheronClient.KytReport(ctx, dep.SafeheronTxKey)
+    if kytErr != nil {
+        log.Printf("scan KYT API failed for deposit=%d: %v", dep.ID, kytErr)
+        // 不动 deposit, 让下一次 tick 重试; 不需要 attempt 计数 (扫描有间隔自然限流)
+        return true, nil
+    }
+
+    amlListJSON, _ := json.Marshal(report.AmlList)
+    evaluatedAt := maxLastUpdateTime(report.AmlList)
+    riskLevel := SummarizeRiskLevel(report.AmlList)
+    _ = s.repo.UpdateAMLFields(ctx, tx1, dep.ID,
+        report.AmlScreeningTriggeredState, riskLevel, evaluatedAt, amlListJSON)
+
+    decision := DecideKYT(report.AmlScreeningTriggeredState, report.AmlList, true /* isAfterTimeout=true, I-5 */)
+
+    var alerts []alertPayload
+    switch decision.Action {
+    case KytActionCredit:
+        // 同 T10.4 改造点 3 末尾定义的 helper, 共用同一签名
+        _ = s.creditDepositFromRow(ctx, tx1, dep)
+    case KytActionKeepPending:
+        // K-19 决策: 仍 IN_PROGRESS → 不再延长, 强转 MR(KYT_TIMEOUT_STILL_PENDING) + ERROR
+        _ = s.repo.MarkDepositManualReview(ctx, tx1, dep.ID, ReasonKytTimeoutStillPending)
+        alerts = append(alerts, alertPayload{level: "ERROR", title: "KYT timeout still pending", fields: ...})
+    case KytActionManualReview:
+        // decision.Reason 已带 _AFTER_TIMEOUT 后缀 (DecideKYT(isAfterTimeout=true))
+        _ = s.repo.MarkDepositManualReview(ctx, tx1, dep.ID, decision.Reason)
+        alerts = append(alerts, alertPayload{level: decision.AlertLevel, title: "KYT timeout review", fields: ...})
+    }
+
+    if err := tx1.Commit(); err != nil { return true, err }
+    committed = true
+    s.fireAlerts(alerts)
+    return true, nil
+}
+```
+
+**关于 creditDepositFromRow helper**：超时扫描场景没有原始 webhook envelope 在手，但入账只需要 `(user_id, currency, amount)`，这些都在 `dep` 上有（`dep.UserID` / `dep.Asset` / `dep.Amount`）。**T10.4 改造点 3 末尾已定义统一 helper `creditDepositFromRow(ctx, tx, dep *DepositRow) error`**，T10.4/T10.5/T10.6 三处入账路径共用此函数，**不存在两个版本**。
+
+**DoD**：
+- [ ] 单测 `mock SafeheronClient.KytReport` 返回 `TRIGGERED+LOW` → CREDITED + balance 增加
+- [ ] 单测：返回 `IN_PROGRESS` → MR(`KYT_TIMEOUT_STILL_PENDING`) + **ERROR** alert（K-19）
+- [ ] 单测：返回 `TRIGGERED+HIGH` → MR(`KYT_RISK_HIGH_AFTER_TIMEOUT`) + **ERROR** alert（I-5 带后缀）
+- [ ] 单测：返回 `UNTRIGGERED` → MR(`KYT_UNTRIGGERED_AFTER_TIMEOUT`) + WARN
+- [ ] 单测：50 行超时并发处理，行锁正确保护，无重复 API 调用（用 mock 计数）
+- [ ] worker panic 时不阻塞主 ticker（recover）
+
+### T10.6 — AML_KYT_ALERT webhook 分支
+
+**目标**：扩展 `processEvent` 处理 `eventType=AML_KYT_ALERT`，含乱序保护（找不到 deposit 时事件回 PENDING）。
+
+**文件**：修改 `internal/wallet/deposit/service.go`、`internal/wallet/deposit/models.go`
+
+#### 改造点 1：`models.go` 新增 AML_KYT_ALERT 专用 detail struct（S-1 修正）
+
+```go
+// AMLKYTAlertDetail 是 AML_KYT_ALERT webhook 的 eventDetail (独立 struct, 不与
+// TransactionEventDetail 共用; 见 SPEC §8.2)。
+//
+// 字段来自 Safeheron 文档 "AMLKYTAlertParam":
+//   https://docs.safeheron.com/api/zh.html#Webhook
+type AMLKYTAlertDetail struct {
+    TxKey                  string                `json:"txKey"`
+    CustomerRefID          string                `json:"customerRefId"`
+    TxHash                 string                `json:"txHash"`
+    CoinKey                string                `json:"coinKey"`
+    TxAmount               string                `json:"txAmount"`
+    SourceAccountKey       string                `json:"sourceAccountKey"`
+    SourceAddress          string                `json:"sourceAddress"`
+    DestinationAccountKey  string                `json:"destinationAccountKey"`
+    DestinationAddress     string                `json:"destinationAddress"`
+    TransactionDirection   string                `json:"transactionDirection"`
+    AlertTime              string                `json:"alertTime"`
+    AmlList                []safeheron.AmlReport `json:"amlList"`
+}
+```
+
+#### 改造点 2：dispatch 入口已合并进 T10.4 改造点 3
+
+**已合并**：dispatch 逻辑（`switch evt.EventType`）写在 **T10.4 改造点 3** 的 `ProcessOne` 函数顶部（T-α 内 `LockNextPendingEvent` 之后），不在 T10.6 这里另起一份。施工时**只在 T10.4 那个 switch 块里**展开：
+
+- `case "TRANSACTION_CREATED", "TRANSACTION_STATUS_CHANGED"` — 现有 T7 路径，落入主流程
+- `case "AML_KYT_ALERT"` — 用专门 wrap struct 二次 unmarshal 到 `AMLKYTAlertDetail`，调 `s.processKYTAlert(ctx, tx1, evt, &w.EventDetail)`
+- `default` — 静默 `MarkEventDone` + Commit
+
+> **关于 AML_KYT_ALERT 的 unmarshal 写法（R3-I2 修正）**：现有 `PayloadEnvelope.EventDetail` 类型是 `PayloadEventDetail`，不含 `AmlList` 字段。AML_KYT_ALERT 不能复用 `env.EventDetail`，必须从 `evt.RawPayload`（已是 `[]byte`，无需类型转换）二次 unmarshal 到一个 `wrap struct`：
+>
+> ```go
+> var w struct { EventDetail AMLKYTAlertDetail `json:"eventDetail"` }
+> if err := json.Unmarshal(evt.RawPayload, &w); err != nil { return true, err }
+> return s.processKYTAlert(ctx, tx, evt, &w.EventDetail)
+> ```
+>
+> 该写法已经在 T10.4 改造点 3 的 dispatch switch 块里就位，T10.6 这里不重复。
+
+> **关于扩 PayloadEventDetail 而非二次 unmarshal 的替代方案**：可以给 `PayloadEventDetail` 加 `AmlList []safeheron.AmlReport \`json:"amlList,omitempty"\`` 字段，省一次 unmarshal；但这样会把 KYT 字段污染到所有 TRANSACTION_* 事件的解析路径。**当前方案选二次 unmarshal**，保持 PayloadEventDetail 的关注点单一。
+
+#### 改造点 3：`processKYTAlert` 完整实现
+
+```go
+// processKYTAlert 处理 AML_KYT_ALERT webhook 事件 (Phase 1 主路径)。
+// 进入时 tx 已持有 webhook_events 行锁 (FOR UPDATE);
+// 退出时根据情况 Commit 标 DONE / Rollback 让事件回 PENDING。
+func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert *AMLKYTAlertDetail) (processed bool, err error) {
+
+    // 步骤 1: 按 txKey 查 deposit
+    dep, found, err := s.repo.FindDepositByTxKey(ctx, tx, alert.TxKey)
+    if err != nil { return true, err }
+
+    if !found {
+        // === 乱序场景: AML_KYT_ALERT 比 TRANSACTION_STATUS_CHANGED 先到 (K-13) ===
+        //
+        // 关键决策 (C-3): worker_events 的 process_attempts 推进必须用**独立非事务 UPDATE**,
+        // 因为下面的 Rollback 会回滚事务内的 UPDATE, attempts 永远不会增长, 永远触发不到上限。
+        //
+        // 注意: IncrementEventAttemptsNoTx 用 *sql.DB (无 tx), 不受外层 tx 影响,
+        //       Rollback 之后该 UPDATE 仍然生效。
+        if err := s.repo.IncrementEventAttemptsNoTx(ctx, evt.ID); err != nil {
+            log.Printf("IncrementEventAttempts failed for orphan AML_KYT_ALERT eventId=%d: %v", evt.ID, err)
+            // 推进失败也不阻塞 (下一轮 tick 会重新拉)
+        }
+
+        // 判断阈值: 注意 evt.ProcessAttempts 是 LockNextPendingEvent 拿到时的快照 (未 +1),
+        //          所以这里用 evt.ProcessAttempts+1 与上限比较
+        if evt.ProcessAttempts+1 >= s.kytOrphanMaxRetry {
+            // === 超过 100 次仍找不到 deposit → 强转 MR(KYT_ORPHAN_ALERT) ===
+            // 这是个异常状态: 100 次重试每次间隔 1s, 累计 ~100s 都找不到 deposit,
+            // 说明该 AML_KYT_ALERT 对应的交易确实没有走入金管道 (可能是 OUTFLOW 或其他异常)。
+            return s.markOrphanAlertDone(ctx, tx, evt, alert)   // 标 DONE + ERROR alert
+        }
+
+        // === I-8 注释: 未到上限, 让事件回 PENDING 等下次轮询 ===
+        //
+        // 返回值语义说明:
+        //   processed=true 是为了让 worker 主循环继续 drain 下一条事件;
+        //   processed=false 会让 worker 进入 sleep, 但此处希望立即处理下一条 (这条 AML_KYT_ALERT
+        //   下次 tick 还会被重新拉到, 不会丢)。
+        //
+        //   err=nil 是因为这不是错误状态, 是预期的乱序保护; 如果返 err 会触发 worker 的错误日志噪音。
+        //
+        //   Rollback 不显式调用: 函数末尾 deferred handler 会在 committed=false 时自动 Rollback,
+        //   外层 ProcessOne 的 defer 即可。
+        return true, nil
+    }
+
+    // === 步骤 2: 找到 deposit, 写入 AML 数据 ===
+    amlListJSON, _ := json.Marshal(alert.AmlList)
+    evaluatedAt := maxLastUpdateTime(alert.AmlList)
+    riskLevel := SummarizeRiskLevel(alert.AmlList)
+    if err := s.repo.UpdateAMLFields(ctx, tx, dep.ID,
+        "TRIGGERED",   // AML_KYT_ALERT 隐含 TRIGGERED (服务商已开始评估)
+        riskLevel, evaluatedAt, amlListJSON); err != nil { return true, err }
+
+    // === 步骤 3: 终态保护 (K-18) ===
+    if dep.Status == "CREDITED" || dep.Status == "MANUAL_REVIEW" || dep.Status == "FAILED" {
+        // 终态不动, 仅记录 AML 数据供审计; 标 DONE 让事件不再重试
+        // K-18: Phase 1 不做"运维放行"接口, 这里不自动改回 CREDITED 即便 risk=LOW
+        if err := s.repo.MarkEventDone(ctx, tx, evt.ID); err != nil { return true, err }
+        if err := tx.Commit(); err != nil { return true, err }
+        return true, nil
+    }
+
+    // === 步骤 4: dep.Status ∈ ('PENDING', 'KYT_PENDING') → 按 DecideKYT 推进 ===
+    decision := DecideKYT("TRIGGERED", alert.AmlList, false /* isAfterTimeout */)
+
+    var alerts []alertPayload
+    switch decision.Action {
+    case KytActionCredit:
+        // 复用 creditDepositFromRow (T10.5 同款), 不需要 parsed envelope
+        if err := s.creditDepositFromRow(ctx, tx, dep); err != nil { return true, err }
+    case KytActionKeepPending:
+        // 理论不进入: AML_KYT_ALERT 推送时 amlList 内 provider 应该都 COMPLETED
+        // (Phase 1 只 1 个 provider); 但保留分支应对 Safeheron 改协议
+        // 仅 UpdateAMLFields 已完成 (步骤 2), 不动 status
+        // 注意此时 dep.Status 已经是 KYT_PENDING (T-α 设的), 留给超时扫描兜底
+    case KytActionManualReview:
+        if err := s.repo.MarkDepositManualReview(ctx, tx, dep.ID, decision.Reason); err != nil { return true, err }
+        alerts = append(alerts, alertPayload{level: decision.AlertLevel, title: "KYT alert manual review",
+            fields: map[string]string{"depositId": fmt.Sprint(dep.ID), "txKey": alert.TxKey,
+                                      "riskLevel": riskLevel, "reason": decision.Reason}})
+    }
+
+    if err := s.repo.MarkEventDone(ctx, tx, evt.ID); err != nil { return true, err }
+    if err := tx.Commit(); err != nil { return true, err }
+
+    s.fireAlerts(alerts)
+    return true, nil
+}
+
+// markOrphanAlertDone 在 AML_KYT_ALERT 找不到 deposit 重试超过上限时调用。
+func (s *Service) markOrphanAlertDone(ctx context.Context, tx Tx, evt *Event, alert *AMLKYTAlertDetail) (bool, error) {
+    // 注意: 这里没有对应 deposit, 只能在 webhook_events 上标 DONE; 不动 deposits 表。
+    // 用 ERROR alert 通知运维: 收到了一个无主的 AML_KYT_ALERT (可能是 OUTFLOW 或测试事件)。
+    if err := s.repo.MarkEventDone(ctx, tx, evt.ID); err != nil { return true, err }
+    if err := tx.Commit(); err != nil { return true, err }
+    s.fireAlerts([]alertPayload{{level: "ERROR", title: "Orphan AML_KYT_ALERT after retries",
+        fields: map[string]string{"eventId": fmt.Sprint(evt.ID), "txKey": alert.TxKey,
+                                  "txHash": alert.TxHash, "direction": alert.TransactionDirection}}})
+    return true, nil
+}
+```
+
+**DoD**：
+- [ ] F-KYT-7、F-KYT-8、F-KYT-9 单测全过
+- [ ] **乱序场景集成测试**：先 INSERT 一条 `eventType=AML_KYT_ALERT` 的 webhook_events 行（无对应 deposit），调一次 `ProcessOne` → `processed=true, err=nil`，event 仍 PENDING 且 `process_attempts=1`；再 INSERT `TRANSACTION_STATUS_CHANGED` 行并 worker 处理 → deposit 创建；再次 `ProcessOne` 处理 AML_KYT_ALERT → deposit 正确推进
+- [ ] **orphan 重试上限测试**：mock `process_attempts=99`，处理一次后变 100，仍 PENDING；下次处理（attempts+1=101 >= 100）→ MR/标 DONE + ERROR alert
+- [ ] **终态保护测试**（K-18）：deposit.status=CREDITED 时收到 AML_KYT_ALERT(LOW/HIGH)，status **不变**，AML 字段已写入
+
+### T10.7 — Container 启动校验 + 配置注入
+
+**目标**：`container.go` 加 KYT 配置读取 + prod 启动校验（KYT_ENABLED=false 在 prod 直接 panic）+ 通过 setter 注入 KYT 依赖到 Service（I-2 决策：setter 风格，不上 functional options）。
+
+**文件**：修改 `internal/container/container.go`
+
+```go
+// 在 WithSafeheronPool 内, 创建 Service 之后, 调 SetKYTDeps 注入 KYT 相关依赖。
+// SetKYTDeps 风格与现有 SetSerialFunc (service.go) 一致, 避免 NewService 签名膨胀。
+
+// === KYT_ENABLED 配置读取 + 生产环境启动校验 (K-16) ===
+// 默认值: 未设置时按 true (生产安全默认, 防止配置遗漏导致绕过 KYT)
+kytEnabled := true
+if viper.IsSet("KYT_ENABLED") {
+    kytEnabled = viper.GetBool("KYT_ENABLED")
+}
+if viper.GetString("APP_ENV") == "production" && !kytEnabled {
+    panic("KYT_ENABLED=false is not allowed in production (K-16): " +
+          "set KYT_ENABLED=true or unset for production deployment")
+}
+
+// === KYT 配置读取 (其他三个有默认值, 不强制 env) ===
+kytOrphanMaxRetry := viper.GetInt("KYT_ORPHAN_ALERT_MAX_RETRY")
+if kytOrphanMaxRetry <= 0 { kytOrphanMaxRetry = 100 }
+
+kytTimeout := viper.GetDuration("KYT_TIMEOUT")
+if kytTimeout <= 0 { kytTimeout = 20 * time.Minute }
+
+kytScanInterval := viper.GetDuration("KYT_SCAN_INTERVAL")
+if kytScanInterval <= 0 { kytScanInterval = time.Minute }
+
+// === Service 注入 (现有 NewService 签名不变, 通过 setter 加 KYT) ===
+c.DepositPipeline = deposit.NewService(depRepo, registry, c.AlertService.Send)
+c.DepositPipeline.SetKYTDeps(client, kytEnabled, kytOrphanMaxRetry, kytTimeout)
+// 注: client 类型是 safeheron.SafeheronClient (现有接口), 它实现了 deposit.KYTClient
+//     窄接口 (T10.4 改造点 4), 由 Go 接口隐式满足关系自动适配。
+
+// === Worker 配置: 现有字段 + KYT 扫描字段 ===
+workerInterval := viper.GetDuration("DEPOSIT_WORKER_INTERVAL")
+if workerInterval <= 0 { workerInterval = time.Second }
+
+c.DepositWorker = deposit.NewWorker(c.DepositPipeline, deposit.WorkerConfig{
+    Interval:        workerInterval,
+    KYTScanInterval: kytScanInterval,
+    PanicBackoff:    5 * time.Second, // 显式给值; 不从 env 读 (NewWorker 内部 ≤0 兜底也是 5s, 写出来避免施工者困惑)
+    // KYTTimeout 不放这里 — 已通过 SetKYTDeps 注入到 Service; Worker 调 Service.ScanKYTTimeouts() 时不再传 (R3-I5)
+})
+
+log.Printf("[KYT] enabled=%v scan_interval=%s timeout=%s orphan_max_retry=%d",
+    kytEnabled, kytScanInterval, kytTimeout, kytOrphanMaxRetry)
+```
+
+**`.env.example` 追加**（按 plan.md §3.10 末尾的 KYT 块）：
+```bash
+# ============ KYT 合规筛查 (Phase 1, v1.5) ============
+KYT_ENABLED=true                       # 仅 APP_ENV != production 允许设为 false
+KYT_TIMEOUT=20m                        # KYT_PENDING 超时阈值 (默认 20m)
+KYT_SCAN_INTERVAL=1m                   # 超时扫描 ticker 间隔
+KYT_ORPHAN_ALERT_MAX_RETRY=100         # AML_KYT_ALERT 找不到 deposit 的最大重试次数
+```
+
+**DoD**：
+- [ ] F-KYT-11：`APP_ENV=production KYT_ENABLED=false ./monera-server` 启动 panic + 日志含 "KYT_ENABLED=false is not allowed in production"
+- [ ] F-KYT-12：`APP_ENV=local KYT_ENABLED=false ./monera-server` 启动正常，启动日志可见 `[KYT] enabled=false`，发起一笔充值后无 `safeheron KytReport` 调用日志
+- [ ] `.env.example` 加 4 个 KYT 环境变量
+- [ ] 启动日志含 `[KYT] enabled=true scan_interval=1m0s timeout=20m0s orphan_max_retry=100`
+- [ ] `c.DepositPipeline` 通过 `SetKYTDeps` 注入后, `safeheronClient` 字段非 nil（用 reflect 或额外 getter 验证）
+
+### T10.8 — 前端 i18n + Status Badge
+
+**目标**：前端 `KYT_PENDING` 状态在 Recent deposits 显示「Under compliance review」。
+
+**文件**：
+- 修改 `src/i18n/locales/en.json`：加 `"deposit.status.KYT_PENDING": "Under compliance review"`
+- 修改 `src/i18n/locales/zh.json`：加 `"deposit.status.KYT_PENDING": "合规审核中"`
+- 修改 `src/pages/dashboard/Deposit.tsx`：Recent deposits 的 Badge 着色映射加 `KYT_PENDING: 'bg-blue-100 text-blue-700'`（与 PENDING 同色，不暴露 KYT 概念）
+
+**DoD**：
+- [ ] 浏览器手测：制造一笔 KYT_PENDING 状态的 deposit（local 直接 `UPDATE deposits SET status='KYT_PENDING' WHERE id=?`），前端「Recent deposits」对应行显示「Under compliance review」/「合规审核中」
+- [ ] 中英文切换都正常
+- [ ] 无 i18n missing-key warning
+
+### T10.9 — 原 T7 入账测试回归
+
+**目标**：确保 T10 改造不破坏 T7 的入账主路径测试。
+
+**文件**：修改 `internal/wallet/deposit/service_test.go`（按需）
+
+**思路**（推荐二选一）：
+- **方案 A**（推荐）：在测试 setup 里 `service.kytEnabled = false`，所有原 T7 测试走 KYT 跳过分支，覆盖 KYT_ENABLED=false 路径
+- **方案 B**：mock `SafeheronClient.KytReport` 始终返回 `TRIGGERED+LOW`，让原 T7 测试经过 KYT 后仍 CREDITED
+
+**DoD**：
+- [ ] `go test ./internal/wallet/deposit/... -race -v` 全绿，**无任何 T7 用例退化**
+- [ ] `go test ./internal/handlers/... -race -v` 全绿
+- [ ] 整体覆盖率不下降（`go test ./internal/wallet/... -cover` 与改造前对比）
+
+---
+
+## T11. Sandbox 端到端 + 灰度上线
+
+> **注**：原 T10，2026-05-12 T10 KYT 合规筛查插入后顺延为 T11。子任务 T10.X → T11.X。明天用户在公司电脑配置 Safeheron 密钥后做实测。
+
+**依赖**：T1-T10
 **估时**：1d
 **输出**：测试报告 + 上线 checklist
 
-### T10.1 — Sandbox E2E 矩阵
+### T11.1 — Sandbox E2E 矩阵（充值主路径）
 
 按 SPEC §11.1 必须各成功 1 笔：
 
@@ -836,44 +1985,63 @@ function explorerTxUrl(explorerUrl, txHash): string
 每次转账后核对：
 - [ ] `safeheron_webhook_events` 至少一条 `event_type=TRANSACTION_*`
 - [ ] `deposits.safeheron_tx_key` 与 Safeheron 控制台一致
-- [ ] `deposits.status='CREDITED'`
+- [ ] `deposits.status='CREDITED'` 且 `aml_screening_state` 非空（KYT_ENABLED=true）/ 或 `KYT_ENABLED=false` 走绕过分支
 - [ ] `account.balance` 增加值等于 `txAmount`
 - [ ] `journal.biz_type=10`、`ref_id=deposits.id`、`amount=txAmount`
 
-### T10.2 — 异常路径覆盖（人工构造）
+### T11.2 — KYT 真实告警路径实测（v1.5 新增）
+
+**前提**：在公司电脑配置好 Safeheron 密钥 + Console AML 已开启 + Webhook 通知已启用。
+
+- [ ] **KYT-E2E-1**：sandbox 正常充值（地址干净）→ Safeheron 自动 KYT 评估 → `amlScreeningTriggeredState=TRIGGERED + LOW` → CREDITED + `deposits.aml_list` JSONB 含 MistTrack 评估结果
+  - [ ] 同步打印收到的 `AML_KYT_ALERT` 原始 payload（`SELECT raw_payload FROM safeheron_webhook_events WHERE event_type='AML_KYT_ALERT' ORDER BY id DESC LIMIT 1`），对照 T10.6 改造点 1 的 `AMLKYTAlertDetail` struct 字段**完整对齐**（字段名 + 类型 + 大小写）；如字段名不一致或缺字段，**以实测 payload 为准回头更新 struct**，并把对齐结果记入 review log（N-S2 修正）
+- [ ] **KYT-E2E-2**：构造或选择一个 Safeheron 自带的"测试用风险地址"（咨询客服可获得 sandbox 风险地址样本）→ 充值后收到 `AML_KYT_ALERT` webhook → deposit 进 MANUAL_REVIEW + 飞书 ERROR 告警
+- [ ] **KYT-E2E-3**：观察 Console 中的 KYT 报告查询次数，确认实际调用 ≈ 1 次/笔（初查），无超时兜底触发
+- [ ] **KYT-E2E-4**：制造一笔需要等待 KYT 评估的充值（如果 sandbox 不能模拟可跳过，标 N/A），观察 KYT_PENDING 状态 → 收到 AML_KYT_ALERT 后推进
+- [ ] **KYT-E2E-5**：手动 SQL 把一笔 deposit 设为 `status='KYT_PENDING' AND updated_at = NOW() - INTERVAL '21 min'`，下一个 ticker（≤1min）触发兜底 API 调用，日志可见
+
+### T11.3 — 异常路径覆盖（人工构造）
 
 - [ ] **AC-1**：转账到未分配地址 → 用 SDK 手动建一个 hidden 钱包，往里打 testnet ETH → webhook 进 MANUAL_REVIEW + 飞书消息
 - [ ] **AC-2**：金额低于 min_deposit → 发 0.00001 Sepolia ETH（< 0.0001）→ MANUAL_REVIEW
 - [ ] **AC-3**：webhook 验签失败 → curl 伪造 payload → 401 + 无 DB 写入
 - [ ] **AC-4**：webhook 重发 → Safeheron 控制台触发 `/v1/webhook/resend` → DB 无重复 deposits 行
 - [ ] **AC-5**：worker 中途崩溃 → kill -9 进程 → 重启后未完成事件仍能处理
+- [ ] **AC-6**（v1.5 新增）：手动给 worker 注入 KYT API 失败（mock 或临时改错 base url），事件回 PENDING 自动重试，process_attempts 增长正确
 
-### T10.3 — 非功能验证
+### T11.4 — 非功能验证
 
 - [ ] `wrk -t4 -c10 -d30s` 打 webhook handler，P99 latency < 2s
-- [ ] 用日志直方图统计 webhook 落库 → CREDITED 延迟 P99 < 30s
+- [ ] 用日志直方图统计 webhook 落库 → CREDITED 延迟 P99 < 30s（KYT_ENABLED=true 下，含 KYT API 调用时间，可适当放宽到 P99 < 60s）
 - [ ] `go test ./internal/... -cover` 覆盖率 ≥ 80%
 - [ ] `go vet ./...` 无 warning
 - [ ] `npm run build` + `npm run test` 通过
 
-### T10.4 — 上线 Checklist（部署前 ops 确认）
+### T11.5 — 上线 Checklist（部署前 ops 确认）
 
-- [ ] 生产 Safeheron API Key 已申请，权限含「读取 + 钱包账户管理」（**不**含「发起/取消交易」）
+- [ ] 生产 Safeheron API Key 已申请，权限含「读取 + 钱包账户管理 + 合规筛查 (Compliance)」（**不**含「发起/取消交易」）
 - [ ] 生产 RSA 密钥对已生成，私钥已注入生产 env `SAFEHERON_PRIVATE_KEY_PEM`
 - [ ] Safeheron 平台公钥、Webhook 公钥已注入对应 env
 - [ ] 生产出口 IP 固定且已加白名单（至少 2 个 IP）
 - [ ] Webhook 接收 URL 配置到 Safeheron 控制台（生产）
-- [ ] `APP_ENV=production` 确认
+- [ ] `APP_ENV=production` 确认；`KYT_ENABLED` 未设置（默认 true）或显式 true，**不能为 false**（启动会 panic）
+- [ ] **Safeheron Console KYT 配置已确认**（v1.5 新增）：
+  - [ ] 管理 → API → AML 功能已开启
+  - [ ] 风险等级映射已配置（MistTrack 评分 → LOW/MEDIUM/HIGH/SEVERE）
+  - [ ] 风险等级配置中**Webhook 通知已启用**（否则不推 AML_KYT_ALERT）
 - [ ] `ALERT_WEBHOOK_URL` 指向生产飞书机器人，`ALERT_EMAIL_RECIPIENTS` 配置正确
-- [ ] 数据库迁移 015-021 已在生产执行
+- [ ] 数据库迁移 015-022 已在生产执行（KYT 字段在 015 内，不增加新文件）
 - [ ] `cmd/pool_init --evm-count=100 --tron-count=100` 已在生产跑过，`address_pool` 各 100 个 AVAILABLE
-- [ ] 健康检查接口（如有）确认 Safeheron 连通性
+- [ ] 健康检查接口（如有）确认 Safeheron 连通性 + KytReport API 连通性
 
-### T10.5 — 灰度上线策略
+### T11.6 — 灰度上线策略
 
 - 阶段 1：先上前端 + 后端代码，**不**改 Safeheron 控制台 webhook URL（webhook 仍指向 staging）
-- 阶段 2：staging 用生产 Safeheron team 真小额做 5 个 mainnet 币种最终验证（SPEC §13 dev/test 覆盖差距）
-- 阶段 3：切换生产 webhook URL，观察 1 小时无 ERROR 日志、无 MANUAL_REVIEW
+- 阶段 2：staging 用生产 Safeheron team 真小额做 5 个 mainnet 币种最终验证（SPEC §13 dev/test 覆盖差距）+ KYT 路径验证（KYT-E2E-1/2 至少各一次）
+- 阶段 3：切换生产 webhook URL，观察 1 小时：
+  - 无 ERROR 日志、无非预期 MANUAL_REVIEW
+  - 监控 `failed_reason LIKE 'KYT_%'` 占比 < 5%（v1.5 新增）
+  - 监控 `status='KYT_PENDING'` 最长停留时间 < 5min（v1.5 新增）
 - 阶段 4：通知业务可对外宣传 deposit 功能
 
 ---
@@ -883,6 +2051,6 @@ function explorerTxUrl(explorerUrl, txHash): string
 全部任务 DoD 勾选完毕后：
 
 1. PR 描述按 `plan.md` §8 列出全部交付物
-2. 在 SPEC §16 添加 v1.5 实施落地记录
-3. 关闭 todo task #15
+2. 在 SPEC §16 添加 v1.5 KYT 实施落地记录
+3. 关闭 todo task
 4. 团队公告 Phase 1 上线，二期排期开始

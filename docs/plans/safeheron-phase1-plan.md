@@ -1,8 +1,8 @@
 # Safeheron Phase 1 实施计划
 
 > Status: **Draft for review**
-> Last updated: 2026-05-11
-> 对应 SPEC: `docs/spec/safeheron-phase1-spec.md` v1.4
+> Last updated: 2026-05-12（v1.5 KYT 合规筛查补充）
+> 对应 SPEC: `docs/spec/safeheron-phase1-spec.md` v1.5
 > 任务清单: `docs/plans/safeheron-phase1-todo.md`
 
 ---
@@ -11,7 +11,7 @@
 
 | 项 | 值 |
 |---|---|
-| SPEC 版本 | v1.4 (commit `1887865`) |
+| SPEC 版本 | v1.5（KYT 合规筛查，2026-05-12 并入 Phase 1）|
 | 验收基线 | SPEC §11 全部勾选 |
 | Sandbox 实测基线 | V2/V3/V4/V5/V6/V7 全通（2026-05-11） |
 | 当前已完成 | D1（spec、sandbox 实测、coinKey 锁定） |
@@ -79,9 +79,18 @@
             │  DB 展示字段 migration 022)     │
             └─────────────┬───────────────────┘
                           ▼
+            ┌──────────────────────────────────────────────┐
+            │ T10 KYT 合规筛查（v1.5 spec 新增）            │
+            │ (015 加 4 AML 字段 + KYT_PENDING 状态 +       │
+            │  ProcessOne 拆两阶段 + KYT Report API +      │
+            │  AML_KYT_ALERT webhook + 超时兜底扫描 +      │
+            │  KYT_ENABLED 启动校验 + 前端文案)            │
+            └─────────────┬────────────────────────────────┘
+                          ▼
             ┌─────────────────────────────────┐
-            │ T10 Sandbox 端到端 + 灰度上线   │
-            │ (3 链 × 2-3 币 + 异常路径)      │
+            │ T11 Sandbox 端到端 + 灰度上线   │
+            │ (3 链 × 2-3 币 + KYT 路径 +     │
+            │  异常路径覆盖)                  │
             └─────────────────────────────────┘
 ```
 
@@ -93,7 +102,8 @@
 - T7 是 webhook 入账闭环 → 第三个 demo 检查点（核心交付）
 - T8 是前端切换 → 第四个 demo 检查点（用户可见）
 - T9 是 T8 落地后的 UX 二次迭代（对齐币安/欧易），独立交付
-- T10 是灰度上线前的最终验收
+- **T10 是 v1.5 spec 新增的 KYT 合规筛查**，依赖 T7 的入账状态机；ProcessOne 被改造为两阶段（KYT API 调用脱离 DB 事务），整笔 deposit 必须经 KYT 检查才能 CREDITED
+- T11 是灰度上线前的最终验收（原 T10 顺延）
 
 ---
 
@@ -109,7 +119,8 @@
 | **P4 充值入账闭环** | T7 | sandbox Sepolia ETH 真转账 → webhook 触发 → `deposits.status=CREDITED` + `account.balance` 增加 + `journal` 写入；webhook 重发不重复入账 | D5 |
 | **P5 前端切换** | T8 | 前端 Dashboard 显示 EVM/TRON 地址 + supportedCoins 列表 | D6 |
 | **P6 充值 UX 重构** | T9 | 选币→选链→展示地址三步流程；deposit-coins 端点；DB 加 short_name/token_standard/estimated_arrival_minutes 列 | D6 |
-| **P7 端到端验收 + 灰度** | T10 | 3 链 × 2-3 币种端到端各成功 1 次 + 异常路径覆盖 + 灰度上线 | D7 |
+| **P7 KYT 合规筛查** | T10 | `KYT_ENABLED=true` 下，构造 webhook payload 跑通 9 个分支：UNTRIGGERED→MR / TRIGGERED+LOW→CREDITED / MEDIUM→MR / HIGH→MR(ERROR) / SEVERE→MR(ERROR) / FAILED→MR / SKIPPED→MR / IN_PROGRESS→KYT_PENDING 后 AML_KYT_ALERT 推进 / 20min 超时兜底；`KYT_ENABLED=false` 下走原流程 | D7 |
+| **P8 端到端验收 + 灰度** | T11 | 3 链 × 2-3 币种端到端各成功 1 次 + KYT 真实告警路径（明天 sandbox 实测） + 异常路径覆盖 + 灰度上线 | D8 |
 
 **检查点强制要求**：每阶段结束**必须** demo 给团队看（或录屏），未通过不进入下一阶段。
 
@@ -251,11 +262,36 @@ POOL_LOW_WATERMARK_TRON=50
 POOL_TARGET_CAPACITY_TRON=100
 ALERT_WEBHOOK_URL=
 ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
+
+# ============ T10 KYT 合规筛查 (v1.5 新增) ============
+KYT_ENABLED=true                                   # 仅 APP_ENV != production 允许设为 false
+KYT_TIMEOUT=20m
+KYT_SCAN_INTERVAL=1m
+KYT_ORPHAN_ALERT_MAX_RETRY=100
 ```
 
----
+### 3.11 KYT 合规筛查（v1.5 spec 新增）
 
-## 4. 全部已锁决策（无遗留开放点）
+| 决策 | 取值 | 来源 / 锁定理由 |
+|------|------|----------------|
+| KYT 服务商 | **仅 MistTrack 一家**（K-4）。三家服务商（MistTrack/Chainalysis/Elliptic）的 `amlList` 数组结构统一保留，未来加新服务商无需改 schema | SPEC §6.5；用户决策 |
+| 主路径 | `AML_KYT_ALERT` webhook（被动接收，90%+ 场景覆盖） | K-11；Safeheron API 有次数限制 |
+| 辅路径 | 初始 1 次 `/v1/compliance/kyt/report`（COMPLETED 时）+ 超时 1 次（20min 兜底），共 ≈ 1 次/笔 | K-12 |
+| Console 配置（运维） | **AML 功能已开启 + 风险等级 Webhook 通知已启用** | K-2，用户已确认 |
+| 处置矩阵（已锁） | LOW→CREDITED；MEDIUM/HIGH/SEVERE/UNKNOWN/FAILED/SKIPPED/UNTRIGGERED→MANUAL_REVIEW | K-1/K-5/K-6/K-7/K-8；SPEC §6.5.1 |
+| 告警分级 | HIGH/SEVERE/超时类→ERROR；其余→WARN | K-17 |
+| 20min 超时仍 IN_PROGRESS | 直接 MANUAL_REVIEW(`KYT_TIMEOUT_STILL_PENDING`)，**不延长** | K-19 |
+| webhook 乱序保护 | AML_KYT_ALERT 找不到 deposit → 事件保留 PENDING 待下次 worker 轮询关联；超过 100 次（`KYT_ORPHAN_ALERT_MAX_RETRY`）转 MANUAL_REVIEW | K-13 |
+| 历史数据 | 不回填（线上 Phase 1 之前无真实 deposit） | K-14 |
+| 前端展示 | `KYT_PENDING` 状态显示「Under compliance review」 | K-15 |
+| 测试开关 | `KYT_ENABLED` env；prod 启动校验：`APP_ENV=production && !KYT_ENABLED` → panic | K-16 |
+| 运维放行接口 | Phase 1 **不做**（admin 接口蔓延风险）；列入 Phase 2 TODO | K-18 |
+| DB 迁移合并 | **15 个 migration 文件不再增加**，KYT 4 个 AML 字段 + KYT_PENDING 状态 + `idx_deposits_kyt_pending` 部分索引**全部并入 `015_safeheron_phase1.go`**；本地 monera_local 数据库由开发者手动 ALTER 或 DROP 重建（用户授权） | 用户决策 + memory `feedback_migration_consolidation` |
+| 单事务 vs 两阶段 | **拆两阶段**：(1) 事务 1 落 webhook event + 解析 + 锁定；(2) 调 KYT API（事务外）；(3) 事务 2 写 KYT 结果 + 入账/MANUAL_REVIEW + 标 DONE。原因：KYT API 是外部 HTTP（100ms ~ 5s），放在事务里会长时间占 `FOR UPDATE` 行锁 | 用户决策（Q2 方案 A） |
+| `summarizeRiskLevel` 算法 | 取 `amlList` 中所有 provider `riskLevel` 的最高严重度：SEVERE > HIGH > MEDIUM > UNKNOWN > LOW；任一 `status=PENDING` 视为整体未完成；任一 `status=FAILED`/`SKIPPED` 优先返回（不与 riskLevel 同时存在） | SPEC §6.5.1 |
+| 超时扫描实现 | 复用 `DepositWorker` 主 ticker，加 `case <-kytScanTicker.C` 分支（间隔 1m），不另起 goroutine | Phase 1 KISS |
+| KYT 客户端接口 | `safeheron.SafeheronClient` 接口扩展 `KytReport(ctx, txKey) (*KytReportResponse, error)`，adapter 内调 SDK `api.ComplianceApi.KytReport()`；项目内 mirror 一份 `KytReportResponse` / `AmlReport` 类型（不直接暴露 SDK 类型） | 与现有 adapter 风格一致（T2.3 决策） |
+| `aml_list` 字段写入 | Go side 用 `json.Marshal(amlList)` 转 `[]byte` 存 JSONB；读取时 `json.Unmarshal` 回 `[]AmlReport` | 标准 PG JSONB 用法 |
 
 > 之前 v1 草稿留了 7 个开放点（O-1~O-7），用户质疑后实测一遍代码 / SDK / 前端现状，**全部锁死**。施工时如发现下表与代码冲突，**先停**并提出，不要默默改方向。
 
@@ -297,12 +333,28 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 | **D-29** | i18n 处理 | 整重写 `deposit.*` 子树；删除 `deposit.tabs.*` / `deposit.supportedCoins.*` / `deposit.comingSoon.*`；保留 `deposit.status.*` 和 `deposit.activate*`（其它位置仍用） | D-8 i18n 命名更新 |
 | **D-30** | Deposit.test.tsx | 因组件结构变更，整文件重写（不试图保留旧用例形态）；12 个新用例覆盖三步流程 + 边界 | 旧测试基于 Tabs 已不适用 |
 
+#### T10 KYT 合规筛查（D-31 ~ D-40，v1.5 spec 新增）
+
+| # | 议题 | 锁定决策 | 依据 |
+|---|------|---------|------|
+| **D-31** | DB 迁移落地位置 | **并入现有 `015_safeheron_phase1.go`**，不新增 016+ 文件。本地 monera_local 已经跑过 015，开发者手动 `ALTER TABLE deposits ADD COLUMN ...` 补齐字段（**不强制 IF NOT EXISTS**——本地 step 测试已通过，生产首次执行时 015 一次到位）。但 SQL 中**仍用 `ADD COLUMN IF NOT EXISTS`** 保持幂等（migrator 中途失败可重跑） | 用户决策 + memory `feedback_migration_consolidation` |
+| **D-32** | 015 改造范围（仅 AML 部分） | (a) `deposits` 加 4 字段：`aml_screening_state VARCHAR(16)` / `aml_risk_level VARCHAR(8)` / `aml_evaluated_at TIMESTAMP` / `aml_list JSONB`；(b) 状态枚举 `ck_deposits_status` 加 `KYT_PENDING`（先 DROP CONSTRAINT 再 ADD）；(c) 部分索引 `idx_deposits_kyt_pending ON (updated_at) WHERE status='KYT_PENDING'`；(d) 不改 `safeheron_webhook_events` 表（AML_KYT_ALERT 复用现有 raw_payload + event_id 机制） | SPEC §4.6 / §6.5 |
+| **D-33** | 单事务 → 两阶段 拆分边界 | `ProcessOne` 改为三事务结构：(T-α) 拉 webhook event + parse + 锁定，COMMIT；(T-β 不在事务内) 调 `KytReport` API；(T-γ) 写 KYT 结果 + 入账或 MANUAL_REVIEW + 标 DONE。中间态用 `webhook_events.process_status='KYT_QUERYING'` 标识（**仅内存态够用，不需新加 enum 值**——直接在 T-α 末尾 SELECT 锁的同时设置 `process_attempts++`，T-β 失败回滚为 PENDING） | 用户决策 Q2 方案 A |
+| **D-34** | KYT API 失败兜底 | T-β 中 `KytReport` 返回 error（网络抖动、超时） → **不**标 DONE，事件回 PENDING（`process_attempts++`），下次 worker 拉取重试；超过 `KYT_ORPHAN_ALERT_MAX_RETRY=100` 次后 MANUAL_REVIEW(`KYT_API_FAILED`) | 与现有 webhook_events 重试机制对齐 |
+| **D-35** | KYT_ENABLED=false 走原入账逻辑 | 当 `KYT_ENABLED=false`（仅 local/test 可设）：`processEvent` 内**跳过整个 KYT 分支**，COMPLETED+CONFIRMED 直接走原入账事务（单事务，复用现有逻辑）。生产环境启动校验阻止此分支被启用 | K-16；保证本地端到端不依赖真实 Safeheron AML 配置 |
+| **D-36** | summarizeRiskLevel 函数位置 | 新建 `internal/wallet/deposit/kyt.go`，导出 `SummarizeRiskLevel(amlList []AmlReport) string`（返回值：`LOW`/`MEDIUM`/`HIGH`/`SEVERE`/`UNKNOWN`/`FAILED`/`SKIPPED`/`PENDING`）。**不另起 kyt 包**——KYT 决策语义紧绑充值入账，与 deposit 包共生 | KISS；防包间循环依赖 |
+| **D-37** | Safeheron Client KytReport 方法签名 | 在 `internal/safeheron/iface.go`（接口）+ `client.go`（adapter）扩展：`KytReport(ctx context.Context, txKey string) (*KytReportResponse, error)`；项目内 mirror 类型 `KytReportResponse{TxKey, CustomerRefID, AmlScreeningTriggeredState, AmlList []AmlReport}` 和 `AmlReport{Provider, Timestamp, Status, RiskLevel, LastUpdateTime, Payload json.RawMessage}`（实际文件清单见 todo.md T10.2） | 与现有 adapter 风格一致（T2.3 D-1） |
+| **D-38** | 超时扫描 goroutine 实现 | **复用** `internal/wallet/deposit/worker.go`：在 `Worker.Run` 主循环加一个独立 ticker `kytScanTicker := time.NewTicker(KYT_SCAN_INTERVAL)`（默认 1m）；新增 `Service.ScanKYTTimeouts(ctx)` 方法扫描 `status=KYT_PENDING AND updated_at < NOW() - INTERVAL '20 minutes'`，逐行调 `KytReport` 兜底。复用 `FOR UPDATE SKIP LOCKED` | Phase 1 KISS，避免起新 goroutine |
+| **D-39** | AML_KYT_ALERT 在 deposit 创建前到达 | webhook handler 同步路径**不做特殊处理**，照常 INSERT `safeheron_webhook_events`；worker 异步处理时若 `eventType=AML_KYT_ALERT` 且 `SELECT * FROM deposits WHERE safeheron_tx_key=?` 返回空，则 ROLLBACK 事务（`process_status` 保留 PENDING，`process_attempts++`），下次轮询自然重试；超过 `KYT_ORPHAN_ALERT_MAX_RETRY=100` 次后强转 MANUAL_REVIEW(`KYT_ORPHAN_ALERT`) | SPEC §6.5.2 + K-13 |
+| **D-40** | 前端 KYT_PENDING 文案 | `src/i18n/locales/en.json` / `zh.json` 加 `deposit.status.KYT_PENDING = "Under compliance review"` / 「合规审核中」；前端 `Recent deposits` Badge 颜色按 status 着色（KYT_PENDING 用现有"蓝色待处理"色，与 PENDING 同色）。**不**暴露 KYT 报告细节给用户 | K-15；防泄露合规策略 |
+
 **剩下唯一真正的部署期未知数**：
 
 - ✅ 已规划，不属于代码决策：
   - 生产出口 IP 列表（部署 ops 提供）→ 已在 §9.4 / §7 风险表中追踪
-  - 生产 Safeheron team API Key（需在控制台生成）→ T10.4 上线 checklist
-  - 飞书机器人 webhook URL（运营创建后给到）→ T10.4
+  - 生产 Safeheron team API Key（需在控制台生成）→ T11.4 上线 checklist
+  - 飞书机器人 webhook URL（运营创建后给到）→ T11.4
+  - **Safeheron Console KYT 配置**：AML 功能开启 + 风险等级映射 + Webhook 通知启用（K-2 用户已确认；T10.7 中再核对一次） → T11.4
 
 这些**不是代码决策开放点**，是部署运维的输入参数。代码侧已经准备好读 env，部署时填即可。
 
@@ -323,9 +375,10 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 | T7   | Webhook handler（同步） + worker（异步） + 告警 + Vercel 路由 | T1, T2, T3, T6 | 1.5d |
 | T8   | 前端切换（wallet-service + Deposit 页面） | T6, T7 | 0.5d |
 | T9   | **充值页面 UX 重构**（选币→选链→展示地址 + 后端 deposit-coins 端点 + DB 展示字段） | T6, T8 | 1d |
-| T10  | Sandbox 端到端（3 链 × 2-3 币 + 异常路径） + 灰度上线 | T1-T9 | 1d |
+| T10  | **KYT 合规筛查**（015 补 AML 字段 + KYT_PENDING 状态 + ProcessOne 两阶段 + KytReport adapter + AML_KYT_ALERT webhook + 超时兜底扫描 + 前端文案 + 现有测试回归）（v1.5 spec 新增） | T7 | 1.5d |
+| T11  | Sandbox 端到端（3 链 × 2-3 币 + KYT 真实告警路径 + 异常路径） + 灰度上线（原 T10） | T1-T10 | 1d |
 
-总估时 7.5 人日（T9 在 T8 验收后插入），含缓冲一周内可完成。
+总估时 9 人日（T9 + T10 在 T8 验收后顺序插入），含缓冲两周内可完成。
 
 ---
 
@@ -346,6 +399,24 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 - [ ] **F-11** 地址无主事件 → `deposits.status='MANUAL_REVIEW'` + `failed_reason='ADDRESS_UNASSIGNED'` + 飞书消息可见
 - [ ] **F-12** Sandbox 端到端 3 链各成功 1 笔：Sepolia ETH / Sepolia USDC / Shasta TRX
 - [ ] **F-13** 前端 Dashboard 点击 Deposit 看到 EVM 地址 + 6 个币种列表（生产）/ 2 个币种（testnet）
+
+**T10 KYT 合规筛查追加项**（v1.5 spec 新增，对齐 SPEC §11.1 F-KYT-1 ~ F-KYT-15）：
+
+- [ ] **F-KYT-1** `KYT_ENABLED=true` 下，构造 webhook COMPLETED+CONFIRMED → 调一次 `/v1/compliance/kyt/report`；`deposits.aml_screening_state` / `aml_list` / `aml_evaluated_at` 全部写入
+- [ ] **F-KYT-2** Mock KYT API 返回 `UNTRIGGERED` → `deposits.status='MANUAL_REVIEW'` + `failed_reason='KYT_UNTRIGGERED'` + WARN 飞书消息，`account.balance` **不变**
+- [ ] **F-KYT-3** Mock 返回 `TRIGGERED+LOW`（amlList 内 MistTrack status=COMPLETED, riskLevel=LOW）→ `deposits.status='CREDITED'` + `account.balance` 增加
+- [ ] **F-KYT-4** Mock 返回 `TRIGGERED+HIGH` → MANUAL_REVIEW(`KYT_RISK_HIGH`) + **ERROR 告警**
+- [ ] **F-KYT-5** Mock 返回 `TRIGGERED+SEVERE` → MANUAL_REVIEW(`KYT_RISK_SEVERE`) + **ERROR 告警**
+- [ ] **F-KYT-6** Mock 返回 `TRIGGERED+MEDIUM` / `UNKNOWN` / `FAILED` / `SKIPPED` 各路径 → MANUAL_REVIEW(`KYT_RISK_*` / `KYT_PROVIDER_FAILED` / `KYT_SKIPPED`) + WARN 告警
+- [ ] **F-KYT-7** Mock 返回 `IN_PROGRESS` → `deposits.status='KYT_PENDING'`；前端「Recent deposits」对应行显示「Under compliance review」
+- [ ] **F-KYT-8** `KYT_PENDING` 后构造 `AML_KYT_ALERT` webhook（payload 含 amlList riskLevel=LOW）→ deposit 推进到 CREDITED
+- [ ] **F-KYT-9** `AML_KYT_ALERT` 在 `TRANSACTION_STATUS_CHANGED` 之前到达 → 第一次 worker 处理时 ROLLBACK + process_attempts++；下次轮询 deposits 已创建后正确关联
+- [ ] **F-KYT-10** `KYT_PENDING` 超过 20 分钟未推进 → 超时扫描调一次 KYT Report API；Mock 返回 LOW → CREDITED；Mock 仍 IN_PROGRESS → MANUAL_REVIEW(`KYT_TIMEOUT_STILL_PENDING`) + **ERROR 告警**
+- [ ] **F-KYT-11** `APP_ENV=production && KYT_ENABLED=false` 启动 → 进程 panic（启动校验）
+- [ ] **F-KYT-12** `APP_ENV=local && KYT_ENABLED=false` → COMPLETED+CONFIRMED 直接 CREDITED 不走 KYT 分支；无 `KytReport` API 调用日志
+- [ ] **F-KYT-13** 现有 T7 入账测试用例**全部不退化**：在 KYT_ENABLED=false 或 mock 返回 LOW 的前提下，所有原 T7 测试通过（关键回归保证）
+- [ ] **F-KYT-14** `aml_list` 字段写入后再次收到 AML_KYT_ALERT → 字段被新数据**覆盖**（不是 append），但 `MANUAL_REVIEW` 终态不会改回 CREDITED
+- [ ] **F-KYT-15** `summarizeRiskLevel` 单测覆盖 8 个分支：单 provider × 5 个 riskLevel + status=PENDING/FAILED/SKIPPED
 
 ### 6.2 非功能验收
 
@@ -377,6 +448,11 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 | 老 `internal/coreapi/` 代码影响测试编译 | `go test` 报红 | 保留代码不删，只在 service 层停止调用（SPEC §3.2 已规定） |
 | 切换前端后用户看不到老地址 | Phase 1 已确认无真实用户，业务 OK | 老 `user_wallets` 表不动，二期评估展示策略 |
 | 生产 Safeheron 出口 IP 不固定 | 部署后 SDK 调用 401 | 部署前 ops 必须确认 IP；预留 2 个 IP 加白名单（SPEC §9.2） |
+| **KYT** 改造影响 T7 入账主路径 | T10 拆 ProcessOne 两阶段后，原有 T7 测试可能挂 | 强制要求 T10.7 跑 `go test ./internal/wallet/deposit/... -race` 全绿；原测试加 `KYT_ENABLED=false` 或 mock KYT 返回 LOW 确保不退化（F-KYT-13）|
+| **MistTrack 单点不可用** | 所有充值进 MANUAL_REVIEW，运营负担激增 | T10 上线初期监控 `failed_reason LIKE 'KYT_%'` 占比；超过 30% 启动应急人工放行流程（DB 直改） |
+| **KYT API 调用配额不够** | 大流量时被 Safeheron 限流 | 初查 + 兜底共 ≈1 次/笔，已是最小化；监控调用次数，必要时与 Safeheron 申请提额 |
+| **AML_KYT_ALERT webhook 永不到达**（Console 配置错） | KYT_PENDING 持续堆积 | T10.7 sandbox 实测验证 Console 配置；监控 `status=KYT_PENDING` 最长停留时间，>30min 告警 |
+| **本地数据库 015 已经跑过**，加 AML 字段需要手动 ALTER | 开发者本地不一致 | D-31 已锁定：本地手动 ALTER（用户授权）；CI 部署生产时 015 一次性到位 |
 
 ---
 
@@ -389,7 +465,27 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 - 改造 handler：`wallet_handler.go`（新增 2 端点，老端点改 410）
 - 改造 service：`wallet.go`（停止调用 `coreapi`）
 - 新增 cmd：`cmd/pool_init/main.go`
-- Migration：015-021（共 7 个文件）
+- Migration：015-022（共 8 个文件汇总：015 = Phase 1 基础设施（webhook/deposits 扩展）+ **KYT AML 字段（T10.1 v1.5 并入，不新增 023）**；016-021 = T1 子任务（chains/coins/coin_chains/address_pool/seed 等）；022 = T9 充值展示字段（short_name / token_standard / estimated_arrival_minutes）；**T10 不增加任何新 migration 文件**）
 - 新增前端调用：`src/lib/wallet-service.ts` 新方法
 - Vercel `api/[...route].ts` ROUTE_CONFIG 新增 3 行
-- 环境变量：见 §3.10 清单
+- 环境变量：见 §3.10 清单（含 KYT 4 项）
+
+**T10 KYT 追加交付物**：
+- 改造 migration：`015_safeheron_phase1.go`（追加 AML 4 字段 + `idx_deposits_kyt_pending` + `KYT_PENDING` 状态，不新增文件）
+- 新增 Go 文件：`internal/wallet/deposit/kyt.go`（`SummarizeRiskLevel` + KYT 处置矩阵实现）
+- 改造 Go 文件：
+  - `internal/safeheron/iface.go` / `client.go`（接口加 `KytReport` 方法 + adapter 实现）
+  - `internal/safeheron/types.go`（mirror `KytReportResponse` / `AmlReport` 类型）
+  - `internal/wallet/deposit/service.go`（`ProcessOne` 拆三事务结构）
+  - `internal/wallet/deposit/worker.go`（加 `kytScanTicker` 超时扫描分支）
+  - `internal/wallet/deposit/repository.go`（加 `LockKYTPendingForRetry` / `UpdateAMLFields` 等方法）
+  - `internal/wallet/deposit/models.go`（加 `StatusKYTPending` 常量）
+  - `internal/container/container.go`（KYT_ENABLED 启动校验 + 注入 KytReport func）
+- 改造前端：
+  - `src/i18n/locales/en.json` / `zh.json`（加 `deposit.status.KYT_PENDING`）
+  - `src/pages/dashboard/Deposit.tsx`（RecentDeposits Badge 着色映射加 KYT_PENDING）
+- 新增测试：
+  - `internal/wallet/deposit/kyt_test.go`（`SummarizeRiskLevel` 单测覆盖 8 分支）
+  - `internal/wallet/deposit/service_kyt_test.go`（KYT 状态机端到端，覆盖 F-KYT-1 ~ F-KYT-14）
+  - `internal/safeheron/client_kyt_test.go`（adapter KytReport 单测，mock SDK response）
+  - 原 `service_test.go` 回归补丁（加 `KYT_ENABLED=false` 或 mock LOW，F-KYT-13）
