@@ -1,9 +1,10 @@
 package handlers
 
 import (
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
+
+	"github.com/gin-gonic/gin"
 )
 
 func (h *Handler) GetDeposits(c *gin.Context) {
@@ -34,9 +35,14 @@ func (h *Handler) GetDeposits(c *gin.Context) {
 	})
 }
 
+// HandleDepositWebhook is the Phase 0 Core-API webhook endpoint that Phase 1
+// replaced with `/api/webhooks/safeheron`. Plan §6 S-4 mandates 410 Gone so any
+// stale Core-API caller surfaces the routing change instead of silently 200-ing
+// against an empty stub. T7-S-6.
 func (h *Handler) HandleDepositWebhook(c *gin.Context) {
-	// Webhook logic
-	// Verify signature
-	// Call service
-	c.JSON(http.StatusOK, gin.H{"success": true})
+	c.JSON(http.StatusGone, gin.H{
+		"error":      "endpoint deprecated",
+		"successor":  "/api/webhooks/safeheron",
+		"deprecated": "phase1",
+	})
 }

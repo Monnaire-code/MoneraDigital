@@ -24,8 +24,11 @@ type AlertService struct {
 
 // alertEmailer is the narrow EmailService surface used here so the AlertService
 // can be unit-tested without spinning up Resend.
+//
+// SendAlertEmail (NOT SendActivationEmail) carries an explicit subject so the
+// alert title reaches the operator inbox. T7-I-6.
 type alertEmailer interface {
-	SendActivationEmail(ctx context.Context, toEmail, code string) error
+	SendAlertEmail(ctx context.Context, toEmail, subject, body string) error
 }
 
 // NewAlertService configures a Feishu+email alert dispatcher.
@@ -45,11 +48,15 @@ func (a *AlertService) Send(level, title string, fields map[string]string) {
 		return
 	}
 	msg := formatAlert(level, title, fields)
-	a.sendFeishu(msg)
-	a.sendEmail(title, msg)
+	// 5s deadline covers both the Feishu request and the email fan-out so an
+	// unhealthy sink can't pin the caller.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	a.sendFeishu(ctx, msg)
+	a.sendEmail(ctx, title, msg)
 }
 
-func (a *AlertService) sendFeishu(msg string) {
+func (a *AlertService) sendFeishu(ctx context.Context, msg string) {
 	if a.feishuURL == "" {
 		return
 	}
@@ -61,7 +68,7 @@ func (a *AlertService) sendFeishu(msg string) {
 		log.Printf("alert: feishu marshal failed: %v", err)
 		return
 	}
-	req, err := http.NewRequest(http.MethodPost, a.feishuURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.feishuURL, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("alert: feishu request build failed: %v", err)
 		return
@@ -78,19 +85,16 @@ func (a *AlertService) sendFeishu(msg string) {
 	}
 }
 
-func (a *AlertService) sendEmail(title, body string) {
+func (a *AlertService) sendEmail(ctx context.Context, title, body string) {
 	if a.emailSvc == nil || len(a.recipients) == 0 {
 		return
 	}
-	// EmailService.SendActivationEmail repurposed as a generic single-arg
-	// sender for Phase 1 (Resend templates aren't wired yet). The "code"
-	// argument carries the alert body.
+	subject := "【Phase1告警】" + title
 	for _, addr := range a.recipients {
-		if err := a.emailSvc.SendActivationEmail(context.Background(), addr, body); err != nil {
+		if err := a.emailSvc.SendAlertEmail(ctx, addr, subject, body); err != nil {
 			log.Printf("alert: email send to %s failed: %v", addr, err)
 		}
 	}
-	_ = title // reserved for future subject formatting
 }
 
 // formatAlert renders a deterministic plain-text body. fields are sorted so

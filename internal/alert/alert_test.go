@@ -10,18 +10,25 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type captureEmailer struct {
 	mu    sync.Mutex
-	calls [][2]string // [to, body]
+	calls []emailCall
 	fail  bool
 }
 
-func (c *captureEmailer) SendActivationEmail(_ context.Context, to, body string) error {
+type emailCall struct {
+	To      string
+	Subject string
+	Body    string
+}
+
+func (c *captureEmailer) SendAlertEmail(_ context.Context, to, subject, body string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.calls = append(c.calls, [2]string{to, body})
+	c.calls = append(c.calls, emailCall{To: to, Subject: subject, Body: body})
 	if c.fail {
 		return errAlertEmailFailed
 	}
@@ -118,4 +125,55 @@ func TestAlertService_FeishuFailureSwallowed(t *testing.T) {
 func TestAlertService_EmptyFeishuURL_NoCall(t *testing.T) {
 	a := NewAlertService("", nil, nil)
 	a.Send("INFO", "Test", nil) // no panic on nil-everything
+}
+
+// TestAlertService_FeishuRespectsCtxDeadline verifies sendFeishu propagates a
+// context deadline to the outbound HTTP request rather than relying solely on
+// httpClient.Timeout. Regression: T7-S-3.
+func TestAlertService_FeishuRespectsCtxDeadline(t *testing.T) {
+	released := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-released:
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	defer close(released)
+
+	a := NewAlertService(srv.URL, nil, nil)
+	a.httpClient = &http.Client{Timeout: 5 * time.Second}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	a.sendFeishu(ctx, "test message")
+	elapsed := time.Since(start)
+
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("sendFeishu did not honor ctx deadline; elapsed=%v (httpClient.Timeout would have been 5s, ctx deadline 50ms)", elapsed)
+	}
+}
+
+// TestAlertService_EmailSubjectIncludesTitle verifies that the alert title
+// reaches the inbox as the email subject. Previously the title was dropped
+// because AlertService borrowed SendActivationEmail (no subject parameter).
+// Regression: T7-I-6.
+func TestAlertService_EmailSubjectIncludesTitle(t *testing.T) {
+	emailer := &captureEmailer{}
+	a := NewAlertService("", []string{"ops@x.com"}, emailer)
+	a.Send("ERROR", "Deposit manual review", map[string]string{"reason": "ADDRESS_UNASSIGNED"})
+
+	if len(emailer.calls) != 1 {
+		t.Fatalf("expected 1 email, got %d", len(emailer.calls))
+	}
+	got := emailer.calls[0]
+	if !strings.Contains(got.Subject, "Deposit manual review") {
+		t.Errorf("email subject must include alert title, got %q", got.Subject)
+	}
+	if !strings.Contains(got.Body, "reason=ADDRESS_UNASSIGNED") {
+		t.Errorf("email body must include alert fields, got %q", got.Body)
+	}
 }

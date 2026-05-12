@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -68,6 +70,37 @@ func TestWebhook_AckBodyVerbatim(t *testing.T) {
 	}
 	if w.Body.String() != SafeheronAckBody {
 		t.Fatalf("ack body mismatch: got %q want %q", w.Body.String(), SafeheronAckBody)
+	}
+}
+
+// TestWebhook_RawPayloadPreservesOriginalBody verifies that raw_payload is the
+// verbatim webhook body (so forensic replay can re-verify signatures and recover
+// fields the SDK schema doesn't model: replaceTxHash, destinationAddressList,
+// custom Safeheron metadata). Regression: T7-I-4 — previously the handler
+// re-marshalled the SDK's stripped WebhookEvent struct, dropping unknown fields.
+func TestWebhook_RawPayloadPreservesOriginalBody(t *testing.T) {
+	originalBody := `{"timestamp":"1734567890123","sig":"abc","bizContent":"ciphertext","unknown_field":"forensic-data","destinationAddressList":[{"addr":"0xabc"}]}`
+	var capturedRaw []byte
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return &safeheron.WebhookEvent{
+				EventDetail: safeheron.EventDetail{TxKey: "tx-1", TransactionStatus: "COMPLETED"},
+			}, nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, evt *deposit.Event) (bool, error) {
+			capturedRaw = evt.RawPayload
+			return true, nil
+		}},
+	)
+
+	w := runWebhook(h, originalBody)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if string(capturedRaw) != originalBody {
+		t.Errorf("raw_payload must preserve original webhook body verbatim\n  got: %s\n want: %s",
+			string(capturedRaw), originalBody)
 	}
 }
 
@@ -165,17 +198,17 @@ func TestWebhook_NilHandlerReturns503(t *testing.T) {
 	}
 }
 
-func TestWebhook_BodyTooLargeTruncatedNotRejected(t *testing.T) {
-	// LimitReader silently truncates; we then fail at verify (because the
-	// truncated body isn't valid). Sanity-check that the read doesn't loop
-	// indefinitely on a 2MB payload.
+// TestWebhook_BodyTooLargeReturns413 verifies that plan D-12's body limit uses
+// http.MaxBytesReader semantics: a 2MB body must be rejected with 413 Payload
+// Too Large, NOT silently truncated and passed to the verifier.
+// Regression: T7-I-3.
+func TestWebhook_BodyTooLargeReturns413(t *testing.T) {
 	big := bytes.Repeat([]byte("a"), 2*1024*1024)
+	verifyCalled := false
 	h := NewSafeheronWebhookHandler(
 		&fakeVerifier{convertFn: func(b []byte) (*safeheron.WebhookEvent, error) {
-			if len(b) > MaxWebhookBodyBytes {
-				t.Errorf("body not capped: got %d bytes", len(b))
-			}
-			return nil, errors.New("decoded truncated payload")
+			verifyCalled = true
+			return nil, errors.New("must not be called for oversize body")
 		}},
 		&fakeRecorder{insertFn: nil},
 	)
@@ -185,14 +218,51 @@ func TestWebhook_BodyTooLargeTruncatedNotRejected(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/webhooks/safeheron",
 		io.NopCloser(bytes.NewReader(big)))
 	h.Receive(c)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 after verify fail, got %d", w.Code)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 Payload Too Large, got %d", w.Code)
+	}
+	if verifyCalled {
+		t.Errorf("verifier must not run for oversize body (defence-in-depth)")
 	}
 }
 
+// TestWebhook_BodyExactlyAtLimitAccepted verifies the 1MB boundary is inclusive
+// — a body exactly MaxWebhookBodyBytes long must NOT be rejected. Real-world
+// envelopes are well under 16KB, but the boundary still matters.
+func TestWebhook_BodyExactlyAtLimitAccepted(t *testing.T) {
+	// Construct a JSON-ish payload that's exactly MaxWebhookBodyBytes.
+	payload := make([]byte, MaxWebhookBodyBytes)
+	// We don't care about the content; the verifier short-circuits.
+	for i := range payload {
+		payload[i] = 'a'
+	}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(b []byte) (*safeheron.WebhookEvent, error) {
+			if len(b) != MaxWebhookBodyBytes {
+				t.Errorf("expected exactly %d bytes at verifier, got %d", MaxWebhookBodyBytes, len(b))
+			}
+			return nil, errors.New("body received OK, verify fails as expected")
+		}},
+		&fakeRecorder{insertFn: nil},
+	)
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/webhooks/safeheron",
+		io.NopCloser(bytes.NewReader(payload)))
+	h.Receive(c)
+	// Verify fails (we made it fail), so 401 — not 413.
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 verify-fail after accepting 1MB body, got %d", w.Code)
+	}
+}
+
+// TestWebhook_BenchAckTime samples ack latency across many requests and asserts
+// that the P99 stays well within plan §6 F-13 budget (real-world target < 2s).
+// Without real RSA verification the synthetic ceiling is dramatically tighter
+// (100ms) so a regression that adds blocking work to the hot path shows up.
+// Regression: T7-S-5.
 func TestWebhook_BenchAckTime(t *testing.T) {
-	// Sanity-check that the verify+ack roundtrip is sub-millisecond when
-	// the verifier short-circuits (no real RSA). Real-world P99 < 2s.
 	h := NewSafeheronWebhookHandler(
 		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
 			return &safeheron.WebhookEvent{
@@ -203,8 +273,30 @@ func TestWebhook_BenchAckTime(t *testing.T) {
 			return true, nil
 		}},
 	)
-	w := runWebhook(h, `{}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+
+	const samples = 100
+	latencies := make([]time.Duration, 0, samples)
+	for i := 0; i < samples; i++ {
+		start := time.Now()
+		w := runWebhook(h, `{}`)
+		latencies = append(latencies, time.Since(start))
+		if w.Code != http.StatusOK {
+			t.Fatalf("sample %d: expected 200, got %d", i, w.Code)
+		}
+	}
+
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	p99Idx := int(float64(samples)*0.99) - 1
+	if p99Idx < 0 {
+		p99Idx = 0
+	}
+	p99 := latencies[p99Idx]
+	p50 := latencies[samples/2]
+
+	// Plan §6 F-13 target is 2s P99 in production. The synthetic stack here
+	// has no RSA / network / DB, so anything > 100ms suggests a regression.
+	const budget = 100 * time.Millisecond
+	if p99 > budget {
+		t.Errorf("webhook ack P99 regressed: p50=%v p99=%v budget=%v", p50, p99, budget)
 	}
 }

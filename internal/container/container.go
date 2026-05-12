@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/viper"
 	"monera-digital/internal/alert"
 	"monera-digital/internal/cache"
 	"monera-digital/internal/config"
@@ -24,6 +23,8 @@ import (
 	walletconfig "monera-digital/internal/wallet/config"
 	"monera-digital/internal/wallet/deposit"
 	"monera-digital/internal/wallet/pool"
+
+	"github.com/spf13/viper"
 )
 
 // ContainerOption 配置选项函数
@@ -283,6 +284,19 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	c.WalletService = services.NewWalletService(c.Repository.Wallet, c.CoreAPIClient)
 	c.WealthService = services.NewWealthService(c.Repository.Wealth, c.Repository.AccountV2, c.Repository.Journal, c.Repository.DailyInterest)
 
+	// EmailService must be wired BEFORE the opts loop: WithSafeheronPool reads
+	// c.EmailService to build AlertService, and a nil *services.EmailService
+	// becomes a typed-nil alertEmailer interface — `emailSvc == nil` would
+	// evaluate false and the first alert would panic on nil-receiver method
+	// access. Pre-ship code-review Critical.
+	c.EmailService = services.NewEmailService(
+		viper.GetString("RESEND_API_KEY"),
+		viper.GetString("SENDER_EMAIL"),
+	)
+	// R2-I-3: never log the API key. enabled+fromEmail is enough operational signal.
+	log.Printf("[EmailService] Initialized enabled=%v fromEmail=%q",
+		c.EmailService.IsEnabled(), os.Getenv("SENDER_EMAIL"))
+
 	// 应用配置选项 (按顺序执行)
 	for _, opt := range opts {
 		opt(c)
@@ -299,34 +313,36 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	c.RateLimitMiddleware.AddEndpoint("/api/auth/login", 5, 60)
 	c.RateLimitMiddleware.AddEndpoint("/api/auth/refresh", 10, 60)
 
-	// 初始化邮件和激活服务 (使用 viper 读取环境变量以支持 .env 文件)
-	emailService := services.NewEmailService(
-		viper.GetString("RESEND_API_KEY"),
-		viper.GetString("SENDER_EMAIL"),
-	)
-	c.EmailService = emailService
-	
-	fmt.Printf("[EmailService] Initialized - enabled: %v, apiKey: '%s', fromEmail: '%s'\n", 
-		emailService.IsEnabled(), 
-		os.Getenv("RESEND_API_KEY"), 
-		os.Getenv("SENDER_EMAIL"))
-
 	dbRateLimiter := services.NewRateLimiter(db)
-	c.ActivationService = services.NewActivationService(db, dbRateLimiter, emailService, jwtSecret)
+	c.ActivationService = services.NewActivationService(db, dbRateLimiter, c.EmailService, jwtSecret)
 	c.ContactService = services.NewContactService(db)
 
 	return c
 }
 
 // Close 关闭容器中的资源
+//
+// 顺序：TokenBlacklist → SafeheronClient (清理 /tmp/safeheron-*.pem 0600 私钥)
+// → DB。任一资源 Close 失败仅记录首个错误，后续资源仍会尝试关闭，
+// 避免私钥文件残留磁盘（plan D-3 锁定）。
 func (c *Container) Close() error {
+	var firstErr error
+
 	if c.TokenBlacklist != nil {
 		c.TokenBlacklist.Close()
 	}
-	if c.DB != nil {
-		return c.DB.Close()
+	if c.SafeheronClient != nil {
+		if err := c.SafeheronClient.Close(); err != nil {
+			firstErr = fmt.Errorf("safeheron client close: %w", err)
+		}
 	}
-	return nil
+	if c.DB != nil {
+		if err := c.DB.Close(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("db close: %w", err)
+		}
+	}
+
+	return firstErr
 }
 
 // Verify 验证容器中的所有依赖

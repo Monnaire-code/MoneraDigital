@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -62,8 +62,18 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(c.Request.Body, MaxWebhookBodyBytes))
+	// Plan D-12: http.MaxBytesReader caps body at 1MB AND surfaces an explicit
+	// *http.MaxBytesError on overflow — unlike io.LimitReader which silently
+	// truncates and would let attackers slip past the verifier with garbage.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxWebhookBodyBytes)
+	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			log.Printf("safeheron webhook body exceeds %d bytes: %v", MaxWebhookBodyBytes, err)
+			c.AbortWithStatus(http.StatusRequestEntityTooLarge)
+			return
+		}
 		log.Printf("safeheron webhook read body error: %v", err)
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
@@ -87,21 +97,17 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		return
 	}
 
-	// Re-marshal the decrypted envelope so the worker has a stable shape; we
-	// don't blindly store the raw outer JSON because that's still encrypted.
-	raw, err := json.Marshal(evt)
-	if err != nil {
-		log.Printf("safeheron webhook re-marshal failed: %v", err)
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-
+	// T7-I-4: store the verbatim webhook body — preserves the outer envelope
+	// (timestamp / signature / bizContent ciphertext) AND every inner field
+	// the SDK's WebhookEvent struct doesn't model (replaceTxHash,
+	// destinationAddressList, custom metadata). Forensic replay can re-verify
+	// signatures or replay decryption against the stored body.
 	inserted, err := h.Recorder.InsertEventOrSkip(c.Request.Context(), &deposit.Event{
 		EventID:        eventID,
 		EventType:      evt.EventType,
 		SafeheronTxKey: evt.EventDetail.TxKey,
 		CustomerRefID:  evt.EventDetail.CustomerRefID,
-		RawPayload:     raw,
+		RawPayload:     body,
 	})
 	if err != nil {
 		// A DB outage is the only reasonable cause; let Safeheron retry by
