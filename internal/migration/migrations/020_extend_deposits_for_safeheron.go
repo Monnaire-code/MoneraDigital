@@ -70,6 +70,26 @@ func (m *ExtendDepositsForSafeheron) Up(db *sql.DB) error {
 		return fmt.Errorf("failed to create partial unique index on deposits.safeheron_tx_key: %w", err)
 	}
 
+	// drizzle/monera_complete_schema.sql defines status as a deposit_status enum
+	// with only (PENDING, CONFIRMED, FAILED). Convert to VARCHAR so the new
+	// Safeheron status values (CHAIN_VERIFYING, CREDITED, MANUAL_REVIEW, …) and
+	// the CHECK constraint below work without enum ALTER TYPE gymnastics.
+	enumToVarchar := `
+	DO $$ BEGIN
+		IF EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'deposits' AND column_name = 'status'
+			  AND data_type = 'USER-DEFINED'
+		) THEN
+			ALTER TABLE deposits ALTER COLUMN status TYPE VARCHAR(32) USING status::text;
+		END IF;
+	END $$;
+	`
+	_, err = db.Exec(enumToVarchar)
+	if err != nil {
+		return fmt.Errorf("failed to convert deposits.status from enum to varchar: %w", err)
+	}
+
 	normalizeStatus := `
 	UPDATE deposits SET status = 'PENDING'
 	WHERE status NOT IN ('PENDING', 'CHAIN_VERIFYING', 'CHAIN_VERIFIED',
