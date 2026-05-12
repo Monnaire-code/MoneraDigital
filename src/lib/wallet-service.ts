@@ -71,10 +71,10 @@ async function parseOrThrow<T>(response: Response, action: string): Promise<T> {
 export interface DepositRecord {
   id: number;
   amount: string;
-  currency: string;
+  asset: string;
   status: string;
   txHash?: string;
-  chainCode?: string;
+  chain?: string;
 }
 
 export class WalletService {

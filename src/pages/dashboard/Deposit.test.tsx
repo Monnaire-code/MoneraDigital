@@ -98,6 +98,18 @@ const MOCK_COINS = {
 
 const MOCK_DEPOSITS_EMPTY = { deposits: [] };
 
+const SINGLE_ETH_COIN = {
+  coins: [{
+    symbol: 'ETH', name: 'Ether', isStable: false,
+    networks: [{
+      chainCode: 'ETHEREUM', chainName: 'Ethereum', networkFamily: 'EVM',
+      shortName: 'ETH', tokenStandard: 'Native', isNative: true,
+      tokenContract: null, decimals: 18, minDeposit: '0.001',
+      requiredConfirmations: 0, estimatedArrivalMinutes: 2, explorerUrl: '',
+    }],
+  }],
+};
+
 function mockFetch(url: string | URL | Request) {
   const u = typeof url === 'string' ? url : url.toString();
   const parsed = new URL(u, 'http://localhost');
@@ -369,22 +381,11 @@ describe('Deposit page — three-step flow', () => {
   });
 
   it('shows address error state when deposit-address fails', async () => {
-    const singleCoin = {
-      coins: [{
-        symbol: 'ETH', name: 'Ether', isStable: false,
-        networks: [{
-          chainCode: 'ETHEREUM', chainName: 'Ethereum', networkFamily: 'EVM',
-          shortName: 'ETH', tokenStandard: 'Native', isNative: true,
-          tokenContract: null, decimals: 18, minDeposit: '0.001',
-          requiredConfirmations: 0, estimatedArrivalMinutes: 2, explorerUrl: '',
-        }],
-      }],
-    };
     global.fetch = vi.fn((url: string | URL | Request) => {
       const u = typeof url === 'string' ? url : url.toString();
       const parsed = new URL(u, 'http://localhost');
       if (parsed.pathname === '/api/wallet/deposit-coins') {
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(singleCoin) } as unknown as Response);
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(SINGLE_ETH_COIN) } as unknown as Response);
       }
       if (parsed.pathname === '/api/wallet/deposit-address') {
         return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'ASSIGN_FAILED' }) } as unknown as Response);
@@ -407,8 +408,8 @@ describe('Deposit page — three-step flow', () => {
   it('renders recent deposits with transaction data', async () => {
     const depositsWithData = {
       deposits: [
-        { id: 1, amount: '0.5', currency: 'ETH', status: 'CONFIRMED', txHash: '0xabc', chainCode: 'ETHEREUM' },
-        { id: 2, amount: '100', currency: 'USDC', status: 'PENDING' },
+        { id: 1, amount: '0.5', asset: 'ETH', status: 'CONFIRMED', txHash: '0xabc', chain: 'ETHEREUM' },
+        { id: 2, amount: '100', asset: 'USDC', status: 'PENDING' },
       ],
     };
     global.fetch = vi.fn((url: string | URL | Request) => {
@@ -523,6 +524,104 @@ describe('Deposit page — three-step flow', () => {
 
     // Should show empty state, not crash
     expect(screen.getByText(/no recent deposits/i)).toBeInTheDocument();
+  });
+
+  it('hides QR code gracefully when QRCode.toDataURL fails', async () => {
+    const qrcode = await import('qrcode');
+    vi.mocked(qrcode.default.toDataURL).mockRejectedValueOnce(new Error('canvas error'));
+
+    renderDeposit();
+    await waitFor(() => screen.getByTestId('coin-chip-ETH'));
+    await userEvent.click(screen.getByTestId('coin-chip-ETH'));
+
+    await waitFor(() => screen.getByTestId('deposit-address'));
+    // QR should not render when generation fails, but page shouldn't crash
+    expect(screen.queryByTestId('deposit-qr')).toBeNull();
+  });
+
+  it('retry button refetches deposit address', async () => {
+    let addressCallCount = 0;
+    global.fetch = vi.fn((url: string | URL | Request) => {
+      const u = typeof url === 'string' ? url : url.toString();
+      const parsed = new URL(u, 'http://localhost');
+      if (parsed.pathname === '/api/wallet/deposit-coins') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(SINGLE_ETH_COIN) } as unknown as Response);
+      }
+      if (parsed.pathname === '/api/wallet/deposit-address') {
+        addressCallCount++;
+        if (addressCallCount === 1) {
+          return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'ASSIGN_FAILED' }) } as unknown as Response);
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ networkFamily: 'EVM', address: '0xRetried', supportedCoins: [] }) } as unknown as Response);
+      }
+      if (parsed.pathname === '/api/deposits') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(MOCK_DEPOSITS_EMPTY) } as unknown as Response);
+      }
+      return Promise.reject(new Error(`Unexpected: ${u}`));
+    }) as unknown as typeof fetch;
+
+    renderDeposit();
+    await waitFor(() => screen.getByTestId('coin-chip-ETH'));
+    await userEvent.click(screen.getByTestId('coin-chip-ETH'));
+
+    // First call fails — shows error with retry button
+    await waitFor(() => screen.getByTestId('retry-address'));
+    await userEvent.click(screen.getByTestId('retry-address'));
+
+    // Second call succeeds — shows address
+    await waitFor(() => {
+      expect(screen.getByTestId('deposit-address')).toHaveTextContent('0xRetried');
+    });
+  });
+
+  it('recent deposits renders explorer link when chain matches explorerUrlMap', async () => {
+    const depositsWithChain = {
+      deposits: [
+        { id: 1, amount: '0.5', asset: 'ETH', status: 'CONFIRMED', txHash: '0xabc123', chain: 'ETHEREUM' },
+      ],
+    };
+    global.fetch = vi.fn((url: string | URL | Request) => {
+      const u = typeof url === 'string' ? url : url.toString();
+      const parsed = new URL(u, 'http://localhost');
+      if (parsed.pathname === '/api/wallet/deposit-coins') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(MOCK_COINS) } as unknown as Response);
+      }
+      if (parsed.pathname === '/api/deposits') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(depositsWithChain) } as unknown as Response);
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) } as unknown as Response);
+    }) as unknown as typeof fetch;
+
+    renderDeposit();
+    await waitFor(() => {
+      expect(screen.getByText('0.5 ETH')).toBeInTheDocument();
+    });
+
+    // ETHEREUM chain maps to https://etherscan.io from MOCK_COINS
+    const links = screen.getAllByRole('link');
+    const explorerLink = links.find(l => l.getAttribute('href')?.includes('etherscan.io/tx/0xabc123'));
+    expect(explorerLink).toBeDefined();
+    expect(explorerLink).toHaveAttribute('target', '_blank');
+    expect(explorerLink).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('shows empty coin list message when no coins available', async () => {
+    global.fetch = vi.fn((url: string | URL | Request) => {
+      const u = typeof url === 'string' ? url : url.toString();
+      const parsed = new URL(u, 'http://localhost');
+      if (parsed.pathname === '/api/wallet/deposit-coins') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ coins: [] }) } as unknown as Response);
+      }
+      if (parsed.pathname === '/api/deposits') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(MOCK_DEPOSITS_EMPTY) } as unknown as Response);
+      }
+      return Promise.reject(new Error(`Unexpected: ${u}`));
+    }) as unknown as typeof fetch;
+
+    renderDeposit();
+    await waitFor(() => {
+      expect(screen.getByText(/no coins available/i)).toBeInTheDocument();
+    });
   });
 
   it('handles clipboard write failure gracefully', async () => {

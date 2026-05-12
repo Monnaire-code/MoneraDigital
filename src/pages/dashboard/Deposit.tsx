@@ -405,8 +405,8 @@ function RecentDeposits({
           <div className="space-y-3">
             {deposits.map((d, i) => {
               const txUrl =
-                d.txHash && d.chainCode && explorerUrlMap.has(d.chainCode)
-                  ? safeExplorerUrl(explorerUrlMap.get(d.chainCode)!, "tx", d.txHash)
+                d.txHash && d.chain && explorerUrlMap.has(d.chain)
+                  ? safeExplorerUrl(explorerUrlMap.get(d.chain)!, "tx", d.txHash)
                   : null;
               return (
                 <div
@@ -414,9 +414,9 @@ function RecentDeposits({
                   className="flex items-center justify-between text-sm"
                 >
                   <div className="flex items-center gap-2">
-                    <CryptoIcon currency={d.currency} size={16} />
+                    <CryptoIcon currency={d.asset} size={16} />
                     <span className="font-medium">
-                      {d.amount} {d.currency}
+                      {d.amount} {d.asset}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">

@@ -93,8 +93,8 @@ describe('WalletService', () => {
     it('returns deposits array on success', async () => {
       const mockDeposits = {
         deposits: [
-          { id: 1, amount: '0.5', currency: 'ETH', status: 'CONFIRMED' },
-          { id: 2, amount: '100', currency: 'USDC', status: 'PENDING' },
+          { id: 1, amount: '0.5', asset: 'ETH', status: 'CONFIRMED' },
+          { id: 2, amount: '100', asset: 'USDC', status: 'PENDING' },
         ],
       };
       global.fetch = vi.fn().mockResolvedValue(jsonResponse(mockDeposits)) as unknown as typeof fetch;
@@ -103,7 +103,7 @@ describe('WalletService', () => {
       const result = await WalletService.getRecentDeposits();
 
       expect(result).toHaveLength(2);
-      expect(result[0].currency).toBe('ETH');
+      expect(result[0].asset).toBe('ETH');
       expect(result[1].status).toBe('PENDING');
     });
 
