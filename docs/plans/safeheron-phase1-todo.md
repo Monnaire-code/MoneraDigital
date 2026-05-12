@@ -646,13 +646,184 @@ i18n（同步加到 `en.json` + `zh.json`）：
 
 ---
 
-## T9. Sandbox 端到端 + 灰度上线
+## T9. 充值页面 UX 重构（选币 → 选链 → 展示地址）
 
-**依赖**：T1-T8
+**依赖**：T6（deposit-address 端点）, T8（前端 service + Deposit 页面）
+**估时**：1d
+**输出**：后端新增 `/api/wallet/deposit-coins` 端点 + `chains`/`coin_chains` 新增展示字段 + 前端 Deposit 页面重写为三步流程 + 测试重写
+
+**全局约束**：
+- 所有决策已在 `plan.md` §4 D-13 ~ D-30 锁定，施工时若发现与代码冲突先停并提出
+- Migration 沿用 T1 D-9 幂等约束（`ADD COLUMN IF NOT EXISTS` + `UPDATE ... WHERE col IS NULL`）
+- 不动 `Addresses.tsx`（提现白名单二期）
+- 不改 lazy assign 行为（激活预分配作为独立 ticket）
+
+### T9.1 — Migration 022（DB 展示字段）
+
+**目标**：`coin_chains` 新增 `token_standard` + `estimated_arrival_minutes`；`chains` 新增 `short_name`；存量行 seed 默认值。
+
+**文件**：
+- 新增 `internal/migration/migrations/022_add_deposit_display_fields.go`
+- 修改 `cmd/migrate/main.go`（注册 022）
+
+**实现要点**：
+- Up SQL：3 个 `ADD COLUMN IF NOT EXISTS` + 9 个 `UPDATE ... WHERE col IS NULL`（seed 值见 SPEC §4.7.1）
+- Down SQL：3 个 `DROP COLUMN IF EXISTS`
+
+**DoD**：
+- [ ] `DATABASE_URL=postgresql://linden@localhost/monera_local?sslmode=disable go run cmd/migrate/main.go` 显示 022 状态 applied
+- [ ] `psql monera_local -c "SELECT code, short_name FROM chains;"` 三行都有值
+- [ ] `psql monera_local -c "SELECT chain_code, symbol, token_standard, estimated_arrival_minutes FROM coin_chains;"` 三行都有值
+- [ ] 重跑 migration（幂等）不报错
+
+### T9.2 — 后端 models + repository + registry
+
+**目标**：把新增 DB 列加载进 Registry。
+
+**文件**：
+- 修改 `internal/wallet/config/models.go`：`Chain` 加 `ShortName string`；`CoinChain` 加 `TokenStandard string`、`EstimatedArrivalMinutes int`
+- 修改 `internal/wallet/config/repository.go`：`loadChains` / `loadCoinChains` 两个 SELECT 加新列；用 `COALESCE(col, '' / 0)` 防 NULL
+- 修改 `internal/wallet/config/registry.go`：新增 `AllEnabledCoinChains() []*CoinChain`（聚合 `byChain` 所有切片）和 `AllCoins() []*Coin`（filter `enabled=true`）
+
+**DoD**：
+- [ ] `go build ./...` 编译通过
+- [ ] 启动 server 日志显示 `Registry loaded: chains=3 coins=5 coin_chains=3`，不报 "column does not exist"
+- [ ] `go test ./internal/wallet/config/... -race` 通过
+
+### T9.3 — GetDepositCoins handler + 路由 + Go 测试
+
+**目标**：新增 `GET /api/wallet/deposit-coins` 端点，按 coin 分组返回 networks。
+
+**文件**：
+- 修改 `internal/handlers/deposit_address_handler.go`：
+  - `ChainsRegistry` 接口扩展 `AllCoins() []*Coin` + `AllEnabledCoinChains() []*CoinChain`
+  - 新增响应类型 `coinNetwork` / `depositCoin` / `depositCoinsResponse`
+  - 新增 `GetDepositCoins(c *gin.Context)` handler
+- 修改 `internal/handlers/deposit_address_handler_test.go`：`mockChainsRegistry` 补 2 个新方法 + 4 个新测试
+- 修改 `internal/handlers/setsafeheron_deps_test.go`：同步 mock 补全
+- 修改 `internal/routes/routes.go`：`wallet.GET("/deposit-coins", h.GetDepositCoins)`
+- 修改 `api/[...route].ts`：`ROUTE_CONFIG` 加 `'GET /api/wallet/deposit-coins'`
+
+**Handler 逻辑**（详见 plan Slice 2 伪代码）：
+1. `getUserID` → 401
+2. `walletRegistry == nil` → 503
+3. `AllEnabledCoinChains()` 按 `coin.symbol` 分组
+4. 每 cc 转 `coinNetwork`：`tokenContract` 空字符串 → nil；`shortName` 空 → fallback `cc.Chain.Code`
+5. 输出按 coin 首次出现的 `display_order` 升序
+6. 200 OK
+
+**Go 测试**（4 个新用例 + 旧用例不退化）：
+- [ ] `TestGetDepositCoins_Unauthorized` → 401
+- [ ] `TestGetDepositCoins_RegistryUnavailable` → 503
+- [ ] `TestGetDepositCoins_GroupingAndShape` → 2 coin × 2 chain，断言响应结构、`tokenContract` null/string 正确、`shortName` fallback 正确
+- [ ] `TestGetDepositCoins_EmptyRegistry` → `{"coins":[]}` 不是 null
+
+**DoD**：
+- [ ] `go test ./internal/handlers/... -race` 全绿（含旧用例不退化）
+- [ ] `go vet ./...` 无新增问题
+- [ ] 重启 server，`curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/wallet/deposit-coins | jq` 返回 3 个 coin（local 环境 ETH/USDC/TRX）
+- [ ] 401 路径：`curl http://localhost:8081/api/wallet/deposit-coins -i | head -1` → `HTTP/1.1 401`
+
+### T9.4 — 前端 wallet-service + i18n
+
+**目标**：前端 service 加新类型 + 方法；i18n 重写 `deposit.*` 子树。
+
+**文件**：
+- 修改 `src/lib/wallet-service.ts`：加 `DepositCoinNetwork` / `DepositCoin` / `DepositCoinsResponse` 类型 + `WalletService.getDepositCoins()` 静态方法
+- 修改 `src/i18n/locales/en.json` 和 `zh.json`：
+  - **删除**：`deposit.tabs.*` / `deposit.supportedCoins.*` / `deposit.comingSoon.*` / `deposit.addressCard.{label,hint}` / `deposit.selectAsset` / `deposit.address` / `deposit.copy` / `deposit.copied` / `deposit.minDeposit` / `deposit.warning` / `deposit.testnetWarning` / `deposit.history` / `deposit.noHistory`
+  - **新增**：`deposit.{steps, coinSelector, networkSelector, addressCard, details, recent}.*` 完整树（见 SPEC §8.4 i18n 命名空间）
+  - **保留**：`deposit.title` / `deposit.description` / `deposit.status.*` / `deposit.activate*`
+
+**DoD**：
+- [ ] `npm run lint` 通过
+- [ ] `npx tsc --noEmit` 类型检查通过
+- [ ] 浏览器 dev tools console 无 i18n missing-key warning
+
+### T9.5 — Deposit.tsx 重写
+
+**目标**：把现 EVM/TRON tab 页改写为「选币 → 选链 → 展示地址」三步流程。
+
+**文件**：
+- 重写 `src/pages/dashboard/Deposit.tsx`（单文件 < 400 行）
+
+**组件结构**（全部内联）：
+```tsx
+Deposit (page)
+├── Header              // title + description
+├── StepIndicator       // 手写 diamond + 序号 + 灰显逻辑
+├── CoinSelector        // chip 列表 + CryptoIcon + Skeleton
+├── NetworkSelector     // shadcn Select + 警告 Alert + 单网络自动选中
+├── AddressDisplay      // QR + 复制 + 合约链接 + 详情区
+└── RecentDeposits      // 右侧 sidebar 320px，sm 端折底部
+```
+
+**关键交互**（详见 SPEC §8.4 跳转规则）：
+- 选币时清空 `selectedNetwork`，单网络 coin 用 useEffect 自动 setSelectedNetwork
+- 非原生币显示「Contract address ends in {last4}」+ 外链按钮 → `${explorerUrl}/token/${tokenContract}`
+- 详情区固定展开（不做 Accordion）
+- RecentDeposits 用 `useQuery(['recent-deposits'], () => fetch('/api/deposits?limit=5'))`；TxID 链接 → `${explorerUrl}/tx/${txHash}`（用 deposit-coins 数据反查 chainCode→explorerUrl）
+
+**辅助函数**（文件顶部）：
+```ts
+function truncateAddress(addr, head=6, tail=4): string
+function explorerTokenUrl(explorerUrl, contract): string
+function explorerTxUrl(explorerUrl, txHash): string
+```
+
+**DoD**（浏览器手测，对应 SPEC §11.1 F-T9-1 ~ F-T9-9）：
+- [ ] `npm run dev`，访问 `/dashboard/deposit`：StepIndicator ① 高亮 ② ③ 灰显；看到 ETH / USDC / TRX chip
+- [ ] 点 USDC：步骤 ② 激活；只 1 个网络自动选中并跳到 ③；地址 = `address_pool` 表中该用户 EVM 地址
+- [ ] 详情区显示 "Minimum deposit: 0.1 USDC" + "Credited after: N network confirmations"
+- [ ] 非原生币 USDC 显示「Contract ends in 6eB48」+ 跳转 etherscan 按钮 href 正确
+- [ ] 点 ETH（原生币）：合约地址行消失；同 EVM 家族地址不变
+- [ ] 点 TRX：StepIndicator 完整切换；TRON 地址显示正确
+- [ ] 复制按钮点击后 toast「Address copied」
+- [ ] 浏览器 console 无 React duplicate key / act() / missing-key warning
+- [ ] 响应式：375px / 768px / 1440px 三档下布局不破
+
+### T9.6 — Deposit.test.tsx 重写
+
+**目标**：整文件重写测试，覆盖三步流程 + 边界。
+
+**文件**：
+- 重写 `src/pages/dashboard/Deposit.test.tsx`
+
+**Mock 策略**：沿用旧文件 URL 解析 fetch mock，扩展到 3 个端点（`/wallet/deposit-coins` + `/wallet/deposit-address` + `/deposits`）；保留 `qrcode` mock。
+
+**测试用例**（12 个，AAA 结构）：
+1. renders step indicator with step 1 highlighted initially
+2. lists deposit coins after load
+3. selecting a coin activates step 2 and shows its networks
+4. auto-selects the only network and shows the address
+5. renders the QR code for the selected network's address
+6. non-native coin shows contract address suffix and explorer link
+7. native coin hides contract address row
+8. switching coin resets the network selection
+9. copies the address to clipboard
+10. renders empty state when there are no recent deposits
+11. shows skeletons while initial coin list is loading
+12. shows error state when deposit-coins endpoint fails
+
+**注意**：用 `npx vitest run src/pages/dashboard/Deposit.test.tsx`，不要用 `npm run test --`（避开 vitest_config_lets_node_modules_leak 那个坑）。
+
+**DoD**：
+- [ ] `npx vitest run src/pages/dashboard/Deposit.test.tsx` 全绿
+- [ ] 12 个用例全覆盖
+- [ ] 旧 Tabs 相关用例已删除
+- [ ] 控制台无 React act() 警告
+
+---
+
+## T10. Sandbox 端到端 + 灰度上线
+
+> **注**：原 T9，2026-05-12 T9 充值页面 UX 重构插入后顺延为 T10。子任务 T9.X → T10.X。
+
+**依赖**：T1-T9
 **估时**：1d
 **输出**：测试报告 + 上线 checklist
 
-### T9.1 — Sandbox E2E 矩阵
+### T10.1 — Sandbox E2E 矩阵
 
 按 SPEC §11.1 必须各成功 1 笔：
 
@@ -669,7 +840,7 @@ i18n（同步加到 `en.json` + `zh.json`）：
 - [ ] `account.balance` 增加值等于 `txAmount`
 - [ ] `journal.biz_type=10`、`ref_id=deposits.id`、`amount=txAmount`
 
-### T9.2 — 异常路径覆盖（人工构造）
+### T10.2 — 异常路径覆盖（人工构造）
 
 - [ ] **AC-1**：转账到未分配地址 → 用 SDK 手动建一个 hidden 钱包，往里打 testnet ETH → webhook 进 MANUAL_REVIEW + 飞书消息
 - [ ] **AC-2**：金额低于 min_deposit → 发 0.00001 Sepolia ETH（< 0.0001）→ MANUAL_REVIEW
@@ -677,7 +848,7 @@ i18n（同步加到 `en.json` + `zh.json`）：
 - [ ] **AC-4**：webhook 重发 → Safeheron 控制台触发 `/v1/webhook/resend` → DB 无重复 deposits 行
 - [ ] **AC-5**：worker 中途崩溃 → kill -9 进程 → 重启后未完成事件仍能处理
 
-### T9.3 — 非功能验证
+### T10.3 — 非功能验证
 
 - [ ] `wrk -t4 -c10 -d30s` 打 webhook handler，P99 latency < 2s
 - [ ] 用日志直方图统计 webhook 落库 → CREDITED 延迟 P99 < 30s
@@ -685,7 +856,7 @@ i18n（同步加到 `en.json` + `zh.json`）：
 - [ ] `go vet ./...` 无 warning
 - [ ] `npm run build` + `npm run test` 通过
 
-### T9.4 — 上线 Checklist（部署前 ops 确认）
+### T10.4 — 上线 Checklist（部署前 ops 确认）
 
 - [ ] 生产 Safeheron API Key 已申请，权限含「读取 + 钱包账户管理」（**不**含「发起/取消交易」）
 - [ ] 生产 RSA 密钥对已生成，私钥已注入生产 env `SAFEHERON_PRIVATE_KEY_PEM`
@@ -698,7 +869,7 @@ i18n（同步加到 `en.json` + `zh.json`）：
 - [ ] `cmd/pool_init --evm-count=100 --tron-count=100` 已在生产跑过，`address_pool` 各 100 个 AVAILABLE
 - [ ] 健康检查接口（如有）确认 Safeheron 连通性
 
-### T9.5 — 灰度上线策略
+### T10.5 — 灰度上线策略
 
 - 阶段 1：先上前端 + 后端代码，**不**改 Safeheron 控制台 webhook URL（webhook 仍指向 staging）
 - 阶段 2：staging 用生产 Safeheron team 真小额做 5 个 mainnet 币种最终验证（SPEC §13 dev/test 覆盖差距）

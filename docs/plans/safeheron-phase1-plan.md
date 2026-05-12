@@ -73,7 +73,14 @@
             └─────────────┬───────────────────┘
                           ▼
             ┌─────────────────────────────────┐
-            │ T9 Sandbox 端到端 + 灰度上线    │
+            │ T9 充值页面 UX 重构              │
+            │ (选币→选链→展示地址 +           │
+            │  deposit-coins 端点 +           │
+            │  DB 展示字段 migration 022)     │
+            └─────────────┬───────────────────┘
+                          ▼
+            ┌─────────────────────────────────┐
+            │ T10 Sandbox 端到端 + 灰度上线   │
             │ (3 链 × 2-3 币 + 异常路径)      │
             └─────────────────────────────────┘
 ```
@@ -85,7 +92,8 @@
 - T5+T6 共同完成"用户能拿地址"垂直切片 → 第二个 demo 检查点
 - T7 是 webhook 入账闭环 → 第三个 demo 检查点（核心交付）
 - T8 是前端切换 → 第四个 demo 检查点（用户可见）
-- T9 是灰度上线前的最终验收
+- T9 是 T8 落地后的 UX 二次迭代（对齐币安/欧易），独立交付
+- T10 是灰度上线前的最终验收
 
 ---
 
@@ -99,7 +107,9 @@
 | **P2 地址池贯通** | T4, T5 | sandbox 真创 100 个 EVM + 100 个 TRON 钱包，`SELECT count(*) FROM address_pool` 各返回 100 | D3 |
 | **P3 用户拿地址** | T6 | 用户两次 curl `/api/wallet/deposit-address?network_family=EVM` 返回同一地址；并发 10 个用户拿到 10 个不同地址 | D4 |
 | **P4 充值入账闭环** | T7 | sandbox Sepolia ETH 真转账 → webhook 触发 → `deposits.status=CREDITED` + `account.balance` 增加 + `journal` 写入；webhook 重发不重复入账 | D5 |
-| **P5 前端切换 + 验收** | T8, T9 | 前端 Dashboard 显示 EVM/TRON 地址 + supportedCoins 列表；3 链 × 2-3 币种端到端各成功 1 次 | D6-D7 |
+| **P5 前端切换** | T8 | 前端 Dashboard 显示 EVM/TRON 地址 + supportedCoins 列表 | D6 |
+| **P6 充值 UX 重构** | T9 | 选币→选链→展示地址三步流程；deposit-coins 端点；DB 加 short_name/token_standard/estimated_arrival_minutes 列 | D6 |
+| **P7 端到端验收 + 灰度** | T10 | 3 链 × 2-3 币种端到端各成功 1 次 + 异常路径覆盖 + 灰度上线 | D7 |
 
 **检查点强制要求**：每阶段结束**必须** demo 给团队看（或录屏），未通过不进入下一阶段。
 
@@ -220,7 +230,7 @@
 | 单测目标覆盖率 | safeheron adapter / Registry / pool manager / deposit service ≥ 80% | SPEC §11.2 |
 | 单测 mock | 复用现有 `mock_repository_test.go` / `mock_handler_test.go` 风格 | 项目惯例 |
 | 关键测试用例（必须有） | (a) webhook 验签失败 → 401; (b) 同 (txKey, status) 重发 → 不重复入账; (c) COMPLETED 后 CONFIRMING 乱序 → 状态不回退; (d) FOR UPDATE SKIP LOCKED 并发分配 → 10 用户拿 10 个不同地址; (e) Registry 刷新失败 → 保留旧值 | SPEC §6.4 / §11.1 |
-| Sandbox E2E | T9 阶段手动跑，按 `~/scratch/safeheron-sandbox-test/` 工具验证 | SPEC §11.1 |
+| Sandbox E2E | T10 阶段手动跑，按 `~/scratch/safeheron-sandbox-test/` 工具验证 | SPEC §11.1 |
 
 ### 3.10 环境变量（新增）
 
@@ -264,12 +274,35 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 | **D-11** | Webhook handler 路由 | `r.POST("/api/webhooks/safeheron", webhookHandler.Receive)` 直接挂，**不走任何 auth middleware**。验签由 handler 内部用 SDK 完成 | SPEC §6.4 |
 | **D-12** | Webhook body 大小限制 | 用 `http.MaxBytesReader(w, r.Body, 1<<20)` 限制 1MB 防 DoS。Gin 等价：handler 入口 `c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)` | 防御性编码 |
 
+#### T9 充值页面 UX 重构（D-13 ~ D-30）
+
+| # | 议题 | 锁定决策 | 依据 |
+|---|------|---------|------|
+| **D-13** | UX 流程 | 三步流程「选币 → 选链 → 展示地址」，对齐币安/欧易。不做搜索、FAQ、多地址管理、钱包切换 | 用户 2026-05-12 提供币安截图对齐 |
+| **D-14** | 视觉风格 | 保持当前浅色 Tailwind + shadcn/ui，无主题层面变更 | 与项目其它 dashboard 页一致 |
+| **D-15** | 地址复用 | 同 `networkFamily` 下不同 coin 复用同一地址（Safeheron 设计：一个 EVM 钱包同时接所有 EVM coinKey） | SPEC §4.4 AddCoin 规则 |
+| **D-16** | 地址分配时机 | 不变，保持 lazy assign per (user, networkFamily)；激活预分配作为独立 ticket 后续做 | SPEC §6.3 |
+| **D-17** | 展示元数据存储 | DB 加列（不用代码 map 硬编码）：`chains.short_name`、`coin_chains.{token_standard, estimated_arrival_minutes}` | 用户确认；migration 022 |
+| **D-18** | Migration 编号 | `022_add_deposit_display_fields.go` 接在 015-021 之后 | T1 D-9 幂等约束 |
+| **D-19** | 新增端点 | `GET /api/wallet/deposit-coins`，按 coin 分组返回 networks；旧 `/supported-chains` 保留向后兼容不删 | SPEC §8.1 / §8.4 |
+| **D-20** | 端点响应 `tokenContract` | 原生币序列化为 JSON `null`（用 `*string`，空字符串 → nil）；非原生币填合约地址字符串 | UI 区分原生/非原生显示合约链接 |
+| **D-21** | 静态字段语义 | `estimated_arrival_minutes` 是 UI 展示静态值（如 ETH=2/BSC=1/TRON=1），不进入业务逻辑判断；新增链/币时在新 migration 补值 | UI 展示用，无 SLA 含义 |
+| **D-22** | 步骤指示器实现 | 手写 diamond + 序号 tailwind 样式，不引入新 stepper 组件（3 步复用度低） | 避免引入新依赖 |
+| **D-23** | 自动推进 | 选币后若该币只有 1 个 network → useEffect 自动选中并推进到步骤 ③；多 network 时停在步骤 ② 等用户点 | Binance 同行为 |
+| **D-24** | 切币行为 | 切换币种 → 清空 `selectedNetwork`、地址区回到 placeholder；React Query 按 `networkFamily` 缓存复用 | UX 一致性 |
+| **D-25** | 币种图标 | 复用现有 `src/components/ui/crypto-icon.tsx`（已含 BTC/ETH/USDT/USDC/SOL SVG）；BNB/TRX 走 default 彩色圆 + 首字母分支 | 不引入图标包 |
+| **D-26** | RecentDeposits 数据源 | 调用现有 `GET /api/deposits?limit=5`；空态显示文案；不做分页 | 已有接口 |
+| **D-27** | 浏览器链接构造 | 前端构造 `${explorerUrl}/token/${tokenContract}` 和 `${explorerUrl}/tx/${txHash}`；后端只暴露 `explorerUrl` | 前端拼接更灵活 |
+| **D-28** | 文件布局 | 单文件 `src/pages/dashboard/Deposit.tsx`（< 400 行），内联 5 个子组件；不拆 5 个文件 | 简单页面避免过度拆分 |
+| **D-29** | i18n 处理 | 整重写 `deposit.*` 子树；删除 `deposit.tabs.*` / `deposit.supportedCoins.*` / `deposit.comingSoon.*`；保留 `deposit.status.*` 和 `deposit.activate*`（其它位置仍用） | D-8 i18n 命名更新 |
+| **D-30** | Deposit.test.tsx | 因组件结构变更，整文件重写（不试图保留旧用例形态）；12 个新用例覆盖三步流程 + 边界 | 旧测试基于 Tabs 已不适用 |
+
 **剩下唯一真正的部署期未知数**：
 
 - ✅ 已规划，不属于代码决策：
   - 生产出口 IP 列表（部署 ops 提供）→ 已在 §9.4 / §7 风险表中追踪
-  - 生产 Safeheron team API Key（需在控制台生成）→ T9.4 上线 checklist
-  - 飞书机器人 webhook URL（运营创建后给到）→ T9.4
+  - 生产 Safeheron team API Key（需在控制台生成）→ T10.4 上线 checklist
+  - 飞书机器人 webhook URL（运营创建后给到）→ T10.4
 
 这些**不是代码决策开放点**，是部署运维的输入参数。代码侧已经准备好读 env，部署时填即可。
 
@@ -289,9 +322,10 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 | T6   | `/api/wallet/deposit-address` + `/api/wallet/supported-chains` handler + Vercel 路由 + 老端点 410 | T5 | 0.5d |
 | T7   | Webhook handler（同步） + worker（异步） + 告警 + Vercel 路由 | T1, T2, T3, T6 | 1.5d |
 | T8   | 前端切换（wallet-service + Deposit 页面） | T6, T7 | 0.5d |
-| T9   | Sandbox 端到端（3 链 × 2-3 币 + 异常路径） + 灰度上线 | T1-T8 | 1d |
+| T9   | **充值页面 UX 重构**（选币→选链→展示地址 + 后端 deposit-coins 端点 + DB 展示字段） | T6, T8 | 1d |
+| T10  | Sandbox 端到端（3 链 × 2-3 币 + 异常路径） + 灰度上线 | T1-T9 | 1d |
 
-总估时 6.5 人日，含缓冲一周内可完成。
+总估时 7.5 人日（T9 在 T8 验收后插入），含缓冲一周内可完成。
 
 ---
 

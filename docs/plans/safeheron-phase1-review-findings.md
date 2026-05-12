@@ -214,7 +214,7 @@ pre-existing，但 `/api/wallet/create` 现恒返 410，DEBUG 已无意义且违
 | §3.5 失败终态 | `status=FAILED + failed_reason=transactionSubStatus + 告警` | `service.go:235-252` | ✅ |
 | §3.1 status_rank 取值 | SUBMITTED=10, SIGNING=20, BROADCASTING=30, CONFIRMING=50, FAIL=90, COMPLETED=100 | `models.go:81-98` BROADCASTING=**20** + 缺 SIGNING + 多 CREATED=5 | ❌ **偏离** |
 | D-12 webhook 1MB body 限制 | `http.MaxBytesReader` | `safeheron_webhook_handler.go:65` 用 `io.LimitReader`（静默截断） | ❌ **偏离** |
-| F-7 sandbox 正常入账 | webhook → CREDITED + balance + journal | 代码路径覆盖；sandbox 实测留 T9 | ✅（待 T9 验） |
+| F-7 sandbox 正常入账 | webhook → CREDITED + balance + journal | 代码路径覆盖；sandbox 实测留 T10 | ✅（待 T10 验） |
 | F-8 重发不重复入账 | event_id UNIQUE + status_rank guard | InsertEventOrSkip 幂等 + UPSERT guard ✓ | ✅ |
 | F-9 COMPLETED 后 CONFIRMING 不回退 | status_rank guard | guard + `service.go:178-181` ErrNoRows 回退取现状 | ✅ |
 | F-10 验签失败 → 401 + 不入库 | handler 401 早返 | `safeheron_webhook_handler.go:78-81` | ✅ |
@@ -448,7 +448,7 @@ if isFailedStatus(d.TransactionStatus) && dep.Status != DepositStatusCredited &&
 
 **文件**：`internal/handlers/safeheron_webhook_handler_test.go:193-210`
 
-测试自己说 "sanity-check that the verify+ack roundtrip is sub-millisecond when the verifier short-circuits"，没有计时断言，也没真实 RSA 验签开销。**NF-1 P99 < 2s 需要 T9 用 wrk/k6 实测**。
+测试自己说 "sanity-check that the verify+ack roundtrip is sub-millisecond when the verifier short-circuits"，没有计时断言，也没真实 RSA 验签开销。**NF-1 P99 < 2s 需要 T10 用 wrk/k6 实测**。
 
 ---
 
@@ -474,7 +474,7 @@ Phase 1 已停止 Core API 流程，老 webhook 路由是否还要保留？归 P
 | §3.7-6 | Deposit 页面 UI：Tabs EVM/TRON + Card（地址 + **复制按钮 + 二维码**）+ supportedCoins 列表 | Tabs + Card + 复制 + supportedCoins ✓；**二维码缺失**（`qrcode` 包已装但未用） | ❌ |
 | §3.7-7 | i18n key `deposit.evm.*` / `deposit.tron.*` / `deposit.copyAddress` / `deposit.supportedCoins` | 实际命名 `deposit.addressCard.*` / `deposit.tabs.evm` / `deposit.tabs.tron` / `deposit.supportedCoins.*` — 偏离 plan 命名（结构上更合理） | ⚠ 偏离 |
 | §3.7-8 | React Query `staleTime: 5 * 60_000` | `Deposit.tsx:26` 一致 | ✅ |
-| §6 F-13 | 前端 Dashboard 显示 EVM 地址 + 币种列表 | 实现可观察，待 T9 demo 验收 | ⏸️ |
+| §6 F-13 | 前端 Dashboard 显示 EVM 地址 + 币种列表 | 实现可观察，待 T10 demo 验收 | ⏸️ |
 | §6 NF-6 | `npm run build` / `npm run test` 通过 | commit 自报通过；未在本次 review 复现 | ⏸️ |
 
 **结论**：8 项决策中，**3 项偏离**（其中 §3.7-5 / §3.7-6 是 D-7/§3.7 锁定违背，§3.7-7 i18n 命名偏离属可补登）；功能主体已就位。
@@ -720,7 +720,7 @@ T6/T7/T8 已审完。按以下顺序成 batch：
 
 每波单 commit，便于回查。
 
-**修复入口顺序建议**：第一波 → 第二波 → 第三波（前两波必须在 T9 灰度上线前完成；第三波可分批合并）。
+**修复入口顺序建议**：第一波 → 第二波 → 第三波（前两波必须在 T10 灰度上线前完成；第三波可分批合并）。
 
 ---
 
@@ -967,7 +967,7 @@ func isNilInterface(i any) bool {
 | 🟠 Important | **4** | R2-I-1（T7-I-2 未修但声称完成）/ R2-I-2（XSS）/ R2-I-3（API key 泄日志）/ R2-I-4（路由 wiring 未测） |
 | 🟡 Suggestion | **4** | R2-S-1（reflect 取舍）/ R2-S-2（计数错）/ R2-S-3（mock URL 匹配脆弱）/ R2-S-4（commit 拆分） |
 
-### 上线前必修（阻塞 T9 灰度）
+### 上线前必修（阻塞 T10 灰度）
 
 1. **R2-C-1**：deposit-address API 在生产 100% 返回 400 —— 必须修
 2. **R2-I-3**：API key 写 stdout —— 安全合规阻塞

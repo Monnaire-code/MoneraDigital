@@ -160,6 +160,7 @@ CREATE TABLE chains (
     network_family  VARCHAR(16)  NOT NULL,           -- 'EVM' | 'TRON'
     chain_id        VARCHAR(32),                     -- EVM '1'/'56'; TRON NULL
     native_symbol   VARCHAR(16)  NOT NULL,
+    short_name      VARCHAR(16),                     -- T9 新增: 下拉框主标题 (ETH / BSC / TRON)
     explorer_url    VARCHAR(255),
     icon_url        VARCHAR(255),
     enabled         BOOLEAN      NOT NULL DEFAULT true,
@@ -203,6 +204,8 @@ CREATE TABLE coin_chains (
     deposit_enabled         BOOLEAN      NOT NULL DEFAULT true,
     withdraw_enabled        BOOLEAN      NOT NULL DEFAULT false,  -- 二期开启
     required_confirmations  INT          NOT NULL DEFAULT 0,      -- 二期/三期
+    token_standard          VARCHAR(16),                          -- T9 新增: 代币标准 (Native/ERC20/BEP20/TRC20)
+    estimated_arrival_minutes INT,                                -- T9 新增: 预估到账分钟数 (UI 展示用静态值)
     display_order           INT          NOT NULL DEFAULT 0,
     created_at              TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMP    NOT NULL DEFAULT NOW(),
@@ -391,6 +394,33 @@ UNION ALL SELECT 'TRON',     id, true,  NULL,                                   
 > ⚠️ **环境覆盖差距**：生产 8 个币种中有 5 个（USDT_ERC20 / BNB_BSC / USDT_BEP20 / USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET / USDT_TRC20）**无法在 dev/test 跑 E2E**。上生产前的 staging 环境需用 prod Safeheron team 的真小额做最终验证。已记入 §13。
 >
 > BSC 系 USDT/USDC decimals=18 与 ETHEREUM/TRON 上的 USDT/USDC（=6）不同，业务侧金额计算必须读 `coin_chains.decimals`，testnet 同此 decimals。
+
+#### 4.7.1 T9 充值展示字段 Seed（Migration 022）
+
+T9 引入选币→选链 UX 后，新增三个展示字段。Migration `022_add_deposit_display_fields` 同时 `ADD COLUMN IF NOT EXISTS` 并对存量行回填默认值（所有 UPDATE 用 `WHERE col IS NULL` 保持幂等）：
+
+```sql
+-- chains.short_name
+UPDATE chains SET short_name = 'ETH'  WHERE code = 'ETHEREUM' AND short_name IS NULL;
+UPDATE chains SET short_name = 'BSC'  WHERE code = 'BSC'      AND short_name IS NULL;
+UPDATE chains SET short_name = 'TRON' WHERE code = 'TRON'     AND short_name IS NULL;
+
+-- coin_chains.{token_standard, estimated_arrival_minutes}
+UPDATE coin_chains SET token_standard='Native', estimated_arrival_minutes=2
+    WHERE chain_code='ETHEREUM' AND is_native=true  AND token_standard IS NULL;
+UPDATE coin_chains SET token_standard='ERC20',  estimated_arrival_minutes=2
+    WHERE chain_code='ETHEREUM' AND is_native=false AND token_standard IS NULL;
+UPDATE coin_chains SET token_standard='Native', estimated_arrival_minutes=1
+    WHERE chain_code='BSC'      AND is_native=true  AND token_standard IS NULL;
+UPDATE coin_chains SET token_standard='BEP20',  estimated_arrival_minutes=1
+    WHERE chain_code='BSC'      AND is_native=false AND token_standard IS NULL;
+UPDATE coin_chains SET token_standard='Native', estimated_arrival_minutes=1
+    WHERE chain_code='TRON'     AND is_native=true  AND token_standard IS NULL;
+UPDATE coin_chains SET token_standard='TRC20',  estimated_arrival_minutes=1
+    WHERE chain_code='TRON'     AND is_native=false AND token_standard IS NULL;
+```
+
+> 这些值是 UI 静态展示用（D-21）。新增链/币时在新 migration 里补行即可，不进入业务逻辑判断。
 
 ---
 
@@ -760,27 +790,94 @@ PENDING ──(COMPLETED)──→ CHAIN_VERIFYING
 
 | Method | Path | 说明 |
 |--------|------|------|
-| GET | `/api/wallet/deposit-address?network_family=EVM` | 获取/分配 EVM 充值地址 |
-| GET | `/api/wallet/deposit-address?network_family=TRON` | 获取/分配 TRON 充值地址 |
-| GET | `/api/wallet/supported-chains` | 列出可用的链与币种（从 Registry 读，给前端展示） |
-| GET | `/api/deposits` | （已存在，可能需要调整字段） |
+| GET | `/api/wallet/deposit-address?networkFamily=EVM` | 获取/分配 EVM 充值地址（实际实现 camelCase，R2-C-1 修复） |
+| GET | `/api/wallet/deposit-address?networkFamily=TRON` | 获取/分配 TRON 充值地址 |
+| GET | `/api/wallet/deposit-coins` | **T9 新增**：按币种分组返回可充值币种 + 每币种可用网络列表，供选币→选链 UI 使用 |
+| GET | `/api/wallet/supported-chains` | 按链分组返回支持币种（T8 老接口，T9 UX 不再调用，保留向后兼容） |
+| GET | `/api/deposits` | （已存在，T9 充值页底部「Recent deposits」消费 `?limit=5`） |
 
 **响应示例**：
 ```json
-GET /api/wallet/deposit-address?network_family=EVM
+GET /api/wallet/deposit-address?networkFamily=EVM
 {
   "address": "0xabc...123",
   "networkFamily": "EVM",
   "supportedCoins": [
-    {"chainCode": "ETHEREUM", "symbol": "ETH", "minDeposit": "0.001"},
-    {"chainCode": "ETHEREUM", "symbol": "USDT", "minDeposit": "1"},
-    {"chainCode": "ETHEREUM", "symbol": "USDC", "minDeposit": "1"},
-    {"chainCode": "BSC", "symbol": "BNB", "minDeposit": "0.005"},
-    {"chainCode": "BSC", "symbol": "USDT", "minDeposit": "1"},
-    {"chainCode": "BSC", "symbol": "USDC", "minDeposit": "1"}
+    {"chainCode": "ETHEREUM", "symbol": "ETH",  "coinKey": "ETH",        "minDeposit": "0.001", "decimals": 18},
+    {"chainCode": "ETHEREUM", "symbol": "USDT", "coinKey": "USDT_ERC20", "minDeposit": "1",     "decimals": 6},
+    {"chainCode": "ETHEREUM", "symbol": "USDC", "coinKey": "USDC_ERC20", "minDeposit": "1",     "decimals": 6},
+    {"chainCode": "BSC",      "symbol": "BNB",  "coinKey": "BNB_BSC",    "minDeposit": "0.005", "decimals": 18},
+    {"chainCode": "BSC",      "symbol": "USDT", "coinKey": "USDT_BEP20", "minDeposit": "1",     "decimals": 18},
+    {"chainCode": "BSC",      "symbol": "USDC", "coinKey": "USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET", "minDeposit": "1", "decimals": 18}
   ]
 }
 ```
+
+```json
+GET /api/wallet/deposit-coins
+{
+  "coins": [
+    {
+      "symbol": "ETH",
+      "name": "Ether",
+      "isStable": false,
+      "networks": [
+        {
+          "chainCode": "ETHEREUM",
+          "chainName": "Ethereum",
+          "networkFamily": "EVM",
+          "shortName": "ETH",
+          "tokenStandard": "Native",
+          "isNative": true,
+          "tokenContract": null,
+          "decimals": 18,
+          "minDeposit": "0.001",
+          "requiredConfirmations": 0,
+          "estimatedArrivalMinutes": 2,
+          "explorerUrl": "https://etherscan.io"
+        }
+      ]
+    },
+    {
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "isStable": true,
+      "networks": [
+        {
+          "chainCode": "ETHEREUM",
+          "chainName": "Ethereum",
+          "networkFamily": "EVM",
+          "shortName": "ETH",
+          "tokenStandard": "ERC20",
+          "isNative": false,
+          "tokenContract": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+          "decimals": 6,
+          "minDeposit": "1",
+          "requiredConfirmations": 0,
+          "estimatedArrivalMinutes": 2,
+          "explorerUrl": "https://etherscan.io"
+        },
+        {
+          "chainCode": "BSC",
+          "chainName": "BNB Smart Chain",
+          "networkFamily": "EVM",
+          "shortName": "BSC",
+          "tokenStandard": "BEP20",
+          "isNative": false,
+          "tokenContract": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+          "decimals": 18,
+          "minDeposit": "1",
+          "requiredConfirmations": 0,
+          "estimatedArrivalMinutes": 1,
+          "explorerUrl": "https://bscscan.com"
+        }
+      ]
+    }
+  ]
+}
+```
+
+> **`deposit-coins` 数据组装逻辑**：遍历 Registry 中 `deposit_enabled=true` 的 coin_chains，按 `coin.symbol` 分组；每个 coin 下 `networks` 列表来自该 symbol 在不同链上的 coin_chain 行；输出顺序按 coin 首次出现的 `display_order` 升序。`tokenContract` 空字符串序列化为 `null`；`shortName` 为空时 fallback 到 `chain.code`。
 
 ### 8.2 Webhook（公开，验签保护）
 
@@ -793,10 +890,68 @@ GET /api/wallet/deposit-address?network_family=EVM
 需要在 `api/[...route].ts` 的 `ROUTE_CONFIG` 中追加：
 
 ```ts
-'GET /api/wallet/deposit-address': { requiresAuth: true, backendPath: '/api/wallet/deposit-address' },
-'GET /api/wallet/supported-chains': { requiresAuth: true, backendPath: '/api/wallet/supported-chains' },
-'POST /api/webhooks/safeheron':    { requiresAuth: false, backendPath: '/api/webhooks/safeheron' },
+'GET /api/wallet/deposit-address':  { requiresAuth: true,  backendPath: '/api/wallet/deposit-address' },
+'GET /api/wallet/deposit-coins':    { requiresAuth: true,  backendPath: '/api/wallet/deposit-coins' },   // T9 新增
+'GET /api/wallet/supported-chains': { requiresAuth: true,  backendPath: '/api/wallet/supported-chains' },
+'POST /api/webhooks/safeheron':     { requiresAuth: false, backendPath: '/api/webhooks/safeheron' },
 ```
+
+### 8.4 充值页面 UX 流程（前端，T9 重构后）
+
+T8 落地的 EVM/TRON tab 切换 UI 已被 T9 重构为对齐币安/欧易的「选币→选链→展示地址」三步流程。本节描述新的前端契约，作为后续维护者的对齐基线。
+
+**整体布局**（lg 断点起 1fr | 320px 双栏；sm 端单栏 RecentDeposits 折到底部）：
+
+```
+┌──────────────────────────────────────┐ ┌─────────────────┐
+│  ◇ 1. Select coin       (高亮)        │ │ Recent deposits │
+│     [ETH] [USDC] [USDT] [BNB] [TRX]  │ │   ─────────     │
+│                                       │ │   (空态 / 列表) │
+│  ◇ 2. Select network    (灰显待激活)  │ │                 │
+│     [▼ Select network]                │ │                 │
+│                                       │ │                 │
+│  ◇ 3. Deposit address                 │ │                 │
+│     [ QR ] 0xF2...1058 [Copy]         │ │                 │
+│     Contract ends in 6eB48 ⤴          │ │                 │
+│     Details: min, confirmations, ...  │ │                 │
+└──────────────────────────────────────┘ └─────────────────┘
+```
+
+**数据流**：
+
+1. **页面 mount** → 调 `GET /api/wallet/deposit-coins` 加载币种 + 网络元数据（React Query `staleTime: 5min`）
+2. **用户点币种 chip**：本地 state `selectedCoin = coin`；清空 `selectedNetwork`；步骤指示器推进到 ②
+3. **若该 coin 只有 1 个 network** → useEffect 自动 `setSelectedNetwork(networks[0])`；推进到 ③
+4. **用户在下拉框选 network** → `selectedNetwork = network`；推进到 ③
+5. **步骤 ③ 渲染时** → 调 `GET /api/wallet/deposit-address?networkFamily=${network.networkFamily}` 拿地址（React Query 按 `networkFamily` 缓存；同 family 下切币不重新请求）
+6. **底部 RecentDeposits** → 独立调 `GET /api/deposits?limit=5`
+
+**安全文案（必含）**：
+
+- 网络下拉打开时顶部警告：「Only the networks shown here are supported. Sending via an unsupported network will result in permanent loss of funds.」
+- 非原生币地址卡显示「Contract address ends in {last4}」，外链按钮跳 `${chain.explorerUrl}/token/${tokenContract}`
+- 详情区固定展开，展示：Minimum deposit、Credited after N network confirmations、Contract address（非原生币才显示）
+
+**跳转规则**：
+
+| 用户动作 | 步骤指示器 | selectedCoin | selectedNetwork | 地址区 |
+|---------|----------|-------------|----------------|--------|
+| 初次加载 | ① 高亮 | null | null | placeholder |
+| 选币种（多网络） | ② 激活 | 已设 | null | placeholder |
+| 选币种（单网络，自动推进） | ③ 激活 | 已设 | 已自动设 | 显示地址 |
+| 选网络 | ③ 激活 | 已设 | 已设 | 显示地址 |
+| 切币种 | 退回 ① / ② / ③ | 新值 | null | placeholder（或同 family 复用） |
+
+**地址复用规则（D-15）**：当 `selectedNetwork.networkFamily` 不变（如从 USDC@ETHEREUM 切到 ETH@ETHEREUM），后端返回同一 `address_pool` 行（同一 user × 同一 networkFamily 唯一地址，这是 Safeheron AddCoin 设计：一个 EVM 钱包接收所有 EVM coinKey 都到同一地址）。前端 React Query 在 `networkFamily` 维度缓存，无需重新请求。
+
+**i18n key 命名空间**（T9 重写 `deposit.*` 子树，旧 `deposit.tabs.*` / `deposit.supportedCoins.*` / `deposit.comingSoon.*` 全部删除）：
+- `deposit.steps.{selectCoin, selectNetwork, depositAddress}`
+- `deposit.coinSelector.{placeholder, empty}`
+- `deposit.networkSelector.{placeholder, disabledHint, warning, arrivalEstimate, confirmations}`
+- `deposit.addressCard.{title, copy, copied, copyFailed, qrAlt, contractEnd, viewOnExplorer, errorTitle, placeholder}`
+- `deposit.details.{title, minDeposit, requiredConfirmations, confirmationsValue, contract}`
+- `deposit.recent.{title, empty, viewAll, columns.{amount, network, address, txid, time}}`
+- `deposit.status.{PENDING, CHAIN_VERIFYING, CHAIN_VERIFIED, CREDITED, FAILED, MANUAL_REVIEW}`（已存在，保留）
 
 ---
 
@@ -909,6 +1064,18 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 - [ ] 地址无主、币种不支持、金额低于阈值 → `MANUAL_REVIEW` + 飞书告警
 - [ ] 同一 tx + log_index 不会重复入账
 - [ ] TRON 链充值闭环同 EVM
+
+**T9 UX 重构追加项**（选币→选链→展示地址三步流程）：
+
+- [ ] **F-T9-1** 页面初次加载显示 StepIndicator，步骤 ① 高亮、② ③ 灰显
+- [ ] **F-T9-2** 步骤 ① 展示当前环境支持充值的所有币种 chip（local：ETH/USDC/TRX；prod：ETH/USDT/USDC/BNB/TRX）
+- [ ] **F-T9-3** 点击币种 → 步骤 ② 激活，下拉框列出该币种可用网络；单网络 coin 自动选中并跳到 ③
+- [ ] **F-T9-4** 步骤 ③ 显示充值地址 + QR 码，地址内容与 `address_pool.address` 一致
+- [ ] **F-T9-5** 非原生币（如 USDC）显示「Contract address ends in {last4}」+ 可点击跳转区块链浏览器
+- [ ] **F-T9-6** 详情区显示「Minimum deposit: {min} {symbol}」、「Credited after: {N} network confirmations」；合约地址行只在非原生币显示
+- [ ] **F-T9-7** 切换币种 → 网络选择重置；同 networkFamily 内换币地址不变（地址按 family 缓存）
+- [ ] **F-T9-8** 页面右侧（或 sm 端底部）显示「Recent deposits」区，无数据时显示空态文案
+- [ ] **F-T9-9** 响应式：375px / 768px / 1440px 三档下布局不破，无水平滚动
 
 ### 11.2 非功能验收
 
