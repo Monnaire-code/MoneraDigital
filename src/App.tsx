@@ -11,7 +11,6 @@ import Register from "./pages/Register";
 import NotFound from "./pages/NotFound";
 import DashboardLayout from "./components/DashboardLayout";
 import Overview from "./pages/dashboard/Overview";
-import AccountOpening from "./pages/dashboard/AccountOpening";
 import Assets from "./pages/dashboard/Assets";
 import Addresses from "./pages/dashboard/Addresses";
 import Withdraw from "./pages/dashboard/Withdraw";
@@ -44,7 +43,6 @@ const App = () => (
             
             <Route path="/dashboard" element={<DashboardLayout />}>
               <Route index element={<Overview />} />
-              <Route path="account-opening" element={<AccountOpening />} />
               <Route path="assets" element={<Assets />} />
               <Route path="deposit" element={<Deposit />} />
               <Route path="lending" element={<ComingSoon moduleName="借贷管理" />} />

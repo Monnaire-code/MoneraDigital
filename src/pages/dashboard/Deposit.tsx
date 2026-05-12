@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Copy, AlertTriangle } from "lucide-react";
+import QRCode from "qrcode";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -26,6 +27,25 @@ function DepositAddressCard({ networkFamily }: { networkFamily: NetworkFamily })
     staleTime: 5 * 60_000,
     retry: false,
   });
+
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!data?.address) {
+      setQrDataUrl(null);
+      return;
+    }
+    let cancelled = false;
+    QRCode.toDataURL(data.address, { width: 160, margin: 1 })
+      .then((url) => {
+        if (!cancelled) setQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setQrDataUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.address]);
 
   const handleCopy = async () => {
     if (!data?.address) return;
@@ -85,6 +105,18 @@ function DepositAddressCard({ networkFamily }: { networkFamily: NetworkFamily })
               <Copy className="h-4 w-4" />
             </Button>
           </div>
+          {qrDataUrl && (
+            <div className="mt-4 flex justify-center">
+              <img
+                data-testid="deposit-qr"
+                src={qrDataUrl}
+                alt={t("deposit.addressCard.qrAlt")}
+                width={160}
+                height={160}
+                className="rounded-md border bg-white p-2"
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -337,7 +337,8 @@
     "add": "Add",
     "submit": "Submit",
     "copied": "Copied",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "error": "Unexpected error"
   },
   "addresses": {
     "title": "Address Management",
@@ -779,7 +780,8 @@
       "copy": "Copy address",
       "copied": "Address copied",
       "copyFailed": "Copy failed",
-      "errorTitle": "Unable to load deposit address"
+      "errorTitle": "Unable to load deposit address",
+      "qrAlt": "QR code for deposit address"
     },
     "tabs": {
       "evm": "EVM (ETH / BSC)",

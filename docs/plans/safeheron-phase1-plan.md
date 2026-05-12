@@ -200,7 +200,7 @@
 | 新方法签名 | `getDepositAddress(networkFamily: 'EVM' \| 'TRON'): Promise<{address, networkFamily, supportedCoins}>`; `getSupportedChains(): Promise<...>` | SPEC §8.1 |
 | 移除调用 | `createWallet` / `getWalletInfo` / `addAddress` 在前端引用全部删除；这些旧端点 Go 端返回 410 兜底 | SPEC §3.2 |
 | Deposit 页面 UI | 上方 Tabs 切 EVM/TRON，下方 Card 显示地址（含复制按钮 + 二维码）+ supportedCoins 列表（链/币/最小金额三列） | T8 设计决策 |
-| i18n key 命名 | 新增 `deposit.evm.title` / `deposit.tron.title` / `deposit.copyAddress` / `deposit.supportedCoins` 等；保留旧 `deposit.comingSoon.*` 直到下个 release 清理 | 项目惯例 |
+| i18n key 命名 | 新增 `deposit.addressCard.{label,hint,copy,copied,copyFailed,errorTitle,qrAlt}` / `deposit.tabs.{evm,tron}` / `deposit.supportedCoins.{title,chain,coin,minDeposit,empty}`；保留旧 `deposit.comingSoon.*` 直到下个 release 清理 | T8 实施修正（原 plan 写 `deposit.evm.*` / `deposit.tron.*`，实际为避免 EVM/TRON 重复定义，改用 `addressCard` 共享 namespace + `tabs` 分组——结构更合理） |
 | 缓存策略 | React Query `staleTime: 5 * 60_000`，地址不会变 | 业务直觉（地址永不变） |
 
 ### 3.8 告警
@@ -258,7 +258,7 @@ ALERT_EMAIL_RECIPIENTS=ops@moneradigital.com
 | **D-5** | 飞书告警消息格式 | 简单文本 `{"msg_type":"text","content":{"text":"【Phase1告警】level=X title=Y\nuser_id=...\naddress=...\namount=...\nreason=...\nevent_id=..."}}` POST 到 `ALERT_WEBHOOK_URL` | 飞书自定义机器人公开协议 |
 | **D-6** | Pool Replenisher 实现 | **不复用** `InterestScheduler`（它是每日 UTC 00:00:05 + `time.Sleep` 阻塞）。新建 `internal/wallet/pool/replenisher.go`：`time.NewTicker(POOL_REPLENISH_INTERVAL)` + 独立 goroutine + `ctx.Done()` 优雅退出 + `recover` 防 panic | `internal/scheduler/interest.go:35-113` 实测 |
 | **D-7** | 前端改造点 | `Deposit.tsx`（当前 94 行 "Coming Soon" 占位，**不接 API**）改写为正式充值地址页；`Addresses.tsx`（507 行提现白名单，二期范围）**不动** | 实测 `src/pages/dashboard/Deposit.tsx:1-94` |
-| **D-8** | i18n key | 新增 `deposit.evm.*` / `deposit.tron.*` / `deposit.copyAddress` / `deposit.supportedCoins`；保留旧 `deposit.comingSoon.*` 直到下个 release | 项目惯例 |
+| **D-8** | i18n key | 新增 `deposit.addressCard.{label,hint,copy,copied,copyFailed,errorTitle,qrAlt}` / `deposit.tabs.{evm,tron}` / `deposit.supportedCoins.{title,chain,coin,minDeposit,empty}`；保留旧 `deposit.comingSoon.*` 直到下个 release | T8 实施时为避免 EVM/TRON 重复定义两套 title/hint/copy，改用 `addressCard` 共享 namespace + `tabs` 分组（结构上更合理） |
 | **D-9** | Migration 幂等 | `migrator.Migrate()` 按 version 跳过 applied，但**中途失败**会重跑同一 SQL → **每个 Up SQL 必须自带** `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` / `INSERT ... ON CONFLICT DO NOTHING`。`014` 已是这个风格 | `internal/migration/migrator.go:111-151` 实测 |
 | **D-10** | decimal 库 | `github.com/shopspring/decimal`（go.mod 已存在 v1.4.0 间接依赖，升为直接依赖） | `go.mod` 实测 |
 | **D-11** | Webhook handler 路由 | `r.POST("/api/webhooks/safeheron", webhookHandler.Receive)` 直接挂，**不走任何 auth middleware**。验签由 handler 内部用 SDK 完成 | SPEC §6.4 |

@@ -337,7 +337,8 @@
     "add": "添加",
     "submit": "提交",
     "copied": "已复制",
-    "refresh": "刷新"
+    "refresh": "刷新",
+    "error": "未知错误"
   },
   "addresses": {
     "title": "地址管理",
@@ -858,7 +859,8 @@
       "copy": "复制地址",
       "copied": "地址已复制",
       "copyFailed": "复制失败",
-      "errorTitle": "无法加载充值地址"
+      "errorTitle": "无法加载充值地址",
+      "qrAlt": "充值地址二维码"
     },
     "tabs": {
       "evm": "EVM（ETH / BSC）",
