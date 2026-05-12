@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -78,16 +79,42 @@ func newAuthedCtx(userID int, query string) (*gin.Context, *httptest.ResponseRec
 
 func TestGetDepositAddress_Unauthorized(t *testing.T) {
 	h := newDepositTestHandler(&mockPoolManager{}, &mockChainsRegistry{})
-	c, w := newAuthedCtx(0, "network_family=EVM")
+	c, w := newAuthedCtx(0, "networkFamily=EVM")
 	h.GetDepositAddress(c)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }
 
+// TestGetDepositAddress_QueryParam_IsCamelCase verifies the handler reads
+// `networkFamily` (camelCase, per CLAUDE.md JSON naming convention).
+// Regression: R2-C-1 — handler used to read `network_family` (snake_case),
+// breaking the contract with the frontend which sends camelCase. Production
+// traffic would have always 400'd with INVALID_NETWORK_FAMILY.
+func TestGetDepositAddress_QueryParam_IsCamelCase(t *testing.T) {
+	pm := &mockPoolManager{
+		assigned: map[int]*pool.Address{
+			1: {ID: 1, NetworkFamily: "EVM", Address: "0xcamel"},
+		},
+	}
+	reg := &mockChainsRegistry{byFamily: map[string][]*walletconfig.CoinChain{"EVM": nil}}
+	h := newDepositTestHandler(pm, reg)
+	c, w := newAuthedCtx(1, "networkFamily=EVM")
+	h.GetDepositAddress(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with camelCase param, got %d: %s", w.Code, w.Body.String())
+	}
+	// And snake_case must now miss — confirms we read camelCase, not "either".
+	c2, w2 := newAuthedCtx(1, "network_family=EVM")
+	h.GetDepositAddress(c2)
+	if w2.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 with snake_case param (handler should only honour camelCase per CLAUDE.md), got %d", w2.Code)
+	}
+}
+
 func TestGetDepositAddress_InvalidFamily(t *testing.T) {
 	h := newDepositTestHandler(&mockPoolManager{}, &mockChainsRegistry{})
-	c, w := newAuthedCtx(1, "network_family=BTC")
+	c, w := newAuthedCtx(1, "networkFamily=BTC")
 	h.GetDepositAddress(c)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -110,7 +137,7 @@ func TestGetDepositAddress_MissingFamily(t *testing.T) {
 
 func TestGetDepositAddress_NotInitialised(t *testing.T) {
 	h := &Handler{} // no SetSafeheronDeps
-	c, w := newAuthedCtx(1, "network_family=EVM")
+	c, w := newAuthedCtx(1, "networkFamily=EVM")
 	h.GetDepositAddress(c)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)
@@ -129,11 +156,15 @@ func TestGetDepositAddress_AssignSuccess(t *testing.T) {
 				{
 					ChainCode:        "ETHEREUM",
 					Coin:             &walletconfig.Coin{Symbol: "ETH"},
+					SafeheronCoinKey: "ETH",
+					Decimals:         18,
 					MinDepositAmount: "0.001",
 				},
 				{
 					ChainCode:        "BSC",
 					Coin:             &walletconfig.Coin{Symbol: "USDT"},
+					SafeheronCoinKey: "USDT_BSC",
+					Decimals:         18,
 					MinDepositAmount: "1",
 				},
 			},
@@ -141,7 +172,7 @@ func TestGetDepositAddress_AssignSuccess(t *testing.T) {
 	}
 	h := newDepositTestHandler(pm, reg)
 
-	c, w := newAuthedCtx(42, "network_family=EVM")
+	c, w := newAuthedCtx(42, "networkFamily=EVM")
 	h.GetDepositAddress(c)
 
 	if w.Code != http.StatusOK {
@@ -160,13 +191,23 @@ func TestGetDepositAddress_AssignSuccess(t *testing.T) {
 	if body.SupportedCoins[0].Symbol != "ETH" || body.SupportedCoins[0].MinDeposit != "0.001" {
 		t.Errorf("coin[0] mismatch: %+v", body.SupportedCoins[0])
 	}
+	// Pre-ship code-review Important: frontend uses `${chainCode}-${coinKey}`
+	// as React row key; without coinKey the key would be "ETHEREUM-undefined"
+	// for every coin on the same chain → duplicate-key warning + reconciliation
+	// glitches. Also exposes `decimals` so the UI can format amounts.
+	if body.SupportedCoins[0].CoinKey != "ETH" || body.SupportedCoins[0].Decimals != 18 {
+		t.Errorf("coin[0] must expose coinKey+decimals, got: %+v", body.SupportedCoins[0])
+	}
+	if body.SupportedCoins[1].CoinKey != "USDT_BSC" {
+		t.Errorf("coin[1] coinKey must come from registry SafeheronCoinKey, got: %+v", body.SupportedCoins[1])
+	}
 }
 
 func TestGetDepositAddress_PoolEmpty(t *testing.T) {
 	pm := &mockPoolManager{addrErr: pool.ErrPoolEmpty}
 	reg := &mockChainsRegistry{}
 	h := newDepositTestHandler(pm, reg)
-	c, w := newAuthedCtx(1, "network_family=TRON")
+	c, w := newAuthedCtx(1, "networkFamily=TRON")
 	h.GetDepositAddress(c)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)
@@ -182,10 +223,36 @@ func TestGetDepositAddress_AssignError(t *testing.T) {
 	pm := &mockPoolManager{addrErr: errors.New("db down")}
 	reg := &mockChainsRegistry{}
 	h := newDepositTestHandler(pm, reg)
-	c, w := newAuthedCtx(1, "network_family=EVM")
+	c, w := newAuthedCtx(1, "networkFamily=EVM")
 	h.GetDepositAddress(c)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+// TestGetDepositAddress_AssignError_BodyNoLeak verifies that internal error
+// details (e.g. raw DB errors, SQL fragments) never reach the client body.
+// Regression: T6-I-3 — previously the handler echoed err.Error() in `message`.
+func TestGetDepositAddress_AssignError_BodyNoLeak(t *testing.T) {
+	pm := &mockPoolManager{addrErr: errors.New("pq: relation \"address_pool\" does not exist (sql: SELECT * FROM ...)")}
+	reg := &mockChainsRegistry{}
+	h := newDepositTestHandler(pm, reg)
+	c, w := newAuthedCtx(1, "networkFamily=EVM")
+	h.GetDepositAddress(c)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	for _, leak := range []string{"pq:", "relation", "SELECT", "sql:"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("error body must not leak internal detail %q, got: %s", leak, body)
+		}
+	}
+	// But the error code must still be present so the frontend can react.
+	if !strings.Contains(body, "ASSIGN_FAILED") {
+		t.Errorf("error code ASSIGN_FAILED must remain in body, got: %s", body)
 	}
 }
 
@@ -215,7 +282,7 @@ func TestGetDepositAddress_Concurrent10Users(t *testing.T) {
 		wg.Add(1)
 		go func(uid int) {
 			defer wg.Done()
-			c, w := newAuthedCtx(uid, "network_family=EVM")
+			c, w := newAuthedCtx(uid, "networkFamily=EVM")
 			h.GetDepositAddress(c)
 			if w.Code != http.StatusOK {
 				t.Errorf("user %d: expected 200, got %d", uid, w.Code)
@@ -246,7 +313,7 @@ func TestGetDepositAddress_SameUserReturnsSameAddress(t *testing.T) {
 	h := newDepositTestHandler(pm, reg)
 
 	for i := 0; i < 3; i++ {
-		c, w := newAuthedCtx(7, "network_family=EVM")
+		c, w := newAuthedCtx(7, "networkFamily=EVM")
 		h.GetDepositAddress(c)
 		if w.Code != http.StatusOK {
 			t.Fatalf("call %d: expected 200, got %d", i, w.Code)
@@ -268,6 +335,36 @@ func TestGetSupportedChains_Unauthorized(t *testing.T) {
 	h.GetSupportedChains(c)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+// TestGetSupportedChains_EmptyChains verifies that when the registry has zero
+// enabled chains, the endpoint returns 200 + an empty JSON array (NOT null and
+// NOT missing the field). The frontend deserialises chains[] regardless and
+// breaks if it gets null. Regression: T6-S-3.
+func TestGetSupportedChains_EmptyChains(t *testing.T) {
+	reg := &mockChainsRegistry{
+		chains:  nil,
+		byChain: map[string][]*walletconfig.CoinChain{},
+	}
+	h := newDepositTestHandler(nil, reg)
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("userID", 1)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/wallet/supported-chains", nil)
+	h.GetSupportedChains(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with empty list, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"chains":[]`) {
+		t.Errorf(`expected "chains":[] for empty registry, got: %s`, body)
+	}
+	if strings.Contains(body, `"chains":null`) {
+		t.Errorf("chains must be [] not null, got: %s", body)
 	}
 }
 
@@ -362,7 +459,7 @@ func TestSetSafeheronDeps_NilSafe(t *testing.T) {
 	h := &Handler{}
 	// nil interfaces should be a no-op, leaving fallback path intact.
 	h.SetSafeheronDeps(nil, nil)
-	if h.PoolManager != nil || h.WalletRegistry != nil {
+	if h.poolManager != nil || h.walletRegistry != nil {
 		t.Error("nil SetSafeheronDeps must not assign fields")
 	}
 }

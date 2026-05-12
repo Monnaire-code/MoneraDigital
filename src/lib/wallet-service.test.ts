@@ -89,37 +89,4 @@ describe('WalletService', () => {
     });
   });
 
-  describe('getSupportedChains', () => {
-    it('returns chain list', async () => {
-      const fetchMock = vi.fn().mockResolvedValue(
-        jsonResponse({
-          chains: [
-            { chainCode: 'ETHEREUM', symbol: 'USDC', coinKey: 'k', minDeposit: '0.0001', decimals: 6 },
-            { chainCode: 'TRON', symbol: 'USDT', coinKey: 'k2', minDeposit: '0.000001', decimals: 6 },
-          ],
-        })
-      );
-      global.fetch = fetchMock as unknown as typeof fetch;
-      const { WalletService } = await import('./wallet-service');
-
-      const result = await WalletService.getSupportedChains();
-
-      expect(result.chains).toHaveLength(2);
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/wallet/supported-chains',
-        expect.objectContaining({
-          headers: expect.objectContaining({ Authorization: 'Bearer mock-token' }),
-        })
-      );
-    });
-
-    it('propagates backend error', async () => {
-      global.fetch = vi.fn().mockResolvedValue(
-        jsonResponse({ message: 'REGISTRY_UNAVAILABLE' }, { ok: false, status: 503 })
-      ) as unknown as typeof fetch;
-      const { WalletService } = await import('./wallet-service');
-
-      await expect(WalletService.getSupportedChains()).rejects.toThrow('REGISTRY_UNAVAILABLE');
-    });
-  });
 });

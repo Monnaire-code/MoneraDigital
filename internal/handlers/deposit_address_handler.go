@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -25,10 +26,16 @@ type ChainsRegistry interface {
 	ListEnabledCoinChainsByChain(chainCode string) []*walletconfig.CoinChain
 }
 
+// supportedCoin mirrors the TS `SupportedCoin` shape in src/lib/wallet-service.ts.
+// coinKey + decimals are required: the frontend uses `${chainCode}-${coinKey}`
+// as a React row key (deduplicates multiple coins on the same chain) and reads
+// decimals to format on-chain amounts.
 type supportedCoin struct {
 	ChainCode  string `json:"chainCode"`
 	Symbol     string `json:"symbol"`
+	CoinKey    string `json:"coinKey"`
 	MinDeposit string `json:"minDeposit"`
+	Decimals   int    `json:"decimals"`
 }
 
 type depositAddressResponse struct {
@@ -71,16 +78,19 @@ func (h *Handler) GetDepositAddress(c *gin.Context) {
 		return
 	}
 
-	family := c.Query("network_family")
+	// R2-C-1: query param is camelCase per CLAUDE.md JSON naming convention.
+	// Frontend (wallet-service.ts) sends `?networkFamily=EVM`; reading snake_case
+	// here would always 400 in production while unit tests passed.
+	family := c.Query("networkFamily")
 	if !allowedNetworkFamilies[family] {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "INVALID_NETWORK_FAMILY",
-			"message": "network_family must be EVM or TRON",
+			"message": "networkFamily must be EVM or TRON",
 		})
 		return
 	}
 
-	if h.PoolManager == nil || h.WalletRegistry == nil {
+	if h.poolManager == nil || h.walletRegistry == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":   "WALLET_UNAVAILABLE",
 			"message": "Safeheron wallet pool not initialized",
@@ -88,7 +98,7 @@ func (h *Handler) GetDepositAddress(c *gin.Context) {
 		return
 	}
 
-	addr, err := h.PoolManager.GetOrAssign(c.Request.Context(), userID, family)
+	addr, err := h.poolManager.GetOrAssign(c.Request.Context(), userID, family)
 	if err != nil {
 		if errors.Is(err, pool.ErrPoolEmpty) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
@@ -97,14 +107,17 @@ func (h *Handler) GetDepositAddress(c *gin.Context) {
 			})
 			return
 		}
+		// T6-I-3: never echo raw err.Error() — DB errors / SQL fragments must
+		// stay in server logs, not response bodies.
+		log.Printf("deposit-address assign failed userId=%d family=%s: %v", userID, family, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "ASSIGN_FAILED",
-			"message": err.Error(),
+			"message": "Failed to assign deposit address, please retry shortly",
 		})
 		return
 	}
 
-	coins := h.WalletRegistry.ListEnabledCoinChainsByFamily(family)
+	coins := h.walletRegistry.ListEnabledCoinChainsByFamily(family)
 	supported := make([]supportedCoin, 0, len(coins))
 	for _, cc := range coins {
 		var symbol string
@@ -114,7 +127,9 @@ func (h *Handler) GetDepositAddress(c *gin.Context) {
 		supported = append(supported, supportedCoin{
 			ChainCode:  cc.ChainCode,
 			Symbol:     symbol,
+			CoinKey:    cc.SafeheronCoinKey,
 			MinDeposit: cc.MinDepositAmount,
+			Decimals:   cc.Decimals,
 		})
 	}
 
@@ -133,7 +148,7 @@ func (h *Handler) GetSupportedChains(c *gin.Context) {
 		return
 	}
 
-	if h.WalletRegistry == nil {
+	if h.walletRegistry == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":   "REGISTRY_UNAVAILABLE",
 			"message": "Wallet config registry not initialized",
@@ -141,10 +156,10 @@ func (h *Handler) GetSupportedChains(c *gin.Context) {
 		return
 	}
 
-	chains := h.WalletRegistry.AllChains()
+	chains := h.walletRegistry.AllChains()
 	out := make([]supportedChain, 0, len(chains))
 	for _, ch := range chains {
-		ccs := h.WalletRegistry.ListEnabledCoinChainsByChain(ch.Code)
+		ccs := h.walletRegistry.ListEnabledCoinChainsByChain(ch.Code)
 		coins := make([]chainCoin, 0, len(ccs))
 		for _, cc := range ccs {
 			var symbol string

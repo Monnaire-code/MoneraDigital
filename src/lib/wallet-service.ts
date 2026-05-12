@@ -17,10 +17,6 @@ export interface SupportedCoin {
   decimals: number;
 }
 
-export interface SupportedChainsResponse {
-  chains: SupportedCoin[];
-}
-
 const networkFamilySchema = z.enum(['EVM', 'TRON']);
 
 async function authHeaders(): Promise<HeadersInit> {
@@ -62,16 +58,5 @@ export class WalletService {
       { headers: await authHeaders() }
     );
     return parseOrThrow<DepositAddressResponse>(response, 'fetch deposit address');
-  }
-
-  /**
-   * Get all coins/chains the platform currently accepts deposits for.
-   * Used to render the supported-coins reference table.
-   */
-  static async getSupportedChains(): Promise<SupportedChainsResponse> {
-    const response = await fetch('/api/wallet/supported-chains', {
-      headers: await authHeaders(),
-    });
-    return parseOrThrow<SupportedChainsResponse>(response, 'fetch supported chains');
   }
 }
