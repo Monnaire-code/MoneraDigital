@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sort"
 
 	"github.com/gin-gonic/gin"
 
@@ -19,11 +20,12 @@ type DepositPoolManager interface {
 }
 
 // ChainsRegistry is the narrow Registry view used by deposit-address /
-// supported-chains endpoints.
+// supported-chains / deposit-coins endpoints.
 type ChainsRegistry interface {
 	ListEnabledCoinChainsByFamily(family string) []*walletconfig.CoinChain
 	AllChains() []*walletconfig.Chain
 	ListEnabledCoinChainsByChain(chainCode string) []*walletconfig.CoinChain
+	AllEnabledCoinChains() []*walletconfig.CoinChain
 }
 
 // supportedCoin mirrors the TS `SupportedCoin` shape in src/lib/wallet-service.ts.
@@ -193,4 +195,124 @@ func DeprecatedWalletEndpoint(c *gin.Context) {
 		"error":   "DEPRECATED",
 		"message": "Use GET /api/wallet/deposit-address instead",
 	})
+}
+
+type coinNetwork struct {
+	ChainCode               string  `json:"chainCode"`
+	ChainName               string  `json:"chainName"`
+	NetworkFamily           string  `json:"networkFamily"`
+	ShortName               string  `json:"shortName"`
+	TokenStandard           string  `json:"tokenStandard"`
+	IsNative                bool    `json:"isNative"`
+	TokenContract           *string `json:"tokenContract"`
+	Decimals                int     `json:"decimals"`
+	MinDeposit              string  `json:"minDeposit"`
+	RequiredConfirmations   int     `json:"requiredConfirmations"`
+	EstimatedArrivalMinutes int     `json:"estimatedArrivalMinutes"`
+	ExplorerURL             string  `json:"explorerUrl"`
+}
+
+type depositCoin struct {
+	Symbol   string        `json:"symbol"`
+	Name     string        `json:"name"`
+	IsStable bool          `json:"isStable"`
+	Networks []coinNetwork `json:"networks"`
+}
+
+type depositCoinsResponse struct {
+	Coins []depositCoin `json:"coins"`
+}
+
+func (h *Handler) GetDepositCoins(c *gin.Context) {
+	if _, err := h.getUserID(c); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	if h.walletRegistry == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   "REGISTRY_UNAVAILABLE",
+			"message": "Wallet config registry not initialized",
+		})
+		return
+	}
+
+	allCC := h.walletRegistry.AllEnabledCoinChains()
+
+	type netWithOrder struct {
+		net   coinNetwork
+		order int
+	}
+	type coinEntry struct {
+		coin     *walletconfig.Coin
+		networks []netWithOrder
+		order    int
+	}
+	bySymbol := make(map[string]*coinEntry)
+	var symbolOrder []string
+
+	for _, cc := range allCC {
+		if cc.Coin == nil || cc.Chain == nil {
+			continue
+		}
+		sym := cc.Coin.Symbol
+
+		shortName := cc.Chain.ShortName
+		if shortName == "" {
+			shortName = cc.Chain.Code
+		}
+
+		var contract *string
+		if cc.TokenContract != "" {
+			s := cc.TokenContract
+			contract = &s
+		}
+
+		net := coinNetwork{
+			ChainCode:               cc.ChainCode,
+			ChainName:               cc.Chain.Name,
+			NetworkFamily:           cc.Chain.NetworkFamily,
+			ShortName:               shortName,
+			TokenStandard:           cc.TokenStandard,
+			IsNative:                cc.IsNative,
+			TokenContract:           contract,
+			Decimals:                cc.Decimals,
+			MinDeposit:              cc.MinDepositAmount,
+			RequiredConfirmations:   cc.RequiredConfirmations,
+			EstimatedArrivalMinutes: cc.EstimatedArrivalMinutes,
+			ExplorerURL:             cc.Chain.ExplorerURL,
+		}
+
+		entry, exists := bySymbol[sym]
+		if !exists {
+			entry = &coinEntry{coin: cc.Coin, order: cc.Coin.DisplayOrder}
+			bySymbol[sym] = entry
+			symbolOrder = append(symbolOrder, sym)
+		}
+		entry.networks = append(entry.networks, netWithOrder{net: net, order: cc.DisplayOrder})
+	}
+
+	sort.Slice(symbolOrder, func(i, j int) bool {
+		return bySymbol[symbolOrder[i]].order < bySymbol[symbolOrder[j]].order
+	})
+
+	coins := make([]depositCoin, 0, len(symbolOrder))
+	for _, sym := range symbolOrder {
+		e := bySymbol[sym]
+		sort.Slice(e.networks, func(i, j int) bool {
+			return e.networks[i].order < e.networks[j].order
+		})
+		nets := make([]coinNetwork, len(e.networks))
+		for i, nwo := range e.networks {
+			nets[i] = nwo.net
+		}
+		coins = append(coins, depositCoin{
+			Symbol:   e.coin.Symbol,
+			Name:     e.coin.Name,
+			IsStable: e.coin.IsStable,
+			Networks: nets,
+		})
+	}
+
+	c.JSON(http.StatusOK, depositCoinsResponse{Coins: coins})
 }

@@ -285,6 +285,110 @@ func TestRegistry_ConcurrentReadWrite(t *testing.T) {
 	cancel()
 }
 
+func TestRegistry_AllEnabledCoinChains(t *testing.T) {
+	chains, coins, ccs := testData()
+	repo := &mockRepo{
+		loadAllFn: func(_ context.Context) ([]*Chain, []*Coin, []*CoinChain, error) {
+			return chains, coins, ccs, nil
+		},
+	}
+
+	reg := NewRegistry(repo, 60*time.Second)
+	reg.Load(context.Background())
+
+	all := reg.AllEnabledCoinChains()
+	if len(all) != 3 {
+		t.Fatalf("expected 3 coin_chains, got %d", len(all))
+	}
+
+	keys := make(map[string]bool)
+	for _, cc := range all {
+		keys[cc.SafeheronCoinKey] = true
+	}
+	for _, expect := range []string{"ETH", "USDT_ERC20", "TRX"} {
+		if !keys[expect] {
+			t.Errorf("missing coinKey %s", expect)
+		}
+	}
+
+	for i := 1; i < len(all); i++ {
+		if all[i-1].DisplayOrder > all[i].DisplayOrder {
+			t.Errorf("AllEnabledCoinChains not sorted: index %d (order %d) > index %d (order %d)",
+				i-1, all[i-1].DisplayOrder, i, all[i].DisplayOrder)
+		}
+	}
+}
+
+func TestRegistry_AllEnabledCoinChains_Empty(t *testing.T) {
+	repo := &mockRepo{
+		loadAllFn: func(_ context.Context) ([]*Chain, []*Coin, []*CoinChain, error) {
+			return []*Chain{}, []*Coin{}, []*CoinChain{}, nil
+		},
+	}
+
+	reg := NewRegistry(repo, 60*time.Second)
+	reg.Load(context.Background())
+
+	all := reg.AllEnabledCoinChains()
+	if len(all) != 0 {
+		t.Fatalf("expected 0 coin_chains, got %d", len(all))
+	}
+}
+
+func TestRegistry_AllCoins(t *testing.T) {
+	chains, coins, ccs := testData()
+	repo := &mockRepo{
+		loadAllFn: func(_ context.Context) ([]*Chain, []*Coin, []*CoinChain, error) {
+			return chains, coins, ccs, nil
+		},
+	}
+
+	reg := NewRegistry(repo, 60*time.Second)
+	reg.Load(context.Background())
+
+	all := reg.AllCoins()
+	if len(all) != 3 {
+		t.Fatalf("expected 3 enabled coins, got %d", len(all))
+	}
+
+	symbols := make(map[string]bool)
+	for _, c := range all {
+		symbols[c.Symbol] = true
+	}
+	for _, expect := range []string{"ETH", "USDT", "TRX"} {
+		if !symbols[expect] {
+			t.Errorf("missing coin %s", expect)
+		}
+	}
+}
+
+func TestRegistry_AllCoins_FiltersDisabled(t *testing.T) {
+	chains, coins, ccs := testData()
+	for _, c := range coins {
+		if c.Symbol == "USDT" {
+			c.Enabled = false
+		}
+	}
+	repo := &mockRepo{
+		loadAllFn: func(_ context.Context) ([]*Chain, []*Coin, []*CoinChain, error) {
+			return chains, coins, ccs, nil
+		},
+	}
+
+	reg := NewRegistry(repo, 60*time.Second)
+	reg.Load(context.Background())
+
+	all := reg.AllCoins()
+	if len(all) != 2 {
+		t.Fatalf("expected 2 enabled coins (USDT disabled), got %d", len(all))
+	}
+	for _, c := range all {
+		if c.Symbol == "USDT" {
+			t.Error("disabled USDT should not appear in AllCoins")
+		}
+	}
+}
+
 func TestRegistry_DefaultRefreshInterval(t *testing.T) {
 	reg := NewRegistry(&mockRepo{
 		loadAllFn: func(_ context.Context) ([]*Chain, []*Coin, []*CoinChain, error) {

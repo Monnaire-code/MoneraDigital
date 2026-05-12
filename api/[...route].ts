@@ -55,6 +55,7 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
 
   // Wallet endpoints — Safeheron Phase 1
   'GET /api/wallet/deposit-address': { requiresAuth: true, backendPath: '/api/wallet/deposit-address' },
+  'GET /api/wallet/deposit-coins': { requiresAuth: true, backendPath: '/api/wallet/deposit-coins' },
   'GET /api/wallet/supported-chains': { requiresAuth: true, backendPath: '/api/wallet/supported-chains' },
 
   // Legacy wallet endpoints — backend returns 410 Gone. Kept here so the

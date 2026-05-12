@@ -195,13 +195,13 @@ func (h *Handler) Register(c *gin.Context) {
 }
 
 func (h *Handler) GetMe(c *gin.Context) {
-	userID, exists := c.Get("userID")
-	if !exists {
+	userID, err := h.getUserID(c)
+	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
-	user, err := h.AuthService.GetUserByID(userID.(int))
+	user, err := h.AuthService.GetUserByID(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch user profile"})
 		return
@@ -710,11 +710,15 @@ func (h *Handler) GetDocs(c *gin.Context) {
 // Helper functions
 
 func (h *Handler) getUserID(c *gin.Context) (int, error) {
-	userID, exists := c.Get("userID")
+	v, exists := c.Get("userID")
 	if !exists {
 		return 0, errors.New("Unauthorized")
 	}
-	return userID.(int), nil
+	id, ok := v.(int)
+	if !ok {
+		return 0, errors.New("Unauthorized")
+	}
+	return id, nil
 }
 
 func toLendingPositionResponse(position *models.LendingPosition) dto.LendingPositionResponse {

@@ -1,13 +1,14 @@
 package routes
 
 import (
-	"github.com/gin-gonic/gin"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 	"monera-digital/internal/container"
 	"monera-digital/internal/docs"
 	"monera-digital/internal/handlers"
 	"monera-digital/internal/middleware"
+
+	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 // SetupRoutes configures all API routes with middleware
@@ -137,6 +138,7 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 		wallet := protected.Group("/wallet")
 		{
 			wallet.GET("/deposit-address", h.GetDepositAddress)
+			wallet.GET("/deposit-coins", h.GetDepositCoins)
 			wallet.GET("/supported-chains", h.GetSupportedChains)
 
 			// Legacy Core-API wallet endpoints — replaced by deposit-address.

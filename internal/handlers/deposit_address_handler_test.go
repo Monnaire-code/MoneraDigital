@@ -43,9 +43,10 @@ func (m *mockPoolManager) GetOrAssign(_ context.Context, userID int, family stri
 }
 
 type mockChainsRegistry struct {
-	byFamily map[string][]*walletconfig.CoinChain
-	byChain  map[string][]*walletconfig.CoinChain
-	chains   []*walletconfig.Chain
+	byFamily      map[string][]*walletconfig.CoinChain
+	byChain       map[string][]*walletconfig.CoinChain
+	chains        []*walletconfig.Chain
+	allCoinChains []*walletconfig.CoinChain
 }
 
 func (m *mockChainsRegistry) ListEnabledCoinChainsByFamily(family string) []*walletconfig.CoinChain {
@@ -55,6 +56,9 @@ func (m *mockChainsRegistry) ListEnabledCoinChainsByChain(chain string) []*walle
 	return m.byChain[chain]
 }
 func (m *mockChainsRegistry) AllChains() []*walletconfig.Chain { return m.chains }
+func (m *mockChainsRegistry) AllEnabledCoinChains() []*walletconfig.CoinChain {
+	return m.allCoinChains
+}
 
 func newDepositTestHandler(pm DepositPoolManager, reg ChainsRegistry) *Handler {
 	h := &Handler{}
@@ -473,4 +477,249 @@ func randAddress(seed int) string {
 		x = x*31 + 7
 	}
 	return string(out)
+}
+
+// --- GetDepositCoins tests ---
+
+func newDepositCoinsCtx(userID int) (*gin.Context, *httptest.ResponseRecorder) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/wallet/deposit-coins", nil)
+	if userID > 0 {
+		c.Set("userID", userID)
+	}
+	return c, w
+}
+
+func TestGetDepositCoins_Unauthorized(t *testing.T) {
+	h := newDepositTestHandler(&mockPoolManager{}, &mockChainsRegistry{})
+	c, w := newDepositCoinsCtx(0)
+	h.GetDepositCoins(c)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestGetDepositCoins_RegistryUnavailable(t *testing.T) {
+	h := &Handler{}
+	c, w := newDepositCoinsCtx(1)
+	h.GetDepositCoins(c)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
+	}
+}
+
+func TestGetDepositCoins_GroupingAndShape(t *testing.T) {
+	ethChain := &walletconfig.Chain{Code: "ETHEREUM", Name: "Ethereum", NetworkFamily: "EVM", ExplorerURL: "https://etherscan.io", ShortName: "ETH"}
+	bscChain := &walletconfig.Chain{Code: "BSC", Name: "BNB Smart Chain", NetworkFamily: "EVM", ExplorerURL: "https://bscscan.com", ShortName: "BSC"}
+
+	ethCoin := &walletconfig.Coin{ID: 1, Symbol: "ETH", Name: "Ether", IsStable: false, Enabled: true, DisplayOrder: 10}
+	usdcCoin := &walletconfig.Coin{ID: 5, Symbol: "USDC", Name: "USD Coin", IsStable: true, Enabled: true, DisplayOrder: 50}
+
+	reg := &mockChainsRegistry{
+		allCoinChains: []*walletconfig.CoinChain{
+			{ChainCode: "ETHEREUM", Chain: ethChain, Coin: ethCoin, IsNative: true, TokenContract: "", Decimals: 18, MinDepositAmount: "0.001", TokenStandard: "Native", EstimatedArrivalMinutes: 2},
+			{ChainCode: "ETHEREUM", Chain: ethChain, Coin: usdcCoin, IsNative: false, TokenContract: "0xA0b869", Decimals: 6, MinDepositAmount: "1", TokenStandard: "ERC20", EstimatedArrivalMinutes: 2},
+			{ChainCode: "BSC", Chain: bscChain, Coin: usdcCoin, IsNative: false, TokenContract: "0x8AC76a", Decimals: 18, MinDepositAmount: "1", TokenStandard: "BEP20", EstimatedArrivalMinutes: 1},
+		},
+	}
+	h := newDepositTestHandler(nil, reg)
+	c, w := newDepositCoinsCtx(1)
+	h.GetDepositCoins(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body depositCoinsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Coins) != 2 {
+		t.Fatalf("expected 2 coins, got %d", len(body.Coins))
+	}
+
+	// ETH (displayOrder=10) should come first
+	if body.Coins[0].Symbol != "ETH" {
+		t.Errorf("expected ETH first, got %s", body.Coins[0].Symbol)
+	}
+	if len(body.Coins[0].Networks) != 1 {
+		t.Fatalf("ETH should have 1 network, got %d", len(body.Coins[0].Networks))
+	}
+	// Native coin: tokenContract must be null
+	if body.Coins[0].Networks[0].TokenContract != nil {
+		t.Errorf("native ETH tokenContract should be null, got %v", body.Coins[0].Networks[0].TokenContract)
+	}
+	if body.Coins[0].Networks[0].ShortName != "ETH" {
+		t.Errorf("expected shortName ETH, got %s", body.Coins[0].Networks[0].ShortName)
+	}
+
+	// USDC should have 2 networks
+	if body.Coins[1].Symbol != "USDC" {
+		t.Errorf("expected USDC second, got %s", body.Coins[1].Symbol)
+	}
+	if len(body.Coins[1].Networks) != 2 {
+		t.Fatalf("USDC should have 2 networks, got %d", len(body.Coins[1].Networks))
+	}
+	// Non-native: tokenContract must be a string
+	for _, net := range body.Coins[1].Networks {
+		if net.TokenContract == nil {
+			t.Errorf("non-native USDC on %s should have tokenContract, got nil", net.ChainCode)
+		}
+	}
+}
+
+func TestGetDepositCoins_SkipsNilCoinOrChain(t *testing.T) {
+	reg := &mockChainsRegistry{
+		allCoinChains: []*walletconfig.CoinChain{
+			{ChainCode: "ETHEREUM", Chain: nil, Coin: &walletconfig.Coin{Symbol: "ETH", DisplayOrder: 10}},
+			{ChainCode: "ETHEREUM", Chain: &walletconfig.Chain{Code: "ETHEREUM", Name: "Ethereum", NetworkFamily: "EVM", ShortName: "ETH"}, Coin: nil},
+			{ChainCode: "ETHEREUM", Chain: &walletconfig.Chain{Code: "ETHEREUM", Name: "Ethereum", NetworkFamily: "EVM", ShortName: "ETH"}, Coin: &walletconfig.Coin{Symbol: "ETH", Name: "Ether", DisplayOrder: 10}, IsNative: true, Decimals: 18, MinDepositAmount: "0.001"},
+		},
+	}
+	h := newDepositTestHandler(nil, reg)
+	c, w := newDepositCoinsCtx(1)
+	h.GetDepositCoins(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body depositCoinsResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if len(body.Coins) != 1 {
+		t.Fatalf("expected 1 coin (nil-ref entries skipped), got %d", len(body.Coins))
+	}
+	if body.Coins[0].Symbol != "ETH" {
+		t.Errorf("expected ETH, got %s", body.Coins[0].Symbol)
+	}
+}
+
+func TestGetDepositCoins_ShortNameFallback(t *testing.T) {
+	chain := &walletconfig.Chain{Code: "MYCHAIN", Name: "My Chain", NetworkFamily: "EVM", ShortName: ""}
+	coin := &walletconfig.Coin{ID: 1, Symbol: "ABC", Name: "ABC Coin", DisplayOrder: 10}
+	reg := &mockChainsRegistry{
+		allCoinChains: []*walletconfig.CoinChain{
+			{ChainCode: "MYCHAIN", Chain: chain, Coin: coin, IsNative: true, Decimals: 18, MinDepositAmount: "0.01"},
+		},
+	}
+	h := newDepositTestHandler(nil, reg)
+	c, w := newDepositCoinsCtx(1)
+	h.GetDepositCoins(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body depositCoinsResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if len(body.Coins) != 1 || len(body.Coins[0].Networks) != 1 {
+		t.Fatalf("expected 1 coin with 1 network, got %+v", body.Coins)
+	}
+	if body.Coins[0].Networks[0].ShortName != "MYCHAIN" {
+		t.Errorf("expected shortName fallback to chain code MYCHAIN, got %s", body.Coins[0].Networks[0].ShortName)
+	}
+}
+
+func TestGetDepositCoins_NetworksSortedByDisplayOrder(t *testing.T) {
+	ethChain := &walletconfig.Chain{Code: "ETHEREUM", Name: "Ethereum", NetworkFamily: "EVM", ShortName: "ETH"}
+	bscChain := &walletconfig.Chain{Code: "BSC", Name: "BNB Smart Chain", NetworkFamily: "EVM", ShortName: "BSC"}
+	tronChain := &walletconfig.Chain{Code: "TRON", Name: "Tron", NetworkFamily: "TRON", ShortName: "TRX"}
+
+	usdtCoin := &walletconfig.Coin{ID: 4, Symbol: "USDT", Name: "Tether", IsStable: true, Enabled: true, DisplayOrder: 40}
+
+	reg := &mockChainsRegistry{
+		allCoinChains: []*walletconfig.CoinChain{
+			{ChainCode: "TRON", Chain: tronChain, Coin: usdtCoin, DisplayOrder: 70, IsNative: false, TokenContract: "TR7N", Decimals: 6, MinDepositAmount: "1", TokenStandard: "TRC20"},
+			{ChainCode: "ETHEREUM", Chain: ethChain, Coin: usdtCoin, DisplayOrder: 20, IsNative: false, TokenContract: "0xdAC1", Decimals: 6, MinDepositAmount: "1", TokenStandard: "ERC20"},
+			{ChainCode: "BSC", Chain: bscChain, Coin: usdtCoin, DisplayOrder: 50, IsNative: false, TokenContract: "0x55d3", Decimals: 18, MinDepositAmount: "1", TokenStandard: "BEP20"},
+		},
+	}
+	h := newDepositTestHandler(nil, reg)
+	c, w := newDepositCoinsCtx(1)
+	h.GetDepositCoins(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body depositCoinsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Coins) != 1 {
+		t.Fatalf("expected 1 coin (USDT), got %d", len(body.Coins))
+	}
+	nets := body.Coins[0].Networks
+	if len(nets) != 3 {
+		t.Fatalf("expected 3 networks, got %d", len(nets))
+	}
+	if nets[0].ChainCode != "ETHEREUM" {
+		t.Errorf("expected ETHEREUM first (displayOrder=20), got %s", nets[0].ChainCode)
+	}
+	if nets[1].ChainCode != "BSC" {
+		t.Errorf("expected BSC second (displayOrder=50), got %s", nets[1].ChainCode)
+	}
+	if nets[2].ChainCode != "TRON" {
+		t.Errorf("expected TRON third (displayOrder=70), got %s", nets[2].ChainCode)
+	}
+}
+
+func TestGetDepositCoins_CoinsSortedByDisplayOrder(t *testing.T) {
+	ethChain := &walletconfig.Chain{Code: "ETHEREUM", Name: "Ethereum", NetworkFamily: "EVM", ShortName: "ETH"}
+
+	// Intentionally out of order: TRX(60) → ETH(10) → USDC(50)
+	trxCoin := &walletconfig.Coin{ID: 3, Symbol: "TRX", Name: "TRON", IsStable: false, Enabled: true, DisplayOrder: 60}
+	ethCoin := &walletconfig.Coin{ID: 1, Symbol: "ETH", Name: "Ether", IsStable: false, Enabled: true, DisplayOrder: 10}
+	usdcCoin := &walletconfig.Coin{ID: 5, Symbol: "USDC", Name: "USD Coin", IsStable: true, Enabled: true, DisplayOrder: 50}
+
+	reg := &mockChainsRegistry{
+		allCoinChains: []*walletconfig.CoinChain{
+			{ChainCode: "ETHEREUM", Chain: ethChain, Coin: trxCoin, IsNative: false, Decimals: 6, MinDepositAmount: "0.1", DisplayOrder: 60},
+			{ChainCode: "ETHEREUM", Chain: ethChain, Coin: ethCoin, IsNative: true, Decimals: 18, MinDepositAmount: "0.001", DisplayOrder: 10},
+			{ChainCode: "ETHEREUM", Chain: ethChain, Coin: usdcCoin, IsNative: false, TokenContract: "0xA0b8", Decimals: 6, MinDepositAmount: "1", DisplayOrder: 50},
+		},
+	}
+	h := newDepositTestHandler(nil, reg)
+	c, w := newDepositCoinsCtx(1)
+	h.GetDepositCoins(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var body depositCoinsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Coins) != 3 {
+		t.Fatalf("expected 3 coins, got %d", len(body.Coins))
+	}
+	// Must be sorted by DisplayOrder: ETH(10) → USDC(50) → TRX(60)
+	if body.Coins[0].Symbol != "ETH" {
+		t.Errorf("expected ETH first (displayOrder=10), got %s", body.Coins[0].Symbol)
+	}
+	if body.Coins[1].Symbol != "USDC" {
+		t.Errorf("expected USDC second (displayOrder=50), got %s", body.Coins[1].Symbol)
+	}
+	if body.Coins[2].Symbol != "TRX" {
+		t.Errorf("expected TRX third (displayOrder=60), got %s", body.Coins[2].Symbol)
+	}
+}
+
+func TestGetDepositCoins_EmptyRegistry(t *testing.T) {
+	reg := &mockChainsRegistry{allCoinChains: nil}
+	h := newDepositTestHandler(nil, reg)
+	c, w := newDepositCoinsCtx(1)
+	h.GetDepositCoins(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"coins":[]`) {
+		t.Errorf(`expected "coins":[] for empty registry, got: %s`, body)
+	}
+	if strings.Contains(body, `"coins":null`) {
+		t.Errorf("coins must be [] not null, got: %s", body)
+	}
 }

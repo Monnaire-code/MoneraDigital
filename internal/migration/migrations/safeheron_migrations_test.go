@@ -1,78 +1,25 @@
 package migrations
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	"monera-digital/internal/migration"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 // --- Metadata Tests ---
 
-func TestSafeheronMigrations_Versions(t *testing.T) {
-	tests := []struct {
-		name    string
-		m       migration.Migration
-		version string
-	}{
-		{"CreateChainsTable", &CreateChainsTable{}, "015"},
-		{"CreateCoinsTable", &CreateCoinsTable{}, "016"},
-		{"CreateCoinChainsTable", &CreateCoinChainsTable{}, "017"},
-		{"CreateAddressPoolTable", &CreateAddressPoolTable{}, "018"},
-		{"CreateSafeheronWebhookEventsTable", &CreateSafeheronWebhookEventsTable{}, "019"},
-		{"ExtendDepositsForSafeheron", &ExtendDepositsForSafeheron{}, "020"},
-		{"SeedSafeheronPhase1", &SeedSafeheronPhase1{}, "021"},
+func TestSafeheronPhase1_VersionAndDescription(t *testing.T) {
+	var m migration.Migration = &SafeheronPhase1{}
+	if v := m.Version(); v != "015" {
+		t.Errorf("Version() = %q, want %q", v, "015")
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.m.Version(); got != tt.version {
-				t.Errorf("Version() = %q, want %q", got, tt.version)
-			}
-		})
-	}
-}
-
-func TestSafeheronMigrations_Descriptions(t *testing.T) {
-	migs := []migration.Migration{
-		&CreateChainsTable{},
-		&CreateCoinsTable{},
-		&CreateCoinChainsTable{},
-		&CreateAddressPoolTable{},
-		&CreateSafeheronWebhookEventsTable{},
-		&ExtendDepositsForSafeheron{},
-		&SeedSafeheronPhase1{},
-	}
-
-	for _, m := range migs {
-		t.Run(m.Version(), func(t *testing.T) {
-			if m.Description() == "" {
-				t.Error("Description should not be empty")
-			}
-		})
-	}
-}
-
-func TestSafeheronMigrations_VersionOrder(t *testing.T) {
-	migs := []migration.Migration{
-		&CreateChainsTable{},
-		&CreateCoinsTable{},
-		&CreateCoinChainsTable{},
-		&CreateAddressPoolTable{},
-		&CreateSafeheronWebhookEventsTable{},
-		&ExtendDepositsForSafeheron{},
-		&SeedSafeheronPhase1{},
-	}
-
-	for i := 1; i < len(migs); i++ {
-		prev := migs[i-1].Version()
-		curr := migs[i].Version()
-		if curr <= prev {
-			t.Errorf("Migration %s (version %s) should be after %s (version %s)",
-				migs[i].Description(), curr, migs[i-1].Description(), prev)
-		}
+	if m.Description() == "" {
+		t.Error("Description should not be empty")
 	}
 }
 
@@ -543,7 +490,7 @@ func TestSeedSafeheronPhase1_Up_TestnetDefault(t *testing.T) {
 	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec("INSERT INTO coin_chains.*ETH\\(SEPOLIA\\)_ETHEREUM_SEPOLIA").WillReturnResult(sqlmock.NewResult(0, 3))
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	if err := m.Up(db); err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
@@ -565,7 +512,7 @@ func TestSeedSafeheronPhase1_Up_Production(t *testing.T) {
 	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec("INSERT INTO coin_chains.*USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET").WillReturnResult(sqlmock.NewResult(0, 8))
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	if err := m.Up(db); err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
@@ -587,7 +534,7 @@ func TestSeedSafeheronPhase1_Up_LocalEnv(t *testing.T) {
 	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec("INSERT INTO coin_chains.*TRX\\(SHASTA\\)_TRON_TESTNET").WillReturnResult(sqlmock.NewResult(0, 3))
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	if err := m.Up(db); err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
@@ -608,7 +555,7 @@ func TestSeedSafeheronPhase1_Up_UnknownEnv(t *testing.T) {
 	mock.ExpectExec("INSERT INTO chains").WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	err = m.Up(db)
 	if err == nil {
 		t.Fatal("expected error for unknown APP_ENV")
@@ -629,7 +576,7 @@ func TestSeedSafeheronPhase1_Up_SeedChainsError(t *testing.T) {
 
 	mock.ExpectExec("INSERT INTO chains").WillReturnError(fmt.Errorf("db error"))
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	err = m.Up(db)
 	if err == nil {
 		t.Fatal("expected error")
@@ -651,7 +598,7 @@ func TestSeedSafeheronPhase1_Up_SeedCoinsError(t *testing.T) {
 	mock.ExpectExec("INSERT INTO chains").WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectExec("INSERT INTO coins").WillReturnError(fmt.Errorf("db error"))
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	err = m.Up(db)
 	if err == nil {
 		t.Fatal("expected error")
@@ -674,7 +621,7 @@ func TestSeedSafeheronPhase1_Up_CoinChainsError(t *testing.T) {
 	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec("INSERT INTO coin_chains").WillReturnError(fmt.Errorf("db error"))
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	err = m.Up(db)
 	if err == nil {
 		t.Fatal("expected error")
@@ -697,7 +644,7 @@ func TestSeedSafeheronPhase1_Up_ProductionCoinChainsError(t *testing.T) {
 	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec("INSERT INTO coin_chains").WillReturnError(fmt.Errorf("db error"))
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	err = m.Up(db)
 	if err == nil {
 		t.Fatal("expected error")
@@ -718,7 +665,7 @@ func TestSeedSafeheronPhase1_Down(t *testing.T) {
 	mock.ExpectExec("DELETE FROM coins WHERE symbol IN").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec("DELETE FROM chains WHERE code IN").WillReturnResult(sqlmock.NewResult(0, 3))
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	if err := m.Down(db); err != nil {
 		t.Fatalf("Down() error = %v", err)
 	}
@@ -751,7 +698,7 @@ func TestSeedSafeheronPhase1_Down_Errors(t *testing.T) {
 			}
 			mock.ExpectExec(".*").WillReturnError(fmt.Errorf("db error"))
 
-			m := &SeedSafeheronPhase1{}
+			m := &SeedSafeheronPhase1Data{}
 			err = m.Down(db)
 			if err == nil {
 				t.Fatal("expected error")
@@ -765,10 +712,14 @@ func TestSeedSafeheronPhase1_Down_Errors(t *testing.T) {
 
 // --- Down Error Tests for simple tables ---
 
+type downStep interface {
+	Down(db *sql.DB) error
+}
+
 func TestSimpleMigrations_Down_Errors(t *testing.T) {
 	tests := []struct {
 		name string
-		m    migration.Migration
+		m    downStep
 	}{
 		{"ChainsDown", &CreateChainsTable{}},
 		{"CoinsDown", &CreateCoinsTable{}},
@@ -859,7 +810,7 @@ func TestSeedSafeheronPhase1_ProductionCoinKeys(t *testing.T) {
 		mock.ExpectExec(".*" + escapeRegex(key) + ".*").WillReturnResult(sqlmock.NewResult(0, 8))
 	}
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	_ = m.Up(db)
 }
 
@@ -884,7 +835,7 @@ func TestSeedSafeheronPhase1_TestnetCoinKeys(t *testing.T) {
 		mock.ExpectExec(".*" + key + ".*").WillReturnResult(sqlmock.NewResult(0, 3))
 	}
 
-	m := &SeedSafeheronPhase1{}
+	m := &SeedSafeheronPhase1Data{}
 	_ = m.Up(db)
 }
 

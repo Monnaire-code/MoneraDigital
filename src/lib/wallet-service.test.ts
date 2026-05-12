@@ -89,4 +89,105 @@ describe('WalletService', () => {
     });
   });
 
+  describe('getRecentDeposits', () => {
+    it('returns deposits array on success', async () => {
+      const mockDeposits = {
+        deposits: [
+          { id: 1, amount: '0.5', currency: 'ETH', status: 'CONFIRMED' },
+          { id: 2, amount: '100', currency: 'USDC', status: 'PENDING' },
+        ],
+      };
+      global.fetch = vi.fn().mockResolvedValue(jsonResponse(mockDeposits)) as unknown as typeof fetch;
+      const { WalletService } = await import('./wallet-service');
+
+      const result = await WalletService.getRecentDeposits();
+
+      expect(result).toHaveLength(2);
+      expect(result[0].currency).toBe('ETH');
+      expect(result[1].status).toBe('PENDING');
+    });
+
+    it('passes limit as query parameter', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ deposits: [] }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+      const { WalletService } = await import('./wallet-service');
+
+      await WalletService.getRecentDeposits(3);
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/deposits?limit=3',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'Bearer mock-token' }),
+        })
+      );
+    });
+
+    it('throws on non-ok response', async () => {
+      global.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({ error: 'INTERNAL' }, { ok: false, status: 500 })
+      ) as unknown as typeof fetch;
+      const { WalletService } = await import('./wallet-service');
+
+      await expect(WalletService.getRecentDeposits()).rejects.toThrow('INTERNAL');
+    });
+
+    it('throws when no token in localStorage', async () => {
+      localStorageMock.getItem.mockReturnValue(null);
+      const { WalletService } = await import('./wallet-service');
+      await expect(WalletService.getRecentDeposits()).rejects.toThrow('Not authenticated');
+    });
+  });
+
+  describe('getDepositCoins', () => {
+    it('returns coins list on success', async () => {
+      const mockCoins = {
+        coins: [
+          {
+            symbol: 'ETH',
+            name: 'Ether',
+            isStable: false,
+            networks: [
+              {
+                chainCode: 'ETHEREUM',
+                chainName: 'Ethereum',
+                networkFamily: 'EVM',
+                shortName: 'ETH',
+                tokenStandard: 'Native',
+                isNative: true,
+                tokenContract: null,
+                decimals: 18,
+                minDeposit: '0.001',
+                requiredConfirmations: 12,
+                estimatedArrivalMinutes: 2,
+                explorerUrl: 'https://etherscan.io',
+              },
+            ],
+          },
+        ],
+      };
+      global.fetch = vi.fn().mockResolvedValue(jsonResponse(mockCoins)) as unknown as typeof fetch;
+      const { WalletService } = await import('./wallet-service');
+
+      const result = await WalletService.getDepositCoins();
+
+      expect(result.coins).toHaveLength(1);
+      expect(result.coins[0].symbol).toBe('ETH');
+      expect(result.coins[0].networks[0].chainCode).toBe('ETHEREUM');
+    });
+
+    it('throws on non-ok response', async () => {
+      global.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({ error: 'REGISTRY_UNAVAILABLE' }, { ok: false, status: 503 })
+      ) as unknown as typeof fetch;
+      const { WalletService } = await import('./wallet-service');
+
+      await expect(WalletService.getDepositCoins()).rejects.toThrow('REGISTRY_UNAVAILABLE');
+    });
+
+    it('throws when no token in localStorage', async () => {
+      localStorageMock.getItem.mockReturnValue(null);
+      const { WalletService } = await import('./wallet-service');
+      await expect(WalletService.getDepositCoins()).rejects.toThrow('Not authenticated');
+    });
+  });
 });

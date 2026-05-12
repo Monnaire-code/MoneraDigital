@@ -15,9 +15,9 @@ func TestDBRepository_LoadAll_Success(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery("SELECT code, name, network_family").
-		WillReturnRows(sqlmock.NewRows([]string{"code", "name", "network_family", "chain_id", "native_symbol", "explorer_url", "enabled", "display_order"}).
-			AddRow("ETHEREUM", "Ethereum", "EVM", "1", "ETH", "https://etherscan.io", true, 10).
-			AddRow("TRON", "TRON", "TRON", "", "TRX", "https://tronscan.org", true, 30))
+		WillReturnRows(sqlmock.NewRows([]string{"code", "name", "network_family", "chain_id", "native_symbol", "explorer_url", "short_name", "enabled", "display_order"}).
+			AddRow("ETHEREUM", "Ethereum", "EVM", "1", "ETH", "https://etherscan.io", "ETH", true, 10).
+			AddRow("TRON", "TRON", "TRON", "", "TRX", "https://tronscan.org", "TRON", true, 30))
 
 	mock.ExpectQuery("SELECT id, symbol, name, is_stable").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "symbol", "name", "is_stable", "enabled", "display_order"}).
@@ -25,9 +25,9 @@ func TestDBRepository_LoadAll_Success(t *testing.T) {
 			AddRow(4, "USDT", "Tether USD", true, true, 40))
 
 	mock.ExpectQuery("SELECT id, chain_code, coin_id").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "chain_code", "coin_id", "is_native", "token_contract", "decimals", "safeheron_coin_key", "min_deposit_amount", "deposit_enabled", "withdraw_enabled", "required_confirmations", "display_order"}).
-			AddRow(1, "ETHEREUM", 1, true, "", 18, "ETH", "0.001", true, false, 0, 10).
-			AddRow(2, "ETHEREUM", 4, false, "0xdAC17F958D2ee523a2206206994597C13D831ec7", 6, "USDT_ERC20", "1", true, false, 0, 20))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "chain_code", "coin_id", "is_native", "token_contract", "decimals", "safeheron_coin_key", "min_deposit_amount", "deposit_enabled", "withdraw_enabled", "required_confirmations", "token_standard", "estimated_arrival_minutes", "display_order"}).
+			AddRow(1, "ETHEREUM", 1, true, "", 18, "ETH", "0.001", true, false, 0, "Native", 2, 10).
+			AddRow(2, "ETHEREUM", 4, false, "0xdAC17F958D2ee523a2206206994597C13D831ec7", 6, "USDT_ERC20", "1", true, false, 0, "ERC20", 2, 20))
 
 	repo := NewDBRepository(db)
 	chains, coins, coinChains, err := repo.LoadAll(context.Background())
@@ -77,7 +77,7 @@ func TestDBRepository_LoadAll_CoinsQueryError(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery("SELECT code, name, network_family").
-		WillReturnRows(sqlmock.NewRows([]string{"code", "name", "network_family", "chain_id", "native_symbol", "explorer_url", "enabled", "display_order"}))
+		WillReturnRows(sqlmock.NewRows([]string{"code", "name", "network_family", "chain_id", "native_symbol", "explorer_url", "short_name", "enabled", "display_order"}))
 
 	mock.ExpectQuery("SELECT id, symbol, name, is_stable").
 		WillReturnError(sqlmock.ErrCancelled)
@@ -94,7 +94,7 @@ func TestDBRepository_LoadAll_CoinChainsQueryError(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery("SELECT code, name, network_family").
-		WillReturnRows(sqlmock.NewRows([]string{"code", "name", "network_family", "chain_id", "native_symbol", "explorer_url", "enabled", "display_order"}))
+		WillReturnRows(sqlmock.NewRows([]string{"code", "name", "network_family", "chain_id", "native_symbol", "explorer_url", "short_name", "enabled", "display_order"}))
 
 	mock.ExpectQuery("SELECT id, symbol, name, is_stable").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "symbol", "name", "is_stable", "enabled", "display_order"}))
@@ -114,13 +114,13 @@ func TestDBRepository_LoadAll_EmptyTables(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery("SELECT code, name, network_family").
-		WillReturnRows(sqlmock.NewRows([]string{"code", "name", "network_family", "chain_id", "native_symbol", "explorer_url", "enabled", "display_order"}))
+		WillReturnRows(sqlmock.NewRows([]string{"code", "name", "network_family", "chain_id", "native_symbol", "explorer_url", "short_name", "enabled", "display_order"}))
 
 	mock.ExpectQuery("SELECT id, symbol, name, is_stable").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "symbol", "name", "is_stable", "enabled", "display_order"}))
 
 	mock.ExpectQuery("SELECT id, chain_code, coin_id").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "chain_code", "coin_id", "is_native", "token_contract", "decimals", "safeheron_coin_key", "min_deposit_amount", "deposit_enabled", "withdraw_enabled", "required_confirmations", "display_order"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "chain_code", "coin_id", "is_native", "token_contract", "decimals", "safeheron_coin_key", "min_deposit_amount", "deposit_enabled", "withdraw_enabled", "required_confirmations", "token_standard", "estimated_arrival_minutes", "display_order"}))
 
 	repo := NewDBRepository(db)
 	chains, coins, coinChains, err := repo.LoadAll(context.Background())

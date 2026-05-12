@@ -17,6 +17,32 @@ export interface SupportedCoin {
   decimals: number;
 }
 
+export interface DepositCoinNetwork {
+  chainCode: string;
+  chainName: string;
+  networkFamily: NetworkFamily;
+  shortName: string;
+  tokenStandard: string;
+  isNative: boolean;
+  tokenContract: string | null;
+  decimals: number;
+  minDeposit: string;
+  requiredConfirmations: number;
+  estimatedArrivalMinutes: number;
+  explorerUrl: string;
+}
+
+export interface DepositCoin {
+  symbol: string;
+  name: string;
+  isStable: boolean;
+  networks: DepositCoinNetwork[];
+}
+
+export interface DepositCoinsResponse {
+  coins: DepositCoin[];
+}
+
 const networkFamilySchema = z.enum(['EVM', 'TRON']);
 
 async function authHeaders(): Promise<HeadersInit> {
@@ -42,6 +68,15 @@ async function parseOrThrow<T>(response: Response, action: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+export interface DepositRecord {
+  id: number;
+  amount: string;
+  currency: string;
+  status: string;
+  txHash?: string;
+  chainCode?: string;
+}
+
 export class WalletService {
   /**
    * Get the deposit address for a network family (EVM or TRON).
@@ -58,5 +93,21 @@ export class WalletService {
       { headers: await authHeaders() }
     );
     return parseOrThrow<DepositAddressResponse>(response, 'fetch deposit address');
+  }
+
+  static async getRecentDeposits(limit = 5): Promise<DepositRecord[]> {
+    const response = await fetch(`/api/deposits?limit=${limit}`, {
+      headers: await authHeaders(),
+    });
+    const data = await parseOrThrow<{ deposits: DepositRecord[] }>(response, 'fetch deposits');
+    return data.deposits;
+  }
+
+  static async getDepositCoins(): Promise<DepositCoinsResponse> {
+    logger.info('Fetching deposit coins');
+    const response = await fetch('/api/wallet/deposit-coins', {
+      headers: await authHeaders(),
+    });
+    return parseOrThrow<DepositCoinsResponse>(response, 'fetch deposit coins');
   }
 }

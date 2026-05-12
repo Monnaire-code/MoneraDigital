@@ -7,6 +7,7 @@ type Chain struct {
 	ChainID       string
 	NativeSymbol  string
 	ExplorerURL   string
+	ShortName     string
 	Enabled       bool
 	DisplayOrder  int
 }
@@ -21,18 +22,20 @@ type Coin struct {
 }
 
 type CoinChain struct {
-	ID                    int
-	ChainCode             string
-	CoinID                int
-	Chain                 *Chain
-	Coin                  *Coin
-	IsNative              bool
-	TokenContract         string
-	Decimals              int
-	SafeheronCoinKey      string
-	MinDepositAmount      string
-	DepositEnabled        bool
-	WithdrawEnabled       bool
-	RequiredConfirmations int
-	DisplayOrder          int
+	ID                      int
+	ChainCode               string
+	CoinID                  int
+	Chain                   *Chain
+	Coin                    *Coin
+	IsNative                bool
+	TokenContract           string
+	Decimals                int
+	SafeheronCoinKey        string
+	MinDepositAmount        string
+	DepositEnabled          bool
+	WithdrawEnabled         bool
+	RequiredConfirmations   int
+	TokenStandard           string
+	EstimatedArrivalMinutes int
+	DisplayOrder            int
 }
