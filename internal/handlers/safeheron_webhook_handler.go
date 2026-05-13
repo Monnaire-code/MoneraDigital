@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -108,17 +109,19 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		return
 	}
 
-	// T7-I-4: store the verbatim webhook body — preserves the outer envelope
-	// (timestamp / signature / bizContent ciphertext) AND every inner field
-	// the SDK's WebhookEvent struct doesn't model (replaceTxHash,
-	// destinationAddressList, custom metadata). Forensic replay can re-verify
-	// signatures or replay decryption against the stored body.
+	decryptedPayload, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("safeheron webhook marshal decrypted event failed: %v", err)
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
 	inserted, err := h.Recorder.InsertEventOrSkip(c.Request.Context(), &deposit.Event{
 		EventID:        eventID,
 		EventType:      evt.EventType,
 		SafeheronTxKey: evt.EventDetail.TxKey,
 		CustomerRefID:  evt.EventDetail.CustomerRefID,
-		RawPayload:     body,
+		RawPayload:     decryptedPayload,
 	})
 	if err != nil {
 		// A DB outage is the only reasonable cause; let Safeheron retry by

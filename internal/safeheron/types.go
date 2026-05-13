@@ -57,6 +57,38 @@ type Account struct {
 	AutoFuel      bool
 }
 
+type CreateTransactionRequest struct {
+	CustomerRefID          string
+	CoinKey                string
+	TxAmount               string
+	TxFeeLevel             string // LOW / MIDDLE / HIGH（留空走默认）
+	MaxTxFeeRate           string // gas 费上限（Gwei），可选
+	TreatAsGrossAmount     bool   // true: fee 从 amount 里扣，false: fee 额外扣
+	GasLimit               string // EIP-1559: gas limit
+	MaxFee                 string // EIP-1559: maxFeePerGas (Gwei)
+	MaxPriorityFee         string // EIP-1559: maxPriorityFeePerGas (Gwei)
+	SourceAccountKey       string
+	SourceAccountType      string // VAULT_ACCOUNT
+	DestinationAccountType string // ONE_TIME_ADDRESS
+	DestinationAddress     string
+	Note                   string
+}
+
+type CreateTransactionResponse struct {
+	TxKey         string
+	CustomerRefID string
+}
+
+type TransactionDetail struct {
+	TxKey              string
+	TxHash             string
+	CoinKey            string
+	TxAmount           string
+	TransactionStatus  string
+	SourceAddress      string
+	DestinationAddress string
+}
+
 type WebhookEvent struct {
 	EventType   string      `json:"eventType"`
 	EventDetail EventDetail `json:"eventDetail"`

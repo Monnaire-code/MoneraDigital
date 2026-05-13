@@ -818,7 +818,15 @@
     "recent": {
       "title": "Recent deposits",
       "empty": "No recent deposits",
-      "viewTx": "View transaction"
+      "viewTx": "View transaction",
+      "coin": "Coin",
+      "amount": "Amount",
+      "time": "Time",
+      "network": "Network",
+      "address": "Address",
+      "txid": "TxID",
+      "status": "Status",
+      "viewMore": "View more"
     }
   },
   "wallet": {

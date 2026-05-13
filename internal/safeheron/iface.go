@@ -14,6 +14,8 @@ type SafeheronClient interface {
 	// 调用时机：(1) ProcessOne 初查 COMPLETED+CONFIRMED 时 (2) 超时兜底扫描 KYT_PENDING 超时后。
 	// ctx 在接口层保留但不传给 SDK（SDK 方法不接受 ctx）。
 	KytReport(ctx context.Context, txKey string) (*KytReportResponse, error)
+	CreateTransaction(ctx context.Context, req CreateTransactionRequest) (*CreateTransactionResponse, error)
+	GetTransaction(ctx context.Context, txKey string) (*TransactionDetail, error)
 	WebhookConvert(rawBody []byte) (*WebhookEvent, error)
 	Close() error
 }

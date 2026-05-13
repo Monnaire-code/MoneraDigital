@@ -75,6 +75,10 @@ export interface DepositRecord {
   status: string;
   txHash?: string;
   chain?: string;
+  fromAddress?: string;
+  toAddress?: string;
+  createdAt?: string;
+  creditedAt?: string;
 }
 
 export class WalletService {

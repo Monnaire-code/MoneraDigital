@@ -48,6 +48,10 @@ type mockRepo struct {
 	beginTxCalls          int     // tracks how many tx were begun (T7-I-5 hot-loop check)
 	noTxIncrements        []int64 // recorded eventIDs of IncrementEventAttemptsNoTx calls (T10 C-1/I-2)
 	rollbackBeforeNoTxInc bool    // true means each noTx increment is observed AFTER at least one rollback
+
+	commitErr   error // injected commit failure for fakeTx
+	markDoneErr error // forces MarkEventDone to fail
+	markMRErr   error // forces MarkDepositManualReview to fail
 }
 
 func newMockRepo() *mockRepo {
@@ -67,19 +71,23 @@ func (m *mockRepo) BeginTx(_ context.Context) (Tx, error) {
 	if m.beginTxErr != nil {
 		return nil, m.beginTxErr
 	}
-	return &fakeTx{mu: &m.mu, commits: &m.commitCalls, rollbacks: &m.rollbackCalls}, nil
+	return &fakeTx{mu: &m.mu, commits: &m.commitCalls, rollbacks: &m.rollbackCalls, commitErr: m.commitErr}, nil
 }
 
 type fakeTx struct {
 	mu        *sync.Mutex
 	commits   *int
 	rollbacks *int
+	commitErr error // injected commit failure
 }
 
 func (f *fakeTx) Commit() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	*f.commits++
+	if f.commitErr != nil {
+		return f.commitErr
+	}
 	return nil
 }
 func (f *fakeTx) Rollback() error {
@@ -205,6 +213,9 @@ func (m *mockRepo) MarkDepositFailed(_ context.Context, _ Tx, id int64, reason s
 func (m *mockRepo) MarkDepositManualReview(_ context.Context, _ Tx, id int64, reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.markMRErr != nil {
+		return m.markMRErr
+	}
 	m.manualUpdates[id] = reason
 	for _, d := range m.deposits {
 		if d.ID == id {
@@ -217,6 +228,9 @@ func (m *mockRepo) MarkDepositManualReview(_ context.Context, _ Tx, id int64, re
 func (m *mockRepo) MarkEventDone(_ context.Context, _ Tx, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.markDoneErr != nil {
+		return m.markDoneErr
+	}
 	m.doneIDs = append(m.doneIDs, id)
 	return nil
 }

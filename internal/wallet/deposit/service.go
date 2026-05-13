@@ -450,7 +450,12 @@ func (s *Service) handleKYTApiFailure(ctx context.Context, evt *Event, dep *Depo
 	return true, nil
 }
 
+const maxAMLListEntries = 50
+
 func (s *Service) writeAMLFields(ctx context.Context, tx Tx, depID int64, state string, amlList []safeheron.AmlReport) error {
+	if len(amlList) > maxAMLListEntries {
+		amlList = amlList[:maxAMLListEntries]
+	}
 	amlListJSON, err := json.Marshal(amlList)
 	if err != nil {
 		return fmt.Errorf("marshal amlList: %w", err)

@@ -51,6 +51,12 @@ func (m *mockClient) GetAccountByAddress(ctx context.Context, address string) (*
 func (m *mockClient) KytReport(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
 	return nil, nil
 }
+func (m *mockClient) CreateTransaction(_ context.Context, _ safeheron.CreateTransactionRequest) (*safeheron.CreateTransactionResponse, error) {
+	return nil, nil
+}
+func (m *mockClient) GetTransaction(_ context.Context, _ string) (*safeheron.TransactionDetail, error) {
+	return nil, nil
+}
 func (m *mockClient) WebhookConvert(rawBody []byte) (*safeheron.WebhookEvent, error) {
 	return nil, nil
 }

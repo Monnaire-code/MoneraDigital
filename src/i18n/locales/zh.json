@@ -895,9 +895,17 @@
       "viewContract": "查看合约"
     },
     "recent": {
-      "title": "最近充值记录",
+      "title": "近期充币记录",
       "empty": "暂无充值记录",
-      "viewTx": "查看交易"
+      "viewTx": "查看交易",
+      "coin": "币种",
+      "amount": "数量",
+      "time": "时间",
+      "network": "转账网络",
+      "address": "地址",
+      "txid": "TxID",
+      "status": "状态",
+      "viewMore": "更多"
     }
   },
   "wallet": {

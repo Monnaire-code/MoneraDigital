@@ -376,6 +376,44 @@ function AddressDisplay({
   );
 }
 
+function truncate(s: string, prefixLen: number, suffixLen: number): string {
+  if (s.length <= prefixLen + suffixLen + 3) return s;
+  return `${s.slice(0, prefixLen)}...${s.slice(-suffixLen)}`;
+}
+
+function formatDepositTime(iso?: string): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "-";
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  CREDITED: "bg-green-500/10 text-green-600",
+  CHAIN_VERIFIED: "bg-green-500/10 text-green-600",
+  PENDING: "bg-yellow-500/10 text-yellow-600",
+  CHAIN_VERIFYING: "bg-yellow-500/10 text-yellow-600",
+  KYT_PENDING: "bg-blue-500/10 text-blue-600",
+  MANUAL_REVIEW: "bg-orange-500/10 text-orange-600",
+  FAILED: "bg-red-500/10 text-red-600",
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation();
+  const color = STATUS_COLORS[status] ?? "bg-muted text-muted-foreground";
+  return (
+    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${color}`}>
+      {t(`deposit.status.${status}`, status)}
+    </span>
+  );
+}
+
 function RecentDeposits({
   explorerUrlMap,
 }: {
@@ -385,7 +423,7 @@ function RecentDeposits({
 
   const { data } = useQuery({
     queryKey: ["recent-deposits"],
-    queryFn: () => WalletService.getRecentDeposits().catch(() => []),
+    queryFn: () => WalletService.getRecentDeposits(10).catch(() => []),
     staleTime: 60_000,
   });
 
@@ -393,7 +431,7 @@ function RecentDeposits({
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="pb-3">
         <CardTitle className="text-base">{t("deposit.recent.title")}</CardTitle>
       </CardHeader>
       <CardContent>
@@ -402,41 +440,75 @@ function RecentDeposits({
             {t("deposit.recent.empty")}
           </p>
         ) : (
-          <div className="space-y-3">
-            {deposits.map((d, i) => {
-              const txUrl =
-                d.txHash && d.chain && explorerUrlMap.has(d.chain)
-                  ? safeExplorerUrl(explorerUrlMap.get(d.chain)!, "tx", d.txHash)
-                  : null;
-              return (
-                <div
-                  key={d.id ?? i}
-                  className="flex items-center justify-between text-sm"
-                >
-                  <div className="flex items-center gap-2">
-                    <CryptoIcon currency={d.asset} size={16} />
-                    <span className="font-medium">
-                      {d.amount} {d.asset}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">
-                      {t(`deposit.status.${d.status}`, d.status)}
-                    </span>
-                    {txUrl && (
-                      <a
-                        href={txUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm" data-testid="deposits-table">
+              <thead>
+                <tr className="border-b text-muted-foreground text-left">
+                  <th className="pb-2 pr-4 font-medium">{t("deposit.recent.coin")}</th>
+                  <th className="pb-2 pr-4 font-medium">{t("deposit.recent.amount")}</th>
+                  <th className="pb-2 pr-4 font-medium">{t("deposit.recent.status")}</th>
+                  <th className="pb-2 pr-4 font-medium hidden sm:table-cell">{t("deposit.recent.time")}</th>
+                  <th className="pb-2 pr-4 font-medium hidden md:table-cell">{t("deposit.recent.network")}</th>
+                  <th className="pb-2 pr-4 font-medium hidden lg:table-cell">{t("deposit.recent.address")}</th>
+                  <th className="pb-2 font-medium hidden lg:table-cell">{t("deposit.recent.txid")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deposits.map((d, i) => {
+                  const txUrl =
+                    d.txHash && d.chain && explorerUrlMap.has(d.chain)
+                      ? safeExplorerUrl(explorerUrlMap.get(d.chain)!, "tx", d.txHash)
+                      : null;
+                  return (
+                    <tr
+                      key={d.id ?? i}
+                      className="border-b last:border-0 hover:bg-muted/30"
+                    >
+                      <td className="py-3 pr-4">
+                        <div className="flex items-center gap-2">
+                          <CryptoIcon currency={d.asset} size={18} />
+                          <span className="font-medium">{d.asset}</span>
+                        </div>
+                      </td>
+                      <td className="py-3 pr-4 font-medium">{d.amount}</td>
+                      <td className="py-3 pr-4">
+                        <StatusBadge status={d.status} />
+                      </td>
+                      <td className="py-3 pr-4 text-muted-foreground hidden sm:table-cell">
+                        {formatDepositTime(d.createdAt)}
+                      </td>
+                      <td className="py-3 pr-4 text-muted-foreground hidden md:table-cell">
+                        {d.chain || "-"}
+                      </td>
+                      <td className="py-3 pr-4 font-mono text-xs text-muted-foreground hidden lg:table-cell">
+                        {d.toAddress ? truncate(d.toAddress, 6, 4) : "-"}
+                      </td>
+                      <td className="py-3 font-mono text-xs hidden lg:table-cell">
+                        {d.txHash ? (
+                          <div className="flex items-center gap-1">
+                            <span className="text-muted-foreground">
+                              {truncate(d.txHash, 8, 4)}
+                            </span>
+                            {txUrl && (
+                              <a
+                                href={txUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </CardContent>
@@ -491,8 +563,8 @@ export default function Deposit() {
         <p className="text-muted-foreground mt-2">{t("deposit.description")}</p>
       </div>
 
-      <div className="flex flex-col lg:flex-row gap-6">
-        <div className="flex-1 min-w-0">
+      <div className="space-y-6">
+        <div>
           <StepIndicator current={currentStep} />
 
           {isLoading && (
@@ -543,9 +615,7 @@ export default function Deposit() {
           )}
         </div>
 
-        <div className="w-full lg:w-80 shrink-0">
-          <RecentDeposits explorerUrlMap={explorerUrlMap} />
-        </div>
+        <RecentDeposits explorerUrlMap={explorerUrlMap} />
       </div>
     </div>
   );

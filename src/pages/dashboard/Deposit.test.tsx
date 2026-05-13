@@ -405,11 +405,19 @@ describe('Deposit page — three-step flow', () => {
     });
   });
 
-  it('renders recent deposits with transaction data', async () => {
+  it('renders recent deposits in a table with all columns', async () => {
     const depositsWithData = {
       deposits: [
-        { id: 1, amount: '0.5', asset: 'ETH', status: 'CONFIRMED', txHash: '0xabc', chain: 'ETHEREUM' },
-        { id: 2, amount: '100', asset: 'USDC', status: 'PENDING' },
+        {
+          id: 1, amount: '0.5', asset: 'ETH', status: 'CREDITED',
+          txHash: '0xabc123def456', chain: 'ETHEREUM',
+          toAddress: '0x1234567890abcdef1234567890abcdef12345678',
+          createdAt: '2026-05-13T10:00:00Z',
+        },
+        {
+          id: 2, amount: '100', asset: 'USDC', status: 'PENDING',
+          createdAt: '2026-05-13T09:00:00Z',
+        },
       ],
     };
     global.fetch = vi.fn((url: string | URL | Request) => {
@@ -426,9 +434,16 @@ describe('Deposit page — three-step flow', () => {
 
     renderDeposit();
     await waitFor(() => {
-      expect(screen.getByText('0.5 ETH')).toBeInTheDocument();
-      expect(screen.getByText('100 USDC')).toBeInTheDocument();
+      expect(screen.getByTestId('deposits-table')).toBeInTheDocument();
     });
+
+    const table = screen.getByTestId('deposits-table');
+    const rows = table.querySelectorAll('tbody tr');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('0.5');
+    expect(rows[0].textContent).toContain('ETH');
+    expect(rows[1].textContent).toContain('100');
+    expect(rows[1].textContent).toContain('USDC');
   });
 
   it('suppresses contract link for disallowed explorer origin', async () => {
@@ -577,7 +592,7 @@ describe('Deposit page — three-step flow', () => {
   it('recent deposits renders explorer link when chain matches explorerUrlMap', async () => {
     const depositsWithChain = {
       deposits: [
-        { id: 1, amount: '0.5', asset: 'ETH', status: 'CONFIRMED', txHash: '0xabc123', chain: 'ETHEREUM' },
+        { id: 1, amount: '0.5', asset: 'ETH', status: 'CREDITED', txHash: '0xabc123deadbeef', chain: 'ETHEREUM', createdAt: '2026-05-13T10:00:00Z' },
       ],
     };
     global.fetch = vi.fn((url: string | URL | Request) => {
@@ -594,12 +609,13 @@ describe('Deposit page — three-step flow', () => {
 
     renderDeposit();
     await waitFor(() => {
-      expect(screen.getByText('0.5 ETH')).toBeInTheDocument();
+      expect(screen.getByText('0.5')).toBeInTheDocument();
     });
 
     // ETHEREUM chain maps to https://etherscan.io from MOCK_COINS
+    // txHash '0xabc123deadbeef' truncated to '0xabc123...beef'
     const links = screen.getAllByRole('link');
-    const explorerLink = links.find(l => l.getAttribute('href')?.includes('etherscan.io/tx/0xabc123'));
+    const explorerLink = links.find(l => l.getAttribute('href')?.includes('etherscan.io/tx/0xabc123deadbeef'));
     expect(explorerLink).toBeDefined();
     expect(explorerLink).toHaveAttribute('target', '_blank');
     expect(explorerLink).toHaveAttribute('rel', 'noopener noreferrer');

@@ -343,7 +343,8 @@ func (m *ExtendDepositsForSafeheron) Up(db *sql.DB) error {
 		ADD COLUMN IF NOT EXISTS safeheron_sub_status  VARCHAR(64),
 		ADD COLUMN IF NOT EXISTS status_rank           SMALLINT NOT NULL DEFAULT 0,
 		ADD COLUMN IF NOT EXISTS credited_at           TIMESTAMP,
-		ADD COLUMN IF NOT EXISTS failed_reason         TEXT;
+		ADD COLUMN IF NOT EXISTS failed_reason         TEXT,
+		ADD COLUMN IF NOT EXISTS updated_at            TIMESTAMP NOT NULL DEFAULT NOW();
 	`
 	_, err := db.Exec(addColumns)
 	if err != nil {

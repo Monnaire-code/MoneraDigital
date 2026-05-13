@@ -275,13 +275,17 @@ func (r *DBRepository) WriteJournal(ctx context.Context, tx Tx, j *JournalEntry)
 }
 
 func (r *DBRepository) MarkDepositCredited(ctx context.Context, tx Tx, depositID int64) error {
-	_, err := asSQLTx(tx).ExecContext(ctx,
+	res, err := asSQLTx(tx).ExecContext(ctx,
 		`UPDATE deposits SET status = $1, credited_at = NOW(), updated_at = NOW()
-		 WHERE id = $2`,
-		DepositStatusCredited, depositID,
+		 WHERE id = $2 AND status IN ($3, $4)`,
+		DepositStatusCredited, depositID, DepositStatusPending, DepositStatusKYTPending,
 	)
 	if err != nil {
 		return fmt.Errorf("mark deposit credited: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("mark deposit credited: no rows affected (id=%d, status precondition failed)", depositID)
 	}
 	return nil
 }

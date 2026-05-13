@@ -22,6 +22,11 @@ type complianceAPIClient interface {
 	KytReport(api.KytReportRequest, *api.KytReportResponse) error
 }
 
+type transactionAPIClient interface {
+	CreateTransactionsV3(api.CreateTransactionsRequest, *api.CreateTransactionV3Response) error
+	OneTransactions(api.OneTransactionsRequest, *api.OneTransactionsResponse) error
+}
+
 type webhookConverter interface {
 	Convert(webhook.WebHook) (string, error)
 }
@@ -39,6 +44,7 @@ type Config struct {
 type Client struct {
 	account     accountAPIClient
 	compliance  complianceAPIClient
+	transaction transactionAPIClient
 	webhookConv webhookConverter
 	tempFiles   []string
 	sdkClient   sdk.Client
@@ -80,12 +86,14 @@ func NewClient(cfg Config) (*Client, error) {
 
 	sdkAccount := &api.AccountApi{Client: baseClient}
 	sdkCompliance := &api.ComplianceApi{Client: baseClient}
+	sdkTransaction := &api.TransactionApi{Client: baseClient}
 
 	c := &Client{
-		account:    sdkAccount,
-		compliance: sdkCompliance,
-		tempFiles:  tempFiles,
-		sdkClient:  baseClient,
+		account:     sdkAccount,
+		compliance:  sdkCompliance,
+		transaction: sdkTransaction,
+		tempFiles:   tempFiles,
+		sdkClient:   baseClient,
 	}
 
 	if (cfg.WebhookPublicKeyPEM == "") != (cfg.WebhookPrivateKeyPEM == "") {
@@ -251,6 +259,51 @@ func (c *Client) KytReport(_ context.Context, txKey string) (*KytReportResponse,
 		})
 	}
 	return out, nil
+}
+
+func (c *Client) CreateTransaction(_ context.Context, req CreateTransactionRequest) (*CreateTransactionResponse, error) {
+	sdkReq := api.CreateTransactionsRequest{
+		CustomerRefId:          req.CustomerRefID,
+		CoinKey:                req.CoinKey,
+		TxAmount:               req.TxAmount,
+		TxFeeLevel:             req.TxFeeLevel,
+		MaxTxFeeRate:           req.MaxTxFeeRate,
+		TreatAsGrossAmount:     req.TreatAsGrossAmount,
+		SourceAccountKey:       req.SourceAccountKey,
+		SourceAccountType:      req.SourceAccountType,
+		DestinationAccountType: req.DestinationAccountType,
+		DestinationAddress:     req.DestinationAddress,
+		Note:                   req.Note,
+		FeeRateDto: api.FeeRateDto{
+			GasLimit:       req.GasLimit,
+			MaxFee:         req.MaxFee,
+			MaxPriorityFee: req.MaxPriorityFee,
+		},
+	}
+	var sdkResp api.CreateTransactionV3Response
+	if err := c.transaction.CreateTransactionsV3(sdkReq, &sdkResp); err != nil {
+		return nil, fmt.Errorf("safeheron CreateTransaction: %w", err)
+	}
+	return &CreateTransactionResponse{
+		TxKey:         sdkResp.TxKey,
+		CustomerRefID: sdkResp.CustomerRefId,
+	}, nil
+}
+
+func (c *Client) GetTransaction(_ context.Context, txKey string) (*TransactionDetail, error) {
+	var sdkResp api.OneTransactionsResponse
+	if err := c.transaction.OneTransactions(api.OneTransactionsRequest{TxKey: txKey}, &sdkResp); err != nil {
+		return nil, fmt.Errorf("safeheron GetTransaction txKey=%s: %w", txKey, err)
+	}
+	return &TransactionDetail{
+		TxKey:              sdkResp.TxKey,
+		TxHash:             sdkResp.TxHash,
+		CoinKey:            sdkResp.CoinKey,
+		TxAmount:           sdkResp.TxAmount,
+		TransactionStatus:  sdkResp.TransactionStatus,
+		SourceAddress:      sdkResp.SourceAddress,
+		DestinationAddress: sdkResp.DestinationAddress,
+	}, nil
 }
 
 func (c *Client) WebhookConvert(rawBody []byte) (*WebhookEvent, error) {
