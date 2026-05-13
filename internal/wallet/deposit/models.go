@@ -122,6 +122,14 @@ var ErrMarkErrorFailed = errors.New("mark event error failed; event remains pend
 // during an upstream outage. T10-I-3.
 var ErrKYTAPIBackoff = errors.New("KYT API failed; backing off until next tick")
 
+// ErrDepositTerminalState signals an attempt to overwrite a deposit in a
+// terminal state (CREDITED or FAILED). D-41.
+var ErrDepositTerminalState = errors.New("deposit in terminal state")
+
+// ErrDepositNotPending signals that MoveToKYTPending found the deposit in a
+// non-PENDING state (concurrent worker already advanced it). D-47.
+var ErrDepositNotPending = errors.New("deposit not in PENDING state")
+
 // MarshalRawPayload helper for tests / fakes.
 func MarshalRawPayload(env PayloadEnvelope) ([]byte, error) {
 	return json.Marshal(env)

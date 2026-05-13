@@ -5,14 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/spf13/viper"
 	"monera-digital/internal/db"
 	"monera-digital/internal/safeheron"
 	walletconfig "monera-digital/internal/wallet/config"
 	"monera-digital/internal/wallet/pool"
+
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
+	"github.com/spf13/viper"
 )
 
 func main() {
@@ -102,10 +105,8 @@ func runDryRun(evmCount, tronCount int) {
 }
 
 func loadEnv() {
-	viper.SetConfigFile(".env")
-	viper.SetConfigType("env")
-	viper.AutomaticEnv()
-	if err := viper.ReadInConfig(); err != nil {
-		log.Printf("no .env file found, using environment variables: %v", err)
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
 	}
+	viper.AutomaticEnv()
 }

@@ -37,13 +37,14 @@ type WebhookEventRecorder interface {
 
 // SafeheronWebhookHandler is the sync side of the deposit pipeline.
 type SafeheronWebhookHandler struct {
-	Verifier WebhookVerifier
-	Recorder WebhookEventRecorder
+	Verifier   WebhookVerifier
+	Recorder   WebhookEventRecorder
+	AllowedIPs []string
 }
 
 // NewSafeheronWebhookHandler wires the public webhook receiver.
-func NewSafeheronWebhookHandler(v WebhookVerifier, r WebhookEventRecorder) *SafeheronWebhookHandler {
-	return &SafeheronWebhookHandler{Verifier: v, Recorder: r}
+func NewSafeheronWebhookHandler(v WebhookVerifier, r WebhookEventRecorder, allowedIPs []string) *SafeheronWebhookHandler {
+	return &SafeheronWebhookHandler{Verifier: v, Recorder: r, AllowedIPs: allowedIPs}
 }
 
 // Receive handles POST /api/webhooks/safeheron. It:
@@ -63,6 +64,23 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 			"message": "Safeheron webhook handler not initialised",
 		})
 		return
+	}
+
+	// D-42: IP whitelist — reject before reading body or running RSA verify
+	if len(h.AllowedIPs) > 0 {
+		clientIP := c.ClientIP()
+		allowed := false
+		for _, ip := range h.AllowedIPs {
+			if ip == clientIP {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			log.Printf("safeheron webhook rejected: IP %s not in allowlist", clientIP)
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
 	}
 
 	// Plan D-12: http.MaxBytesReader caps body at 1MB AND surfaces an explicit

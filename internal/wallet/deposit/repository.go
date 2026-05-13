@@ -40,7 +40,7 @@ type Repository interface {
 
 	MarkEventDone(ctx context.Context, tx Tx, eventID int64) error
 	MarkEventError(ctx context.Context, tx Tx, eventID int64, errMsg string) error
-	LookupAddressOwner(ctx context.Context, address string) (userID int, found bool, err error)
+	LookupAddressOwner(ctx context.Context, address, networkFamily string) (userID int, found bool, err error)
 	BeginTx(ctx context.Context) (Tx, error)
 }
 
@@ -210,7 +210,8 @@ func (r *DBRepository) fetchDepositByTxKey(ctx context.Context, tx *sql.Tx, txKe
 		        COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
 		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
 		        status
-		 FROM deposits WHERE safeheron_tx_key = $1`,
+		 FROM deposits WHERE safeheron_tx_key = $1
+		 FOR UPDATE`,
 		txKey,
 	)
 	out := &DepositRow{}
@@ -227,6 +228,10 @@ func (r *DBRepository) fetchDepositByTxKey(ctx context.Context, tx *sql.Tx, txKe
 	return out, nil
 }
 
+// FindOrCreateAccountForUpdate inserts or locates the account row and holds a
+// row-level exclusive lock until tx commits. The no-op DO UPDATE clause is
+// intentional: PostgreSQL's INSERT ON CONFLICT DO UPDATE acquires an exclusive
+// row lock identical to SELECT FOR UPDATE, serialising concurrent credits.
 func (r *DBRepository) FindOrCreateAccountForUpdate(ctx context.Context, tx Tx, userID int, currency string) (int64, string, error) {
 	row := asSQLTx(tx).QueryRowContext(ctx,
 		`INSERT INTO account (user_id, type, currency, balance)
@@ -291,27 +296,35 @@ func (r *DBRepository) MarkDepositCredited(ctx context.Context, tx Tx, depositID
 }
 
 func (r *DBRepository) MarkDepositFailed(ctx context.Context, tx Tx, depositID int64, reason string) error {
-	_, err := asSQLTx(tx).ExecContext(ctx,
+	res, err := asSQLTx(tx).ExecContext(ctx,
 		`UPDATE deposits
 		 SET status = $1, failed_reason = $2, updated_at = NOW()
-		 WHERE id = $3`,
+		 WHERE id = $3 AND status NOT IN ('CREDITED', 'MANUAL_REVIEW')`,
 		DepositStatusFailed, reason, depositID,
 	)
 	if err != nil {
 		return fmt.Errorf("mark deposit failed: %w", err)
 	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrDepositTerminalState
+	}
 	return nil
 }
 
 func (r *DBRepository) MarkDepositManualReview(ctx context.Context, tx Tx, depositID int64, reason string) error {
-	_, err := asSQLTx(tx).ExecContext(ctx,
+	res, err := asSQLTx(tx).ExecContext(ctx,
 		`UPDATE deposits
 		 SET status = $1, failed_reason = $2, updated_at = NOW()
-		 WHERE id = $3`,
+		 WHERE id = $3 AND status NOT IN ('CREDITED', 'FAILED')`,
 		DepositStatusManualReview, reason, depositID,
 	)
 	if err != nil {
 		return fmt.Errorf("mark deposit manual review: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrDepositTerminalState
 	}
 	return nil
 }
@@ -345,11 +358,11 @@ func (r *DBRepository) MarkEventError(ctx context.Context, tx Tx, eventID int64,
 	return nil
 }
 
-func (r *DBRepository) LookupAddressOwner(ctx context.Context, address string) (int, bool, error) {
+func (r *DBRepository) LookupAddressOwner(ctx context.Context, address, networkFamily string) (int, bool, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT COALESCE(assigned_user_id, 0)
-		 FROM address_pool WHERE address = $1 LIMIT 1`,
-		address,
+		 FROM address_pool WHERE address = $1 AND network_family = $2 LIMIT 1`,
+		address, networkFamily,
 	)
 	var uid int
 	if err := row.Scan(&uid); err != nil {
@@ -381,13 +394,17 @@ func (r *DBRepository) UpdateAMLFields(ctx context.Context, tx Tx, depositID int
 }
 
 func (r *DBRepository) MoveToKYTPending(ctx context.Context, tx Tx, depositID int64) error {
-	_, err := asSQLTx(tx).ExecContext(ctx,
+	res, err := asSQLTx(tx).ExecContext(ctx,
 		`UPDATE deposits SET status = $1, updated_at = NOW()
 		 WHERE id = $2 AND status = 'PENDING'`,
 		DepositStatusKYTPending, depositID,
 	)
 	if err != nil {
 		return fmt.Errorf("move to KYT_PENDING: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrDepositNotPending
 	}
 	return nil
 }

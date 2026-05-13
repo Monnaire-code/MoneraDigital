@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -65,6 +66,9 @@ func (s *Service) SetSerialFunc(fn SerialNoFunc) {
 
 // SetKYTDeps injects KYT dependencies (called by container after NewService, before Worker.Run).
 func (s *Service) SetKYTDeps(client KYTClient, enabled bool, orphanMaxRetry int, timeout time.Duration) {
+	if !enabled && os.Getenv("APP_ENV") == "production" {
+		panic("CRITICAL: KYT cannot be disabled in production (D-45 double-check)")
+	}
 	s.safeheronClient = client
 	s.kytEnabled = enabled
 	if orphanMaxRetry <= 0 {
@@ -167,14 +171,16 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		return true, nil
 	}
 
-	// Route: lookup address owner
+	// Route: resolve coin chain first (needed for networkFamily in address lookup)
 	var alerts []alertPayload
-	userID, found, err := s.repo.LookupAddressOwner(ctx, d.DestinationAddress)
-	if err != nil {
-		return true, fmt.Errorf("lookup address owner: %w", err)
+	var coinChain *walletconfig.CoinChain
+	if s.registry != nil {
+		if cc, ok := s.registry.GetCoinChainBySafeheronKey(d.CoinKey); ok {
+			coinChain = cc
+		}
 	}
-	if !found {
-		procErr, cErr := s.flagAndFinalize(ctx, tx1, evt, &d, 0, "", "", 0, ReasonAddressUnassigned, &alerts)
+	if coinChain == nil {
+		procErr, cErr := s.flagAndFinalize(ctx, tx1, evt, &d, 0, "", "", 0, ReasonCoinUnsupported, &alerts)
 		committed1 = cErr == nil
 		if cErr != nil {
 			return true, cErr
@@ -183,14 +189,16 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		return true, procErr
 	}
 
-	var coinChain *walletconfig.CoinChain
-	if s.registry != nil {
-		if cc, ok := s.registry.GetCoinChainBySafeheronKey(d.CoinKey); ok {
-			coinChain = cc
-		}
+	var networkFamily string
+	if coinChain.Chain != nil {
+		networkFamily = coinChain.Chain.NetworkFamily
 	}
-	if coinChain == nil {
-		procErr, cErr := s.flagAndFinalize(ctx, tx1, evt, &d, userID, "", "", 0, ReasonCoinUnsupported, &alerts)
+	userID, found, err := s.repo.LookupAddressOwner(ctx, d.DestinationAddress, networkFamily)
+	if err != nil {
+		return true, fmt.Errorf("lookup address owner: %w", err)
+	}
+	if !found {
+		procErr, cErr := s.flagAndFinalize(ctx, tx1, evt, &d, 0, coinChain.ChainCode, "", coinChain.ID, ReasonAddressUnassigned, &alerts)
 		committed1 = cErr == nil
 		if cErr != nil {
 			return true, cErr
@@ -271,7 +279,9 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 			dep.Status != DepositStatusFailed &&
 			dep.Status != DepositStatusManualReview {
 			if err := s.repo.MarkDepositFailed(ctx, tx1, dep.ID, d.TransactionSubStatus); err != nil {
-				return true, fmt.Errorf("mark failed: %w", err)
+				if err := warnIfTerminalState(err, dep.ID, "FAILED"); err != nil {
+					return true, fmt.Errorf("mark failed: %w", err)
+				}
 			}
 			alerts = append(alerts, alertPayload{
 				level: "WARN",
@@ -315,6 +325,17 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 
 	// KYT_ENABLED=true: move to KYT_PENDING, commit T-α
 	if err := s.repo.MoveToKYTPending(ctx, tx1, dep.ID); err != nil {
+		if errors.Is(err, ErrDepositNotPending) {
+			log.Printf("[WARN] deposit %d no longer PENDING, skipping KYT (concurrent worker advanced it)", dep.ID)
+			if err := s.repo.MarkEventDone(ctx, tx1, evt.ID); err != nil {
+				return true, fmt.Errorf("mark event done after ErrDepositNotPending: %w", err)
+			}
+			if err := tx1.Commit(); err != nil {
+				return true, fmt.Errorf("commit after ErrDepositNotPending: %w", err)
+			}
+			committed1 = true
+			return true, nil
+		}
 		return true, fmt.Errorf("move to KYT_PENDING: %w", err)
 	}
 	if err := tx1.Commit(); err != nil {
@@ -373,7 +394,9 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		// Stay in KYT_PENDING — only AML fields updated
 	case KytActionManualReview:
 		if err := s.repo.MarkDepositManualReview(ctx, tx2, dep.ID, decision.Reason); err != nil {
-			return true, fmt.Errorf("mark manual review T-γ: %w", err)
+			if err := warnIfTerminalState(err, dep.ID, "MANUAL_REVIEW"); err != nil {
+				return true, fmt.Errorf("mark manual review T-γ: %w", err)
+			}
 		}
 		alerts = append(alerts, alertPayload{
 			level: decision.AlertLevel,
@@ -428,7 +451,9 @@ func (s *Service) handleKYTApiFailure(ctx context.Context, evt *Event, dep *Depo
 	}()
 
 	if err := s.repo.MarkDepositManualReview(ctx, tx3, dep.ID, ReasonKytApiFailed); err != nil {
-		return true, fmt.Errorf("mark manual review KYT failure: %w", err)
+		if err := warnIfTerminalState(err, dep.ID, "MANUAL_REVIEW"); err != nil {
+			return true, fmt.Errorf("mark manual review KYT failure: %w", err)
+		}
 	}
 	if err := s.repo.MarkEventDone(ctx, tx3, evt.ID); err != nil {
 		return true, fmt.Errorf("mark event done KYT failure: %w", err)
@@ -565,7 +590,9 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 		// Still pending — only AML fields updated
 	case KytActionManualReview:
 		if err := s.repo.MarkDepositManualReview(ctx, tx, dep.ID, decision.Reason); err != nil {
-			return true, fmt.Errorf("mark manual review KYT alert: %w", err)
+			if err := warnIfTerminalState(err, dep.ID, "MANUAL_REVIEW"); err != nil {
+				return true, fmt.Errorf("mark manual review KYT alert: %w", err)
+			}
 		}
 		alerts = append(alerts, alertPayload{
 			level: decision.AlertLevel,
@@ -660,7 +687,9 @@ func (s *Service) flagManualReview(
 		return fmt.Errorf("upsert manual_review deposit: %w", err)
 	}
 	if err := s.repo.MarkDepositManualReview(ctx, tx, dep.ID, reason); err != nil {
-		return fmt.Errorf("mark manual_review: %w", err)
+		if err := warnIfTerminalState(err, dep.ID, "MANUAL_REVIEW"); err != nil {
+			return fmt.Errorf("mark manual_review: %w", err)
+		}
 	}
 	*alerts = append(*alerts, alertPayload{
 		level: "ERROR",
@@ -819,7 +848,9 @@ func (s *Service) scanOneKYTTimeout(ctx context.Context) error {
 		// Shouldn't happen with isAfterTimeout=true, but harmless
 	case KytActionManualReview:
 		if err := s.repo.MarkDepositManualReview(ctx, tx2, freshDep.ID, decision.Reason); err != nil {
-			return fmt.Errorf("mark manual review timeout: %w", err)
+			if err := warnIfTerminalState(err, freshDep.ID, "MANUAL_REVIEW"); err != nil {
+				return fmt.Errorf("mark manual review timeout: %w", err)
+			}
 		}
 		alerts = append(alerts, alertPayload{
 			level: decision.AlertLevel,
@@ -867,7 +898,9 @@ func (s *Service) markKYTPendingManualReviewIfStillPending(ctx context.Context, 
 		return nil
 	}
 	if err := s.repo.MarkDepositManualReview(ctx, tx, depID, reason); err != nil {
-		return fmt.Errorf("mark manual review guarded: %w", err)
+		if err := warnIfTerminalState(err, depID, "MANUAL_REVIEW"); err != nil {
+			return fmt.Errorf("mark manual review guarded: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit MR guard: %w", err)
@@ -889,6 +922,17 @@ func convertAlertReports(list []AMLKYTAlertReport) []safeheron.AmlReport {
 		}
 	}
 	return out
+}
+
+// warnIfTerminalState absorbs ErrDepositTerminalState (CREDITED/FAILED cannot
+// be overwritten — log and move on). Any other error is returned as-is for the
+// caller to propagate. D-41.
+func warnIfTerminalState(err error, depID int64, target string) error {
+	if errors.Is(err, ErrDepositTerminalState) {
+		log.Printf("[WARN] attempted to overwrite terminal deposit status (id=%d, target=%s)", depID, target)
+		return nil
+	}
+	return err
 }
 
 func isFailedStatus(s string) bool {

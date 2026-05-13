@@ -96,10 +96,10 @@ func TestLookupAddressOwner_Found(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
 	mock.ExpectQuery("SELECT .+ FROM address_pool").
-		WithArgs("0xabc").
+		WithArgs("0xabc", "EVM").
 		WillReturnRows(sqlmock.NewRows([]string{"u"}).AddRow(42))
 	r := NewRepository(db)
-	uid, found, err := r.LookupAddressOwner(context.Background(), "0xabc")
+	uid, found, err := r.LookupAddressOwner(context.Background(), "0xabc", "EVM")
 	if err != nil || !found || uid != 42 {
 		t.Fatalf("expected uid=42 found=true, got %v %v %v", uid, found, err)
 	}
@@ -109,10 +109,10 @@ func TestLookupAddressOwner_Unassigned(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
 	mock.ExpectQuery("SELECT .+ FROM address_pool").
-		WithArgs("0xstranger").
+		WithArgs("0xstranger", "EVM").
 		WillReturnRows(sqlmock.NewRows([]string{"u"}).AddRow(0))
 	r := NewRepository(db)
-	uid, found, _ := r.LookupAddressOwner(context.Background(), "0xstranger")
+	uid, found, _ := r.LookupAddressOwner(context.Background(), "0xstranger", "EVM")
 	if found || uid != 0 {
 		t.Errorf("expected unassigned, got uid=%d found=%v", uid, found)
 	}
@@ -122,10 +122,10 @@ func TestLookupAddressOwner_NotFound(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
 	mock.ExpectQuery("SELECT .+ FROM address_pool").
-		WithArgs("0xunknown").
+		WithArgs("0xunknown", "EVM").
 		WillReturnRows(sqlmock.NewRows([]string{"u"}))
 	r := NewRepository(db)
-	uid, found, err := r.LookupAddressOwner(context.Background(), "0xunknown")
+	uid, found, err := r.LookupAddressOwner(context.Background(), "0xunknown", "EVM")
 	if err != nil || found || uid != 0 {
 		t.Errorf("expected (0, false, nil), got (%d, %v, %v)", uid, found, err)
 	}

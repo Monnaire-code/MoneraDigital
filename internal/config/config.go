@@ -1,9 +1,11 @@
 package config
 
 import (
+	"os"
 	"sync"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 )
 
@@ -25,8 +27,12 @@ var (
 )
 
 func Load() *Config {
-	viper.SetConfigFile(".env")
-	viper.ReadInConfig() // Ignore error if .env doesn't exist
+	// D-51: 非 production 环境，用 godotenv.Overload 把 .env 写入 os.Environ
+	// 以覆盖 shell 残留的同名变量。viper.AutomaticEnv 随后从 os.Environ 读取，
+	// 无需再 viper.ReadInConfig 二次加载。
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
+	}
 
 	// Use PORT from environment, default to 80 for Cloud Run compatibility
 	viper.SetDefault("PORT", "80")

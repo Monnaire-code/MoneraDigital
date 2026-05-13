@@ -61,6 +61,7 @@ func TestWebhook_AckBodyVerbatim(t *testing.T) {
 		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
 			return true, nil
 		}},
+		nil,
 	)
 
 	w := runWebhook(h, `{"any":"envelope"}`)
@@ -91,6 +92,7 @@ func TestWebhook_RawPayloadPreservesOriginalBody(t *testing.T) {
 			capturedRaw = evt.RawPayload
 			return true, nil
 		}},
+		nil,
 	)
 
 	w := runWebhook(h, originalBody)
@@ -114,6 +116,7 @@ func TestWebhook_DuplicateStillAcks(t *testing.T) {
 		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
 			return false, nil // duplicate
 		}},
+		nil,
 	)
 	w := runWebhook(h, `{}`)
 	if w.Code != http.StatusOK || w.Body.String() != SafeheronAckBody {
@@ -130,6 +133,7 @@ func TestWebhook_VerifyFailReturns401(t *testing.T) {
 			t.Fatal("recorder should not be called on verify fail")
 			return false, nil
 		}},
+		nil,
 	)
 	w := runWebhook(h, `{"sig":"bad"}`)
 	if w.Code != http.StatusUnauthorized {
@@ -148,6 +152,7 @@ func TestWebhook_MissingTxKeyReturns400(t *testing.T) {
 		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
 			return true, nil
 		}},
+		nil,
 	)
 	w := runWebhook(h, `{}`)
 	if w.Code != http.StatusBadRequest {
@@ -162,6 +167,7 @@ func TestWebhook_EmptyBodyReturns400(t *testing.T) {
 			return nil, nil
 		}},
 		&fakeRecorder{insertFn: nil},
+		nil,
 	)
 	w := runWebhook(h, "")
 	if w.Code != http.StatusBadRequest {
@@ -179,6 +185,7 @@ func TestWebhook_RecorderErrorReturns500(t *testing.T) {
 		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
 			return false, errors.New("db down")
 		}},
+		nil,
 	)
 	w := runWebhook(h, `{}`)
 	if w.Code != http.StatusInternalServerError {
@@ -211,6 +218,7 @@ func TestWebhook_BodyTooLargeReturns413(t *testing.T) {
 			return nil, errors.New("must not be called for oversize body")
 		}},
 		&fakeRecorder{insertFn: nil},
+		nil,
 	)
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -244,6 +252,7 @@ func TestWebhook_BodyExactlyAtLimitAccepted(t *testing.T) {
 			return nil, errors.New("body received OK, verify fails as expected")
 		}},
 		&fakeRecorder{insertFn: nil},
+		nil,
 	)
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -272,6 +281,7 @@ func TestWebhook_BenchAckTime(t *testing.T) {
 		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
 			return true, nil
 		}},
+		nil,
 	)
 
 	const samples = 100
@@ -319,6 +329,7 @@ func TestWebhook_AMLAlertEventIDIsContentHash(t *testing.T) {
 			capturedEventIDs = append(capturedEventIDs, evt.EventID)
 			return true, nil
 		}},
+		nil,
 	)
 
 	bodyA := `{"timestamp":"1","sig":"sigA","bizContent":"ciphertextA"}`
@@ -348,5 +359,68 @@ func TestWebhook_AMLAlertEventIDIsContentHash(t *testing.T) {
 	if capturedEventIDs[2] == capturedEventIDs[0] {
 		t.Errorf("different bodies must produce different eventIDs: bodyA=%q bodyB=%q",
 			capturedEventIDs[0], capturedEventIDs[2])
+	}
+}
+
+// === T11.2 D-42: Webhook IP whitelist ===
+
+func runWebhookWithIP(h *SafeheronWebhookHandler, body, clientIP string) *httptest.ResponseRecorder {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = newWebhookReq(body)
+	c.Request.RemoteAddr = clientIP + ":12345"
+	h.Receive(c)
+	return w
+}
+
+func TestWebhookIPWhitelist_BlockedIP(t *testing.T) {
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			t.Fatal("verifier must not be called for blocked IP")
+			return nil, nil
+		}},
+		&fakeRecorder{insertFn: nil},
+		[]string{"1.2.3.4", "5.6.7.8"},
+	)
+	w := runWebhookWithIP(h, `{"any":"body"}`, "9.9.9.9")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for blocked IP, got %d", w.Code)
+	}
+}
+
+func TestWebhookIPWhitelist_AllowedIP(t *testing.T) {
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return &safeheron.WebhookEvent{
+				EventDetail: safeheron.EventDetail{TxKey: "tx-ip", TransactionStatus: "COMPLETED"},
+			}, nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
+			return true, nil
+		}},
+		[]string{"1.2.3.4", "5.6.7.8"},
+	)
+	w := runWebhookWithIP(h, `{"any":"body"}`, "1.2.3.4")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for allowed IP, got %d", w.Code)
+	}
+}
+
+func TestWebhookIPWhitelist_EmptyListAllowsAll(t *testing.T) {
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return &safeheron.WebhookEvent{
+				EventDetail: safeheron.EventDetail{TxKey: "tx-noip", TransactionStatus: "COMPLETED"},
+			}, nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
+			return true, nil
+		}},
+		nil,
+	)
+	w := runWebhookWithIP(h, `{"any":"body"}`, "99.99.99.99")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 when no IP whitelist, got %d", w.Code)
 	}
 }

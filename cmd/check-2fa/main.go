@@ -6,15 +6,15 @@ import (
 	"log"
 	"os"
 
+	"monera-digital/internal/services"
+
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-	"monera-digital/internal/services"
 )
 
 func main() {
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
 	}
 
 	// Get database URL

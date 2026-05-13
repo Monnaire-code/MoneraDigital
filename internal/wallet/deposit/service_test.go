@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"monera-digital/internal/safeheron"
 	walletconfig "monera-digital/internal/wallet/config"
 )
 
@@ -27,6 +28,8 @@ type mockRepo struct {
 	failedUpdates map[int64]string
 	manualUpdates map[int64]string
 	creditedIDs   map[int64]bool
+
+	lastLookupNetworkFamily string // captures networkFamily arg from LookupAddressOwner
 
 	accountID     int64
 	accountErr    error
@@ -201,6 +204,11 @@ func (m *mockRepo) MarkDepositCredited(_ context.Context, _ Tx, id int64) error 
 func (m *mockRepo) MarkDepositFailed(_ context.Context, _ Tx, id int64, reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, d := range m.deposits {
+		if d.ID == id && (d.Status == DepositStatusCredited || d.Status == DepositStatusManualReview) {
+			return ErrDepositTerminalState
+		}
+	}
 	m.failedUpdates[id] = reason
 	for _, d := range m.deposits {
 		if d.ID == id {
@@ -215,6 +223,11 @@ func (m *mockRepo) MarkDepositManualReview(_ context.Context, _ Tx, id int64, re
 	defer m.mu.Unlock()
 	if m.markMRErr != nil {
 		return m.markMRErr
+	}
+	for _, d := range m.deposits {
+		if d.ID == id && (d.Status == DepositStatusCredited || d.Status == DepositStatusFailed) {
+			return ErrDepositTerminalState
+		}
 	}
 	m.manualUpdates[id] = reason
 	for _, d := range m.deposits {
@@ -259,10 +272,14 @@ func (m *mockRepo) MoveToKYTPending(_ context.Context, _ Tx, id int64) error {
 	defer m.mu.Unlock()
 	for _, d := range m.deposits {
 		if d.ID == id {
+			if d.Status != DepositStatusPending {
+				return ErrDepositNotPending
+			}
 			d.Status = DepositStatusKYTPending
+			return nil
 		}
 	}
-	return nil
+	return ErrDepositNotPending
 }
 
 func (m *mockRepo) LockOneKYTPendingTimeout(_ context.Context, _ Tx, _ time.Duration) (*DepositRow, error) {
@@ -290,7 +307,10 @@ func (m *mockRepo) IncrementEventAttemptsNoTx(_ context.Context, id int64) error
 	return nil
 }
 
-func (m *mockRepo) LookupAddressOwner(_ context.Context, addr string) (int, bool, error) {
+func (m *mockRepo) LookupAddressOwner(_ context.Context, addr, networkFamily string) (int, bool, error) {
+	m.mu.Lock()
+	m.lastLookupNetworkFamily = networkFamily
+	m.mu.Unlock()
 	if m.ownerErr != nil {
 		return 0, false, m.ownerErr
 	}
@@ -299,11 +319,19 @@ func (m *mockRepo) LookupAddressOwner(_ context.Context, addr string) (int, bool
 }
 
 func newTestRegistry(symbol, chainCode, safeheronKey, minAmount string, coinID int) *stubRegistry {
+	return newTestRegistryWithNetwork(symbol, chainCode, "EVM", safeheronKey, minAmount, coinID)
+}
+
+func newTestRegistryWithNetwork(symbol, chainCode, networkFamily, safeheronKey, minAmount string, coinID int) *stubRegistry {
 	return &stubRegistry{
 		byKey: map[string]*walletconfig.CoinChain{
 			safeheronKey: {
-				ID:               coinID,
-				ChainCode:        chainCode,
+				ID:        coinID,
+				ChainCode: chainCode,
+				Chain: &walletconfig.Chain{
+					Code:          chainCode,
+					NetworkFamily: networkFamily,
+				},
 				Coin:             &walletconfig.Coin{ID: coinID, Symbol: symbol},
 				SafeheronCoinKey: safeheronKey,
 				MinDepositAmount: minAmount,
@@ -417,6 +445,60 @@ func TestProcessOne_CompletedConfirmedCredits(t *testing.T) {
 	}
 	if len(*alerts) != 0 {
 		t.Fatalf("happy path should not alert, got %+v", *alerts)
+	}
+}
+
+func TestProcessOne_PassesNetworkFamilyToLookupAddressOwner(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	reg := newTestRegistryWithNetwork("ETH", "ETHEREUM", "EVM", "ETH(SEPOLIA)_ETHEREUM_SEPOLIA", "0.0001", 11)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-nf",
+			CoinKey:              "ETH(SEPOLIA)_ETHEREUM_SEPOLIA",
+			TxAmount:             "0.5",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repo.lastLookupNetworkFamily != "EVM" {
+		t.Errorf("expected networkFamily=EVM passed to LookupAddressOwner, got %q", repo.lastLookupNetworkFamily)
+	}
+}
+
+func TestProcessOne_TRONNetworkFamily(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["TAddr1"] = 42
+	reg := newTestRegistryWithNetwork("TRX", "TRON", "TRON", "TRX(SHASTA)_TRON_TESTNET", "0.1", 20)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-tron",
+			CoinKey:              "TRX(SHASTA)_TRON_TESTNET",
+			TxAmount:             "10",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "TAddr1",
+		},
+	})
+
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repo.lastLookupNetworkFamily != "TRON" {
+		t.Errorf("expected networkFamily=TRON for TRON chain, got %q", repo.lastLookupNetworkFamily)
 	}
 }
 
@@ -1044,4 +1126,219 @@ func TestStatusRank(t *testing.T) {
 			t.Errorf("StatusRank(%q) = %d, want %d", c.in, got, c.out)
 		}
 	}
+}
+
+// === T11.1 D-41: Status overwrite protection ===
+
+func TestMarkDepositFailed_CreditedDeposit_ReturnsError(t *testing.T) {
+	repo := newMockRepo()
+	repo.deposits["tx-credited"] = &DepositRow{ID: 1, SafeheronTxKey: "tx-credited", Status: DepositStatusCredited}
+
+	err := repo.MarkDepositFailed(context.Background(), &fakeTx{mu: &repo.mu}, 1, "TIMEOUT")
+	if !errors.Is(err, ErrDepositTerminalState) {
+		t.Fatalf("expected ErrDepositTerminalState, got %v", err)
+	}
+	if repo.deposits["tx-credited"].Status != DepositStatusCredited {
+		t.Fatalf("expected status to remain CREDITED, got %s", repo.deposits["tx-credited"].Status)
+	}
+}
+
+func TestMarkDepositFailed_ManualReviewDeposit_ReturnsError(t *testing.T) {
+	repo := newMockRepo()
+	repo.deposits["tx-mr"] = &DepositRow{ID: 1, SafeheronTxKey: "tx-mr", Status: DepositStatusManualReview}
+
+	err := repo.MarkDepositFailed(context.Background(), &fakeTx{mu: &repo.mu}, 1, "CANCELLED")
+	if !errors.Is(err, ErrDepositTerminalState) {
+		t.Fatalf("expected ErrDepositTerminalState, got %v", err)
+	}
+	if repo.deposits["tx-mr"].Status != DepositStatusManualReview {
+		t.Fatalf("expected status to remain MANUAL_REVIEW, got %s", repo.deposits["tx-mr"].Status)
+	}
+}
+
+func TestMarkDepositManualReview_CreditedDeposit_ReturnsError(t *testing.T) {
+	repo := newMockRepo()
+	repo.deposits["tx-credited"] = &DepositRow{ID: 1, SafeheronTxKey: "tx-credited", Status: DepositStatusCredited}
+
+	err := repo.MarkDepositManualReview(context.Background(), &fakeTx{mu: &repo.mu}, 1, "KYT_RISK")
+	if !errors.Is(err, ErrDepositTerminalState) {
+		t.Fatalf("expected ErrDepositTerminalState, got %v", err)
+	}
+	if repo.deposits["tx-credited"].Status != DepositStatusCredited {
+		t.Fatalf("expected status to remain CREDITED, got %s", repo.deposits["tx-credited"].Status)
+	}
+}
+
+func TestMarkDepositManualReview_FailedDeposit_ReturnsError(t *testing.T) {
+	repo := newMockRepo()
+	repo.deposits["tx-failed"] = &DepositRow{ID: 1, SafeheronTxKey: "tx-failed", Status: DepositStatusFailed}
+
+	err := repo.MarkDepositManualReview(context.Background(), &fakeTx{mu: &repo.mu}, 1, "KYT_RISK")
+	if !errors.Is(err, ErrDepositTerminalState) {
+		t.Fatalf("expected ErrDepositTerminalState, got %v", err)
+	}
+	if repo.deposits["tx-failed"].Status != DepositStatusFailed {
+		t.Fatalf("expected status to remain FAILED, got %s", repo.deposits["tx-failed"].Status)
+	}
+}
+
+func TestMarkDepositFailed_PendingDeposit_Succeeds(t *testing.T) {
+	repo := newMockRepo()
+	repo.deposits["tx-pending"] = &DepositRow{ID: 1, SafeheronTxKey: "tx-pending", Status: DepositStatusPending}
+
+	err := repo.MarkDepositFailed(context.Background(), &fakeTx{mu: &repo.mu}, 1, "TIMEOUT")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.deposits["tx-pending"].Status != DepositStatusFailed {
+		t.Fatalf("expected status FAILED, got %s", repo.deposits["tx-pending"].Status)
+	}
+}
+
+// === T11.5 D-45: KYT environment double-check ===
+
+func TestSetKYTDeps_ProductionDisabled_Panics(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic when KYT disabled in production")
+		}
+	}()
+	svc := NewService(newMockRepo(), newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 1), nil)
+	svc.SetKYTDeps(nil, false, 0, 0)
+}
+
+func TestSetKYTDeps_NonProductionDisabled_NoPanic(t *testing.T) {
+	t.Setenv("APP_ENV", "local")
+	svc := NewService(newMockRepo(), newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 1), nil)
+	svc.SetKYTDeps(nil, false, 0, 0) // should not panic
+}
+
+// === T11.7 D-47: MoveToKYTPending ErrDepositNotPending skips KYT ===
+
+func TestProcessOne_MoveToKYTPending_AlreadyAdvanced_SkipsKYT(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
+
+	kytCalled := false
+	mockClient := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
+		kytCalled = true
+		return nil, errors.New("should not be called")
+	}}
+
+	// Wrap repo to force MoveToKYTPending → ErrDepositNotPending
+	wrappedRepo := &alwaysNotPendingRepo{mockRepo: repo}
+	svc := NewService(wrappedRepo, reg, nil)
+	svc.SetKYTDeps(mockClient, true, 3, time.Minute)
+	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-already-advanced",
+			CoinKey:              "K",
+			TxAmount:             "1.0",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+
+	_, err := svc.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if kytCalled {
+		t.Error("KYT API should NOT be called when deposit already advanced past PENDING")
+	}
+}
+
+type alwaysNotPendingRepo struct {
+	*mockRepo
+}
+
+func (r *alwaysNotPendingRepo) MoveToKYTPending(_ context.Context, _ Tx, _ int64) error {
+	return ErrDepositNotPending
+}
+
+// === T11.1 D-41: service-level ErrDepositTerminalState handling ===
+
+func TestProcessOne_ManualReview_CreditedDeposit_NoError(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
+
+	mockClient := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
+		return &safeheron.KytReportResponse{
+			TxKey:                      "tx-credited-then-mr",
+			AmlScreeningTriggeredState: "TRIGGERED",
+			AmlList: []safeheron.AmlReport{{
+				Provider:  "MistTrack",
+				Status:    "COMPLETED",
+				RiskLevel: "HIGH",
+			}},
+		}, nil
+	}}
+
+	svc := NewService(repo, reg, nil)
+	svc.SetKYTDeps(mockClient, true, 3, time.Minute)
+	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-credited-then-mr",
+			CoinKey:              "K",
+			TxAmount:             "1.0",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+
+	// Simulate race: after UpsertDeposit creates the deposit as PENDING and
+	// MoveToKYTPending moves it to KYT_PENDING, then creditDepositFromRow
+	// credits it before T-γ's MarkDepositManualReview runs.
+	// We achieve this by wrapping MarkDepositManualReview to pre-credit.
+	wrappedRepo := &creditBeforeMRRepo{mockRepo: repo}
+	svc2 := NewService(wrappedRepo, reg, nil)
+	svc2.SetKYTDeps(mockClient, true, 3, time.Minute)
+	svc2.SetSerialFunc(func() string { return "TEST-SERIAL" })
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-credited-then-mr-2",
+			CoinKey:              "K",
+			TxAmount:             "1.0",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+
+	_, err := svc2.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error when MarkDepositManualReview hits CREDITED deposit, got: %v", err)
+	}
+}
+
+type creditBeforeMRRepo struct {
+	*mockRepo
+}
+
+func (r *creditBeforeMRRepo) MarkDepositManualReview(_ context.Context, _ Tx, id int64, reason string) error {
+	r.mockRepo.mu.Lock()
+	for _, d := range r.mockRepo.deposits {
+		if d.ID == id {
+			d.Status = DepositStatusCredited
+		}
+	}
+	r.mockRepo.mu.Unlock()
+	return r.mockRepo.MarkDepositManualReview(context.Background(), &fakeTx{mu: &r.mockRepo.mu}, id, reason)
 }

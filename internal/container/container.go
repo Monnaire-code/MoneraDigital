@@ -162,7 +162,8 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 		c.DepositEventRepo = depRepo
 		c.DepositPipeline = deposit.NewService(depRepo, registry, c.AlertService.Send)
 		c.DepositPipeline.SetKYTDeps(client, kytEnabled, kytOrphanMaxRetry, kytTimeout)
-		c.SafeheronWebhookHandler = handlers.NewSafeheronWebhookHandler(client, depRepo)
+		webhookAllowedIPs := splitNonEmpty(viper.GetString("SAFEHERON_WEBHOOK_ALLOWED_IPS"))
+		c.SafeheronWebhookHandler = handlers.NewSafeheronWebhookHandler(client, depRepo, webhookAllowedIPs)
 
 		workerInterval := viper.GetDuration("DEPOSIT_WORKER_INTERVAL")
 		if workerInterval <= 0 {

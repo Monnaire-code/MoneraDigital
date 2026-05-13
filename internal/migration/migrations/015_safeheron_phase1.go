@@ -33,6 +33,7 @@ func (m *SafeheronPhase1) Up(db *sql.DB) error {
 		{"CreateSafeheronWebhookEventsTable", (&CreateSafeheronWebhookEventsTable{}).Up},
 		{"ExtendDepositsForSafeheron", (&ExtendDepositsForSafeheron{}).Up},
 		{"SeedSafeheronPhase1", (&SeedSafeheronPhase1Data{}).Up},
+		{"AddAccountBalanceConstraints", (&AddAccountBalanceConstraints{}).Up},
 	}
 	for _, s := range steps {
 		if err := s.fn(db); err != nil {
@@ -51,6 +52,7 @@ func (m *SafeheronPhase1) Down(db *sql.DB) error {
 		name string
 		fn   func(*sql.DB) error
 	}{
+		{"AddAccountBalanceConstraints", (&AddAccountBalanceConstraints{}).Down},
 		{"SeedSafeheronPhase1", (&SeedSafeheronPhase1Data{}).Down},
 		{"ExtendDepositsForSafeheron", (&ExtendDepositsForSafeheron{}).Down},
 		{"CreateSafeheronWebhookEventsTable", (&CreateSafeheronWebhookEventsTable{}).Down},
@@ -644,4 +646,37 @@ func (m *SeedSafeheronPhase1Data) Down(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Step 8: account balance non-negative constraints (D-44)
+// ---------------------------------------------------------------------------
+
+type AddAccountBalanceConstraints struct{}
+
+func (m *AddAccountBalanceConstraints) Up(db *sql.DB) error {
+	query := `
+	DO $$ BEGIN
+		IF NOT EXISTS (
+			SELECT 1 FROM pg_constraint WHERE conname = 'ck_balance_non_negative'
+		) THEN
+			ALTER TABLE account ADD CONSTRAINT ck_balance_non_negative CHECK (balance >= 0);
+		END IF;
+		IF NOT EXISTS (
+			SELECT 1 FROM pg_constraint WHERE conname = 'ck_frozen_non_negative'
+		) THEN
+			ALTER TABLE account ADD CONSTRAINT ck_frozen_non_negative CHECK (frozen_balance >= 0);
+		END IF;
+	END $$;`
+	if _, err := db.Exec(query); err != nil {
+		return fmt.Errorf("failed to add account balance constraints: %w", err)
+	}
+	return nil
+}
+
+func (m *AddAccountBalanceConstraints) Down(db *sql.DB) error {
+	_, err := db.Exec(`
+		ALTER TABLE account DROP CONSTRAINT IF EXISTS ck_balance_non_negative;
+		ALTER TABLE account DROP CONSTRAINT IF EXISTS ck_frozen_non_negative;`)
+	return err
 }

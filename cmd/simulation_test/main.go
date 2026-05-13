@@ -13,6 +13,8 @@ import (
 	"monera-digital/internal/db"
 	"monera-digital/internal/repository"
 	"monera-digital/internal/repository/postgres"
+
+	"github.com/joho/godotenv"
 )
 
 type TestScenario struct {
@@ -53,6 +55,10 @@ type StepResult struct {
 }
 
 func main() {
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
+	}
+
 	report := &TestReport{
 		StartTime: time.Now(),
 		Scenarios: []ScenarioResult{},

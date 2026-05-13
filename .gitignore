@@ -60,3 +60,4 @@ coverage.out
 # Test artifacts & Playwright reports
 /artifacts/
 /playwright-report/
+monera-digital
