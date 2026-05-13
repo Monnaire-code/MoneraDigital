@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	walletconfig "monera-digital/internal/wallet/config"
 )
@@ -42,12 +43,11 @@ type mockRepo struct {
 	}
 	markErrorErr error // forces MarkEventError to fail (T7-I-5)
 
-	commitCalls   int
-	rollbackCalls int
-	beginTxCalls  int // tracks how many tx were begun (T7-I-5 hot-loop check)
-
-	// Force ProcessOne to error before MarkEventDone runs.
-	forceErrorAfter string
+	commitCalls           int
+	rollbackCalls         int
+	beginTxCalls          int     // tracks how many tx were begun (T7-I-5 hot-loop check)
+	noTxIncrements        []int64 // recorded eventIDs of IncrementEventAttemptsNoTx calls (T10 C-1/I-2)
+	rollbackBeforeNoTxInc bool    // true means each noTx increment is observed AFTER at least one rollback
 }
 
 func newMockRepo() *mockRepo {
@@ -231,6 +231,48 @@ func (m *mockRepo) MarkEventError(_ context.Context, _ Tx, id int64, msg string)
 		id  int64
 		msg string
 	}{id, msg})
+	return nil
+}
+
+// === AML/KYT mock methods ===
+
+func (m *mockRepo) UpdateAMLFields(_ context.Context, _ Tx, _ int64, _, _ string, _ time.Time, _ []byte) error {
+	return nil
+}
+
+func (m *mockRepo) MoveToKYTPending(_ context.Context, _ Tx, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, d := range m.deposits {
+		if d.ID == id {
+			d.Status = DepositStatusKYTPending
+		}
+	}
+	return nil
+}
+
+func (m *mockRepo) LockOneKYTPendingTimeout(_ context.Context, _ Tx, _ time.Duration) (*DepositRow, error) {
+	return nil, ErrNoPending
+}
+
+func (m *mockRepo) FindDepositByTxKey(_ context.Context, _ Tx, txKey string) (*DepositRow, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d, ok := m.deposits[txKey]; ok {
+		return d, true, nil
+	}
+	return nil, false, nil
+}
+
+func (m *mockRepo) IncrementEventAttemptsNoTx(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.noTxIncrements = append(m.noTxIncrements, id)
+	// Record whether at least one rollback was observed before this call.
+	// Used to assert C-1: NoTx update must come after the tx lock is released.
+	if m.rollbackCalls > 0 {
+		m.rollbackBeforeNoTxInc = true
+	}
 	return nil
 }
 
@@ -780,6 +822,183 @@ func TestProcessOne_MarkEventErrorFailWrapsSentinel(t *testing.T) {
 	}
 	if !errors.Is(err, ErrMarkErrorFailed) {
 		t.Errorf("err must wrap ErrMarkErrorFailed for worker back-off detection, got: %v", err)
+	}
+}
+
+// ------------------- creditDepositFromRow error paths -------------------
+
+func TestProcessOne_CreditAccountError_ReturnsErr(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	repo.creditErr = errors.New("credit boom")
+	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-credit-err",
+			CoinKey:              "K",
+			TxAmount:             "0.5",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error from credit failure")
+	}
+	if len(repo.creditedIDs) != 0 {
+		t.Errorf("should not mark credited on credit error")
+	}
+}
+
+func TestProcessOne_JournalError_ReturnsErr(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	repo.journalErr = errors.New("journal boom")
+	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-journal-err",
+			CoinKey:              "K",
+			TxAmount:             "0.5",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error from journal failure")
+	}
+}
+
+func TestProcessOne_AccountLockError_ReturnsErr(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	repo.accountErr = errors.New("account lock boom")
+	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-acct-err",
+			CoinKey:              "K",
+			TxAmount:             "0.5",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error from account lock failure")
+	}
+}
+
+// ------------------- flagAndFinalize when flagManualReview fails -------------------
+
+func TestProcessOne_FlagManualReviewUpsertFails_MarksEventError(t *testing.T) {
+	repo := newMockRepo()
+	// No address owner → ADDRESS_UNASSIGNED path triggers flagManualReview
+	// But we make UpsertDeposit fail inside flagManualReview
+	repo.depositErr = errors.New("upsert boom in MR")
+	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-mr-fail",
+			CoinKey:              "K",
+			TxAmount:             "1",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xstranger",
+		},
+	})
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error when flagManualReview fails")
+	}
+	// MarkEventError should have been called
+	if len(repo.errorIDs) != 1 {
+		t.Errorf("expected 1 error event (from flagAndFinalize error path), got %d", len(repo.errorIDs))
+	}
+}
+
+// ------------------- LookupAddressOwner error -------------------
+
+func TestProcessOne_LookupOwnerError_ReturnsErr(t *testing.T) {
+	repo := newMockRepo()
+	repo.ownerErr = errors.New("owner lookup boom")
+	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-owner-err",
+			CoinKey:              "K",
+			TxAmount:             "0.5",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error from LookupAddressOwner failure")
+	}
+}
+
+// ------------------- SetKYTDeps defaults -------------------
+
+func TestSetKYTDeps_DefaultValues(t *testing.T) {
+	svc := NewService(newMockRepo(), nil, nil)
+	svc.SetKYTDeps(nil, true, 0, 0)
+
+	if svc.kytOrphanMaxRetry != 100 {
+		t.Errorf("expected default orphanMaxRetry=100, got %d", svc.kytOrphanMaxRetry)
+	}
+	if svc.kytTimeout != 20*time.Minute {
+		t.Errorf("expected default timeout=20m, got %s", svc.kytTimeout)
+	}
+}
+
+func TestSetKYTDeps_CustomValues(t *testing.T) {
+	svc := NewService(newMockRepo(), nil, nil)
+	svc.SetKYTDeps(nil, true, 50, 10*time.Minute)
+
+	if svc.kytOrphanMaxRetry != 50 {
+		t.Errorf("expected orphanMaxRetry=50, got %d", svc.kytOrphanMaxRetry)
+	}
+	if svc.kytTimeout != 10*time.Minute {
+		t.Errorf("expected timeout=10m, got %s", svc.kytTimeout)
+	}
+}
+
+// ------------------- BeginTx error -------------------
+
+func TestProcessOne_BeginTxError_ReturnsErr(t *testing.T) {
+	repo := newMockRepo()
+	repo.beginTxErr = errors.New("db down")
+	svc := NewService(repo, nil, nil)
+
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error from BeginTx failure")
 	}
 }
 

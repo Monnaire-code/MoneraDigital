@@ -15,10 +15,10 @@ import (
 // --- mock SDK interfaces ---
 
 type mockAccountAPI struct {
-	createAccountFn      func(api.CreateAccountRequest, *api.CreateAccountResponse) error
-	addCoinV2Fn          func(api.AddCoinV2Request, *api.AddCoinV2Response) error
-	listAccountCoinFn    func(api.ListAccountCoinRequest, *api.AccountCoinResponse) error
-	getAccountByAddrFn   func(api.OneAccountByAddressRequest, *api.AccountResponse) error
+	createAccountFn    func(api.CreateAccountRequest, *api.CreateAccountResponse) error
+	addCoinV2Fn        func(api.AddCoinV2Request, *api.AddCoinV2Response) error
+	listAccountCoinFn  func(api.ListAccountCoinRequest, *api.AccountCoinResponse) error
+	getAccountByAddrFn func(api.OneAccountByAddressRequest, *api.AccountResponse) error
 }
 
 func (m *mockAccountAPI) CreateAccount(req api.CreateAccountRequest, resp *api.CreateAccountResponse) error {
@@ -32,6 +32,14 @@ func (m *mockAccountAPI) ListAccountCoin(req api.ListAccountCoinRequest, resp *a
 }
 func (m *mockAccountAPI) GetAccountByAddress(req api.OneAccountByAddressRequest, resp *api.AccountResponse) error {
 	return m.getAccountByAddrFn(req, resp)
+}
+
+type mockComplianceAPI struct {
+	kytReportFn func(api.KytReportRequest, *api.KytReportResponse) error
+}
+
+func (m *mockComplianceAPI) KytReport(req api.KytReportRequest, resp *api.KytReportResponse) error {
+	return m.kytReportFn(req, resp)
 }
 
 type mockWebhookConv struct {
@@ -613,5 +621,98 @@ func TestClose_Idempotent(t *testing.T) {
 	c.Close()
 	if err := c.Close(); err != nil {
 		t.Fatalf("second Close should be safe: %v", err)
+	}
+}
+
+// --- KytReport tests ---
+
+func TestKytReport_Success(t *testing.T) {
+	mock := &mockComplianceAPI{
+		kytReportFn: func(req api.KytReportRequest, resp *api.KytReportResponse) error {
+			if req.TxKey != "tx-kyt-001" {
+				t.Fatalf("unexpected txKey: %s", req.TxKey)
+			}
+			resp.TxKey = "tx-kyt-001"
+			resp.CustomerRefId = "ref-abc"
+			resp.AmlScreeningTriggeredState = "TRIGGERED"
+			resp.AmlList = []api.AmlReport{
+				{
+					Provider:       "MistTrack",
+					Timestamp:      "1715500000000",
+					Status:         "COMPLETED",
+					RiskLevel:      "LOW",
+					LastUpdateTime: "1715500001000",
+					Payload:        map[string]any{"score": 10},
+				},
+			}
+			return nil
+		},
+	}
+
+	c := &Client{compliance: mock}
+	resp, err := c.KytReport(context.Background(), "tx-kyt-001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.TxKey != "tx-kyt-001" || resp.CustomerRefID != "ref-abc" {
+		t.Fatalf("unexpected response header: %+v", resp)
+	}
+	if resp.AmlScreeningTriggeredState != "TRIGGERED" {
+		t.Fatalf("expected TRIGGERED, got %s", resp.AmlScreeningTriggeredState)
+	}
+	if len(resp.AmlList) != 1 {
+		t.Fatalf("expected 1 AmlReport, got %d", len(resp.AmlList))
+	}
+	r := resp.AmlList[0]
+	if r.Provider != "MistTrack" || r.RiskLevel != "LOW" || r.Status != "COMPLETED" {
+		t.Fatalf("unexpected AmlReport: %+v", r)
+	}
+	if len(r.Payload) == 0 || string(r.Payload) == "null" {
+		t.Fatal("expected non-empty Payload (json.RawMessage from SDK any)")
+	}
+}
+
+func TestKytReport_PayloadMarshal(t *testing.T) {
+	mock := &mockComplianceAPI{
+		kytReportFn: func(_ api.KytReportRequest, resp *api.KytReportResponse) error {
+			resp.TxKey = "tx-002"
+			resp.AmlScreeningTriggeredState = "TRIGGERED"
+			resp.AmlList = []api.AmlReport{
+				{
+					Provider:  "MistTrack",
+					Status:    "COMPLETED",
+					RiskLevel: "HIGH",
+					Payload:   map[string]any{"riskScore": 85, "tags": []string{"mixer"}},
+				},
+			}
+			return nil
+		},
+	}
+
+	c := &Client{compliance: mock}
+	resp, err := c.KytReport(context.Background(), "tx-002")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	payload := string(resp.AmlList[0].Payload)
+	if !strings.Contains(payload, "riskScore") || !strings.Contains(payload, "mixer") {
+		t.Fatalf("Payload not correctly marshaled from SDK any: %s", payload)
+	}
+}
+
+func TestKytReport_SDKError(t *testing.T) {
+	mock := &mockComplianceAPI{
+		kytReportFn: func(_ api.KytReportRequest, _ *api.KytReportResponse) error {
+			return errors.New("sdk: compliance API timeout")
+		},
+	}
+
+	c := &Client{compliance: mock}
+	_, err := c.KytReport(context.Background(), "tx-err-001")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "KytReport") || !strings.Contains(err.Error(), "tx-err-001") {
+		t.Fatalf("error should contain method name and txKey: %v", err)
 	}
 }

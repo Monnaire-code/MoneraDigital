@@ -350,6 +350,19 @@ func (m *ExtendDepositsForSafeheron) Up(db *sql.DB) error {
 		return fmt.Errorf("failed to add safeheron columns to deposits: %w", err)
 	}
 
+	// KYT 合规筛查字段（v1.5 spec §4.6 新增）
+	amlColumns := `
+	ALTER TABLE deposits
+		ADD COLUMN IF NOT EXISTS aml_screening_state VARCHAR(16),
+		ADD COLUMN IF NOT EXISTS aml_risk_level      VARCHAR(8),
+		ADD COLUMN IF NOT EXISTS aml_evaluated_at    TIMESTAMP,
+		ADD COLUMN IF NOT EXISTS aml_list            JSONB;
+	`
+	_, err = db.Exec(amlColumns)
+	if err != nil {
+		return fmt.Errorf("failed to add AML columns to deposits: %w", err)
+	}
+
 	addFKs := `
 	DO $$ BEGIN
 		IF NOT EXISTS (
@@ -401,6 +414,7 @@ func (m *ExtendDepositsForSafeheron) Up(db *sql.DB) error {
 	normalizeStatus := `
 	UPDATE deposits SET status = 'PENDING'
 	WHERE status NOT IN ('PENDING', 'CHAIN_VERIFYING', 'CHAIN_VERIFIED',
+	                      'KYT_PENDING',
 	                      'CREDITED', 'FAILED', 'MANUAL_REVIEW');
 	`
 	_, err = db.Exec(normalizeStatus)
@@ -409,15 +423,11 @@ func (m *ExtendDepositsForSafeheron) Up(db *sql.DB) error {
 	}
 
 	checkConstraint := `
-	DO $$ BEGIN
-		IF NOT EXISTS (
-			SELECT 1 FROM pg_constraint WHERE conname = 'ck_deposits_status'
-		) THEN
-			ALTER TABLE deposits ADD CONSTRAINT ck_deposits_status
-				CHECK (status IN ('PENDING', 'CHAIN_VERIFYING', 'CHAIN_VERIFIED',
-				                  'CREDITED', 'FAILED', 'MANUAL_REVIEW'));
-		END IF;
-	END $$;
+	ALTER TABLE deposits DROP CONSTRAINT IF EXISTS ck_deposits_status;
+	ALTER TABLE deposits ADD CONSTRAINT ck_deposits_status
+		CHECK (status IN ('PENDING', 'CHAIN_VERIFYING', 'CHAIN_VERIFIED',
+		                  'KYT_PENDING',
+		                  'CREDITED', 'FAILED', 'MANUAL_REVIEW'));
 	`
 	_, err = db.Exec(checkConstraint)
 	if err != nil {
@@ -433,6 +443,17 @@ func (m *ExtendDepositsForSafeheron) Up(db *sql.DB) error {
 		return fmt.Errorf("failed to create unique index on account(user_id, currency): %w", err)
 	}
 
+	// 超时扫描索引：仅 KYT_PENDING 行，节省空间
+	kytPendingIdx := `
+	CREATE INDEX IF NOT EXISTS idx_deposits_kyt_pending
+		ON deposits(updated_at)
+		WHERE status = 'KYT_PENDING';
+	`
+	_, err = db.Exec(kytPendingIdx)
+	if err != nil {
+		return fmt.Errorf("failed to create KYT_PENDING partial index: %w", err)
+	}
+
 	return nil
 }
 
@@ -441,8 +462,14 @@ func (m *ExtendDepositsForSafeheron) Down(db *sql.DB) error {
 		return fmt.Errorf("BLOCKED: rollback of migration 020 in production would destroy deposit data; use a manual migration instead")
 	}
 
+	dropKytIdx := `DROP INDEX IF EXISTS idx_deposits_kyt_pending;`
+	_, err := db.Exec(dropKytIdx)
+	if err != nil {
+		return fmt.Errorf("failed to drop KYT_PENDING index: %w", err)
+	}
+
 	dropAccountIdx := `DROP INDEX IF EXISTS idx_account_user_currency;`
-	_, err := db.Exec(dropAccountIdx)
+	_, err = db.Exec(dropAccountIdx)
 	if err != nil {
 		return fmt.Errorf("failed to drop account unique index: %w", err)
 	}
@@ -471,6 +498,10 @@ func (m *ExtendDepositsForSafeheron) Down(db *sql.DB) error {
 
 	dropColumns := `
 	ALTER TABLE deposits
+		DROP COLUMN IF EXISTS aml_list,
+		DROP COLUMN IF EXISTS aml_evaluated_at,
+		DROP COLUMN IF EXISTS aml_risk_level,
+		DROP COLUMN IF EXISTS aml_screening_state,
 		DROP COLUMN IF EXISTS failed_reason,
 		DROP COLUMN IF EXISTS credited_at,
 		DROP COLUMN IF EXISTS status_rank,

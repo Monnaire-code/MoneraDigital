@@ -300,3 +300,53 @@ func TestWebhook_BenchAckTime(t *testing.T) {
 		t.Errorf("webhook ack P99 regressed: p50=%v p99=%v budget=%v", p50, p99, budget)
 	}
 }
+
+// I-1 regression: AML_KYT_ALERT eventID must derive from body content (sha256),
+// not wall-clock time. Two deliveries of the same encrypted body must collapse
+// to a single eventID so Safeheron's retry storm is dedup'd by ON CONFLICT.
+// Two deliveries of *different* body must produce *different* eventIDs so
+// genuine follow-up alerts still land.
+func TestWebhook_AMLAlertEventIDIsContentHash(t *testing.T) {
+	var capturedEventIDs []string
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return &safeheron.WebhookEvent{
+				EventType:   "AML_KYT_ALERT",
+				EventDetail: safeheron.EventDetail{TxKey: "tx-aml-dedup"},
+			}, nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, evt *deposit.Event) (bool, error) {
+			capturedEventIDs = append(capturedEventIDs, evt.EventID)
+			return true, nil
+		}},
+	)
+
+	bodyA := `{"timestamp":"1","sig":"sigA","bizContent":"ciphertextA"}`
+	bodyB := `{"timestamp":"2","sig":"sigB","bizContent":"ciphertextB"}`
+
+	// Two deliveries of identical body — should produce identical eventID
+	runWebhook(h, bodyA)
+	runWebhook(h, bodyA)
+	if len(capturedEventIDs) != 2 {
+		t.Fatalf("expected 2 webhook calls, got %d", len(capturedEventIDs))
+	}
+	if capturedEventIDs[0] != capturedEventIDs[1] {
+		t.Errorf("I-1 regression: identical bodies must produce same eventID for dedup; got %q vs %q",
+			capturedEventIDs[0], capturedEventIDs[1])
+	}
+	// And the eventID must start with the txKey + ":AML_KYT_ALERT:" prefix
+	prefix := "tx-aml-dedup:AML_KYT_ALERT:"
+	if !strings.HasPrefix(capturedEventIDs[0], prefix) {
+		t.Errorf("eventID missing AML alert prefix: got %q", capturedEventIDs[0])
+	}
+
+	// Different body content — must produce a different eventID
+	runWebhook(h, bodyB)
+	if len(capturedEventIDs) != 3 {
+		t.Fatalf("expected 3 webhook calls after bodyB, got %d", len(capturedEventIDs))
+	}
+	if capturedEventIDs[2] == capturedEventIDs[0] {
+		t.Errorf("different bodies must produce different eventIDs: bodyA=%q bodyB=%q",
+			capturedEventIDs[0], capturedEventIDs[2])
+	}
+}

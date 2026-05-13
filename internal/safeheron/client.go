@@ -18,6 +18,10 @@ type accountAPIClient interface {
 	GetAccountByAddress(api.OneAccountByAddressRequest, *api.AccountResponse) error
 }
 
+type complianceAPIClient interface {
+	KytReport(api.KytReportRequest, *api.KytReportResponse) error
+}
+
 type webhookConverter interface {
 	Convert(webhook.WebHook) (string, error)
 }
@@ -34,8 +38,10 @@ type Config struct {
 
 type Client struct {
 	account     accountAPIClient
+	compliance  complianceAPIClient
 	webhookConv webhookConverter
 	tempFiles   []string
+	sdkClient   sdk.Client
 }
 
 func NewClient(cfg Config) (*Client, error) {
@@ -73,10 +79,13 @@ func NewClient(cfg Config) (*Client, error) {
 	}}
 
 	sdkAccount := &api.AccountApi{Client: baseClient}
+	sdkCompliance := &api.ComplianceApi{Client: baseClient}
 
 	c := &Client{
-		account:   sdkAccount,
-		tempFiles: tempFiles,
+		account:    sdkAccount,
+		compliance: sdkCompliance,
+		tempFiles:  tempFiles,
+		sdkClient:  baseClient,
 	}
 
 	if (cfg.WebhookPublicKeyPEM == "") != (cfg.WebhookPrivateKeyPEM == "") {
@@ -217,6 +226,31 @@ func (c *Client) GetAccountByAddress(_ context.Context, address string) (*Accoun
 		HiddenOnUI:    resp.HiddenOnUI,
 		AutoFuel:      resp.AutoFuel,
 	}, nil
+}
+
+func (c *Client) KytReport(_ context.Context, txKey string) (*KytReportResponse, error) {
+	var sdkResp api.KytReportResponse
+	if err := c.compliance.KytReport(api.KytReportRequest{TxKey: txKey}, &sdkResp); err != nil {
+		return nil, fmt.Errorf("safeheron KytReport txKey=%s: %w", txKey, err)
+	}
+	out := &KytReportResponse{
+		TxKey:                      sdkResp.TxKey,
+		CustomerRefID:              sdkResp.CustomerRefId,
+		AmlScreeningTriggeredState: sdkResp.AmlScreeningTriggeredState,
+		AmlList:                    make([]AmlReport, 0, len(sdkResp.AmlList)),
+	}
+	for _, r := range sdkResp.AmlList {
+		payload, _ := json.Marshal(r.Payload)
+		out.AmlList = append(out.AmlList, AmlReport{
+			Provider:       r.Provider,
+			Timestamp:      r.Timestamp,
+			Status:         r.Status,
+			RiskLevel:      r.RiskLevel,
+			LastUpdateTime: r.LastUpdateTime,
+			Payload:        payload,
+		})
+	}
+	return out, nil
 }
 
 func (c *Client) WebhookConvert(rawBody []byte) (*WebhookEvent, error) {

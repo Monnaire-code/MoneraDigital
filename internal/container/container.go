@@ -134,10 +134,34 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 			c.AlertService.Send(level, title, map[string]string{"message": message})
 		})
 
+		// KYT configuration + production startup validation (K-16)
+		kytEnabled := true
+		if viper.IsSet("KYT_ENABLED") {
+			kytEnabled = viper.GetBool("KYT_ENABLED")
+		}
+		if viper.GetString("APP_ENV") == "production" && !kytEnabled {
+			panic("KYT_ENABLED=false is not allowed in production (K-16): " +
+				"set KYT_ENABLED=true or unset for production deployment")
+		}
+
+		kytOrphanMaxRetry := viper.GetInt("KYT_ORPHAN_ALERT_MAX_RETRY")
+		if kytOrphanMaxRetry <= 0 {
+			kytOrphanMaxRetry = 100
+		}
+		kytTimeout := viper.GetDuration("KYT_TIMEOUT")
+		if kytTimeout <= 0 {
+			kytTimeout = 20 * time.Minute
+		}
+		kytScanInterval := viper.GetDuration("KYT_SCAN_INTERVAL")
+		if kytScanInterval <= 0 {
+			kytScanInterval = time.Minute
+		}
+
 		// Deposit pipeline: webhook handler (sync) + worker (async).
 		depRepo := deposit.NewRepository(c.DB)
 		c.DepositEventRepo = depRepo
 		c.DepositPipeline = deposit.NewService(depRepo, registry, c.AlertService.Send)
+		c.DepositPipeline.SetKYTDeps(client, kytEnabled, kytOrphanMaxRetry, kytTimeout)
 		c.SafeheronWebhookHandler = handlers.NewSafeheronWebhookHandler(client, depRepo)
 
 		workerInterval := viper.GetDuration("DEPOSIT_WORKER_INTERVAL")
@@ -145,11 +169,15 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 			workerInterval = time.Second
 		}
 		c.DepositWorker = deposit.NewWorker(c.DepositPipeline, deposit.WorkerConfig{
-			Interval: workerInterval,
+			Interval:        workerInterval,
+			KYTScanInterval: kytScanInterval,
+			PanicBackoff:    5 * time.Second,
 		})
 		go c.DepositWorker.Run(ctx)
 
 		log.Printf("Safeheron deposit pipeline enabled: worker interval=%s", workerInterval)
+		log.Printf("[KYT] enabled=%v scan_interval=%s timeout=%s orphan_max_retry=%d",
+			kytEnabled, kytScanInterval, kytTimeout, kytOrphanMaxRetry)
 	}
 }
 

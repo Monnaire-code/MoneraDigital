@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log"
@@ -91,6 +93,15 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 	}
 
 	eventID := evt.EventDetail.TxKey + ":" + evt.EventDetail.TransactionStatus
+	if evt.EventType == "AML_KYT_ALERT" {
+		// AML alerts share txKey across multiple distinct events (provider rescans,
+		// follow-up findings). A wall-clock suffix would break dedup entirely — every
+		// Safeheron retry of an identical body would slip past ON CONFLICT and
+		// inflate storage. A content hash keeps Safeheron's own retries idempotent
+		// while letting genuinely new alert content through.
+		sum := sha256.Sum256(body)
+		eventID = evt.EventDetail.TxKey + ":AML_KYT_ALERT:" + hex.EncodeToString(sum[:8])
+	}
 	if evt.EventDetail.TxKey == "" {
 		log.Printf("safeheron webhook missing txKey, eventType=%s", evt.EventType)
 		c.AbortWithStatus(http.StatusBadRequest)

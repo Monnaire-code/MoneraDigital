@@ -48,6 +48,9 @@ func (m *mockClient) ListAccountCoin(ctx context.Context, accountKey string) ([]
 func (m *mockClient) GetAccountByAddress(ctx context.Context, address string) (*safeheron.Account, error) {
 	return nil, nil
 }
+func (m *mockClient) KytReport(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
+	return nil, nil
+}
 func (m *mockClient) WebhookConvert(rawBody []byte) (*safeheron.WebhookEvent, error) {
 	return nil, nil
 }

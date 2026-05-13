@@ -774,7 +774,12 @@
     "status": {
       "PENDING": "Pending",
       "CONFIRMED": "Success",
-      "FAILED": "Failed"
+      "FAILED": "Failed",
+      "CHAIN_VERIFYING": "Verifying",
+      "CHAIN_VERIFIED": "Verified",
+      "CREDITED": "Completed",
+      "MANUAL_REVIEW": "Under review",
+      "KYT_PENDING": "Under compliance review"
     },
     "coinsLoadError": "Unable to load available coins",
     "activate": "Activate Account",

@@ -10,11 +10,9 @@ import (
 
 // WorkerConfig controls the polling cadence + back-off.
 type WorkerConfig struct {
-	// Interval between drain cycles when the queue is empty. Default 1s.
-	Interval time.Duration
-	// PanicBackoff how long the worker pauses after a panic before resuming.
-	// Default 5s.
-	PanicBackoff time.Duration
+	Interval        time.Duration // Main drain cycle interval. Default 1s.
+	KYTScanInterval time.Duration // KYT timeout scan interval. Default 1m.
+	PanicBackoff    time.Duration // Pause after panic. Default 5s.
 }
 
 // Worker drains PENDING webhook events through Service.ProcessOne.
@@ -27,30 +25,35 @@ func NewWorker(svc *Service, cfg WorkerConfig) *Worker {
 	if cfg.Interval <= 0 {
 		cfg.Interval = time.Second
 	}
+	if cfg.KYTScanInterval <= 0 {
+		cfg.KYTScanInterval = time.Minute
+	}
 	if cfg.PanicBackoff <= 0 {
 		cfg.PanicBackoff = 5 * time.Second
 	}
 	return &Worker{svc: svc, config: cfg}
 }
 
-// Run pumps the worker until ctx is cancelled. Panics inside the drain are
-// recovered + logged so a single bad event doesn't tear the goroutine down.
+// Run pumps the worker until ctx is cancelled.
 func (w *Worker) Run(ctx context.Context) {
-	log.Printf("deposit worker started: interval=%s", w.config.Interval)
+	log.Printf("deposit worker started: interval=%s kytScan=%s", w.config.Interval, w.config.KYTScanInterval)
 	defer log.Println("deposit worker stopped")
 
-	ticker := time.NewTicker(w.config.Interval)
-	defer ticker.Stop()
+	mainTicker := time.NewTicker(w.config.Interval)
+	kytScanTicker := time.NewTicker(w.config.KYTScanInterval)
+	defer mainTicker.Stop()
+	defer kytScanTicker.Stop()
 
-	// Drain immediately on start so backlog from a crash recovers fast.
 	w.drainSafely(ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-mainTicker.C:
 			w.drainSafely(ctx)
+		case <-kytScanTicker.C:
+			w.scanKYTSafely(ctx)
 		}
 	}
 }
@@ -59,7 +62,6 @@ func (w *Worker) drainSafely(ctx context.Context) {
 	defer func() {
 		if rv := recover(); rv != nil {
 			log.Printf("deposit worker panic recovered: %v\n%s", rv, debug.Stack())
-			// Back off so a deterministic panic doesn't hot-loop.
 			select {
 			case <-ctx.Done():
 			case <-time.After(w.config.PanicBackoff):
@@ -74,17 +76,23 @@ func (w *Worker) drainSafely(ctx context.Context) {
 		processed, err := w.svc.ProcessOne(ctx)
 		if err != nil {
 			log.Printf("deposit worker process error: %v", err)
-			// T7-I-5: if MarkEventError itself failed the row stays PENDING.
-			// Yield to the ticker interval so we don't hot-loop relocking it.
-			if errors.Is(err, ErrMarkErrorFailed) {
+			if errors.Is(err, ErrMarkErrorFailed) || errors.Is(err, ErrKYTAPIBackoff) {
 				return
 			}
-			// Other errors mean the event was committed in ERROR state — safe
-			// to continue draining the next PENDING row.
 			continue
 		}
 		if !processed {
 			return
 		}
 	}
+}
+
+func (w *Worker) scanKYTSafely(ctx context.Context) {
+	defer func() {
+		if rv := recover(); rv != nil {
+			log.Printf("deposit worker KYT scan panic recovered: %v\n%s", rv, debug.Stack())
+		}
+	}()
+
+	w.svc.ScanKYTTimeouts(ctx)
 }

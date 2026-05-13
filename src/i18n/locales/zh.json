@@ -853,7 +853,12 @@
     "status": {
       "PENDING": "确认中",
       "CONFIRMED": "成功",
-      "FAILED": "失败"
+      "FAILED": "失败",
+      "CHAIN_VERIFYING": "验证中",
+      "CHAIN_VERIFIED": "已验证",
+      "CREDITED": "已完成",
+      "MANUAL_REVIEW": "审核中",
+      "KYT_PENDING": "合规审核中"
     },
     "coinsLoadError": "无法加载可用币种",
     "activate": "开通账户",

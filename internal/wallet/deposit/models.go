@@ -20,6 +20,7 @@ const (
 	DepositStatusCredited       = "CREDITED"
 	DepositStatusFailed         = "FAILED"
 	DepositStatusManualReview   = "MANUAL_REVIEW"
+	DepositStatusKYTPending     = "KYT_PENDING" // SPEC §7.1: 链上 COMPLETED 但 KYT 评估未结束
 )
 
 // Reason codes recorded in deposits.failed_reason for MANUAL_REVIEW / FAILED
@@ -115,7 +116,33 @@ var ErrNoPending = errors.New("no pending event")
 // hot-looping on the same un-markable row. T7-I-5.
 var ErrMarkErrorFailed = errors.New("mark event error failed; event remains pending")
 
+// ErrKYTAPIBackoff signals that a KYT API call failed but the event is below
+// the orphan retry threshold (event stays PENDING for the next cycle). The
+// worker yields to its ticker so we don't burn Safeheron quota in a tight loop
+// during an upstream outage. T10-I-3.
+var ErrKYTAPIBackoff = errors.New("KYT API failed; backing off until next tick")
+
 // MarshalRawPayload helper for tests / fakes.
 func MarshalRawPayload(env PayloadEnvelope) ([]byte, error) {
 	return json.Marshal(env)
+}
+
+// AMLKYTAlertDetail 是 AML_KYT_ALERT webhook eventDetail 的独立 struct。
+// 字段集与 PayloadEventDetail 不同（无 transactionStatus，多 amlList），需二次 unmarshal。
+type AMLKYTAlertDetail struct {
+	TxKey                      string              `json:"txKey"`
+	CustomerRefID              string              `json:"customerRefId"`
+	AmlScreeningTriggeredState string              `json:"amlScreeningTriggeredState"`
+	AmlList                    []AMLKYTAlertReport `json:"amlList"`
+}
+
+// AMLKYTAlertReport 是 AML_KYT_ALERT 内嵌的单条 provider 报告。
+// 字段与 safeheron.AmlReport 对齐，但从 webhook payload 解析而非 API 返回。
+type AMLKYTAlertReport struct {
+	Provider       string          `json:"provider"`
+	Timestamp      string          `json:"timestamp"`
+	Status         string          `json:"status"`
+	RiskLevel      string          `json:"riskLevel"`
+	LastUpdateTime string          `json:"lastUpdateTime"`
+	Payload        json.RawMessage `json:"payload"`
 }

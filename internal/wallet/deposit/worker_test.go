@@ -178,6 +178,46 @@ func TestWorker_DefaultsIntervalAndBackoff(t *testing.T) {
 	}
 }
 
+func TestWorker_ScanKYTSafelyRecoversPanic(t *testing.T) {
+	base := newMockRepo()
+	panickingRepo := &panickingScanRepo{mockRepo: base}
+	svc := NewService(panickingRepo, nil, nil)
+	svc.SetKYTDeps(nil, true, 100, 1*time.Millisecond)
+
+	w := NewWorker(svc, WorkerConfig{
+		Interval:        time.Second,
+		KYTScanInterval: 10 * time.Millisecond,
+		PanicBackoff:    5 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx) }()
+
+	<-ctx.Done()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker stuck after KYT scan panic")
+	}
+
+	if panickingRepo.panicCount.Load() < 1 {
+		t.Error("expected at least one panic from scanKYTSafely")
+	}
+}
+
+type panickingScanRepo struct {
+	*mockRepo
+	panicCount atomic.Int32
+}
+
+func (r *panickingScanRepo) LockOneKYTPendingTimeout(_ context.Context, _ Tx, _ time.Duration) (*DepositRow, error) {
+	r.panicCount.Add(1)
+	panic("synthetic KYT scan panic")
+}
+
 func TestWorker_ProcessErrorContinues(t *testing.T) {
 	repo := newMockRepo()
 	repo.owners["0xdest"] = 42

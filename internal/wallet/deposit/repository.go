@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Tx is the minimal transactional handle the Service threads through its
@@ -29,6 +30,14 @@ type Repository interface {
 	MarkDepositCredited(ctx context.Context, tx Tx, depositID int64) error
 	MarkDepositFailed(ctx context.Context, tx Tx, depositID int64, reason string) error
 	MarkDepositManualReview(ctx context.Context, tx Tx, depositID int64, reason string) error
+
+	// === AML/KYT (Phase 1 v1.5) ===
+	UpdateAMLFields(ctx context.Context, tx Tx, depositID int64, screeningState, riskLevel string, evaluatedAt time.Time, amlListJSON []byte) error
+	MoveToKYTPending(ctx context.Context, tx Tx, depositID int64) error
+	LockOneKYTPendingTimeout(ctx context.Context, tx Tx, threshold time.Duration) (*DepositRow, error)
+	FindDepositByTxKey(ctx context.Context, tx Tx, txKey string) (*DepositRow, bool, error)
+	IncrementEventAttemptsNoTx(ctx context.Context, eventID int64) error
+
 	MarkEventDone(ctx context.Context, tx Tx, eventID int64) error
 	MarkEventError(ctx context.Context, tx Tx, eventID int64, errMsg string) error
 	LookupAddressOwner(ctx context.Context, address string) (userID int, found bool, err error)
@@ -54,6 +63,11 @@ type DepositRow struct {
 	FromAddress        string
 	ToAddress          string
 	TxHash             string
+	// AML/KYT fields (v1.5 spec §4.6)
+	AMLScreeningState string
+	AMLRiskLevel      string
+	AMLEvaluatedAt    time.Time
+	AMLListJSON       []byte
 }
 
 // JournalEntry mirrors account_journal columns the Service writes.
@@ -344,6 +358,106 @@ func (r *DBRepository) LookupAddressOwner(ctx context.Context, address string) (
 		return 0, false, nil
 	}
 	return uid, true, nil
+}
+
+// === AML/KYT (Phase 1 v1.5) — DBRepository implementations ===
+
+func (r *DBRepository) UpdateAMLFields(ctx context.Context, tx Tx, depositID int64, screeningState, riskLevel string, evaluatedAt time.Time, amlListJSON []byte) error {
+	_, err := asSQLTx(tx).ExecContext(ctx,
+		`UPDATE deposits
+		 SET aml_screening_state = $1, aml_risk_level = $2,
+		     aml_evaluated_at = $3, aml_list = $4, updated_at = NOW()
+		 WHERE id = $5`,
+		screeningState, riskLevel, evaluatedAt, amlListJSON, depositID,
+	)
+	if err != nil {
+		return fmt.Errorf("update AML fields: %w", err)
+	}
+	return nil
+}
+
+func (r *DBRepository) MoveToKYTPending(ctx context.Context, tx Tx, depositID int64) error {
+	_, err := asSQLTx(tx).ExecContext(ctx,
+		`UPDATE deposits SET status = $1, updated_at = NOW()
+		 WHERE id = $2 AND status = 'PENDING'`,
+		DepositStatusKYTPending, depositID,
+	)
+	if err != nil {
+		return fmt.Errorf("move to KYT_PENDING: %w", err)
+	}
+	return nil
+}
+
+func (r *DBRepository) LockOneKYTPendingTimeout(ctx context.Context, tx Tx, threshold time.Duration) (*DepositRow, error) {
+	row := asSQLTx(tx).QueryRowContext(ctx,
+		`SELECT id, user_id, COALESCE(safeheron_tx_key, ''),
+		        COALESCE(safeheron_coin_key, ''), amount, asset,
+		        COALESCE(chain_code, ''), COALESCE(coin_chain_id, 0),
+		        COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
+		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
+		        status
+		 FROM deposits
+		 WHERE status = 'KYT_PENDING' AND updated_at < NOW() - $1::interval
+		 ORDER BY updated_at ASC
+		 FOR UPDATE SKIP LOCKED
+		 LIMIT 1`,
+		fmt.Sprintf("%d seconds", int(threshold.Seconds())),
+	)
+	out := &DepositRow{}
+	if err := row.Scan(
+		&out.ID, &out.UserID, &out.SafeheronTxKey, &out.SafeheronCoinKey,
+		&out.Amount, &out.Asset,
+		&out.ChainCode, &out.CoinChainID,
+		&out.SafeheronStatus, &out.SafeheronSubStatus,
+		&out.StatusRank, &out.BlockHeight, &out.BlockHash, &out.Status,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNoPending
+		}
+		return nil, fmt.Errorf("lock KYT_PENDING timeout: %w", err)
+	}
+	return out, nil
+}
+
+func (r *DBRepository) FindDepositByTxKey(ctx context.Context, tx Tx, txKey string) (*DepositRow, bool, error) {
+	row := asSQLTx(tx).QueryRowContext(ctx,
+		`SELECT id, user_id, COALESCE(safeheron_tx_key, ''),
+		        COALESCE(safeheron_coin_key, ''), amount, asset,
+		        COALESCE(chain_code, ''), COALESCE(coin_chain_id, 0),
+		        COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
+		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
+		        status
+		 FROM deposits WHERE safeheron_tx_key = $1
+		 FOR UPDATE`,
+		txKey,
+	)
+	out := &DepositRow{}
+	if err := row.Scan(
+		&out.ID, &out.UserID, &out.SafeheronTxKey, &out.SafeheronCoinKey,
+		&out.Amount, &out.Asset,
+		&out.ChainCode, &out.CoinChainID,
+		&out.SafeheronStatus, &out.SafeheronSubStatus,
+		&out.StatusRank, &out.BlockHeight, &out.BlockHash, &out.Status,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("find deposit by tx_key: %w", err)
+	}
+	return out, true, nil
+}
+
+// IncrementEventAttemptsNoTx 独立非事务 UPDATE — 用 r.db 不挂 tx。
+// 调用时机：主事务 ROLLBACK 之后，必须脱离外层事务才能持久化。
+func (r *DBRepository) IncrementEventAttemptsNoTx(ctx context.Context, eventID int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE safeheron_webhook_events SET process_attempts = process_attempts + 1 WHERE id = $1`,
+		eventID,
+	)
+	if err != nil {
+		return fmt.Errorf("increment event attempts: %w", err)
+	}
+	return nil
 }
 
 // nullableTxHash satisfies the legacy deposits.tx_hash NOT NULL UNIQUE
