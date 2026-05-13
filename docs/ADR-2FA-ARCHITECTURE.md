@@ -1,7 +1,7 @@
 # ADR-001: 2FA System Architecture
 
 **Date**: 2026-01-26
-**Status**: ACCEPTED
+**Status**: ACCEPTED (Partially Superseded — 2FA 业务逻辑已迁移至 Go backend `internal/services/twofa_service.go` + `internal/handlers/twofa_handler.go`，TypeScript 层仅保留前端调用。核心决策仍有效。)
 **Context**: Implementing two-factor authentication (2FA) using TOTP and backup codes
 
 ## Problem Statement

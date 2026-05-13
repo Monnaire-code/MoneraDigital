@@ -1,0 +1,68 @@
+name: Deploy Backend (Test Env)
+
+on:
+  push:
+    branches: [test]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-test
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: test-environment
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build Backend (Release)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w" -o monera-server ./cmd/server/main.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w" -o monera-migrate ./cmd/migrate/main.go
+
+      - name: Prepare Deployment Package
+        run: |
+          mkdir -p deploy
+          cp monera-server deploy/
+          cp monera-migrate deploy/
+          cp scripts/deploy-remote.sh deploy/
+          tar -czf monera-digital-test.tar.gz -C deploy .
+
+      - name: Copy package to server
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634 # v0.1.7
+        with:
+          host: ${{ secrets.TEST_ENV_HOST }}
+          username: ${{ secrets.TEST_ENV_USER }}
+          key: ${{ secrets.TEST_ENV_SSH_KEY }}
+          source: "monera-digital-test.tar.gz"
+          target: "/tmp"
+
+      - name: Execute Remote Deploy
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        with:
+          host: ${{ secrets.TEST_ENV_HOST }}
+          username: ${{ secrets.TEST_ENV_USER }}
+          key: ${{ secrets.TEST_ENV_SSH_KEY }}
+          envs: DEPLOY_USER
+          script: |
+            sudo mkdir -p /opt/monera-digital-test
+            sudo tar -xzf /tmp/monera-digital-test.tar.gz -C /opt/monera-digital-test
+            sudo chown -R "${DEPLOY_USER}:${DEPLOY_USER}" /opt/monera-digital-test
+            rm -f /tmp/monera-digital-test.tar.gz
+            cd /opt/monera-digital-test
+            bash ./deploy-remote.sh --env test --port 8086
+        env:
+          DEPLOY_USER: ${{ secrets.TEST_ENV_USER }}

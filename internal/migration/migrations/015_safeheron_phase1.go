@@ -158,6 +158,7 @@ func (m *CreateCoinChainsTable) Up(db *sql.DB) error {
 		id                        SERIAL       PRIMARY KEY,
 		chain_code                VARCHAR(32)  NOT NULL REFERENCES chains(code),
 		coin_id                   INT          NOT NULL REFERENCES coins(id),
+		symbol                    VARCHAR(32)  NOT NULL DEFAULT '',
 		is_native                 BOOLEAN      NOT NULL DEFAULT false,
 		token_contract            VARCHAR(128),
 		decimals                  INT          NOT NULL,
@@ -575,22 +576,22 @@ func (m *SeedSafeheronPhase1Data) Up(db *sql.DB) error {
 
 func (m *SeedSafeheronPhase1Data) seedProductionCoinChains(db *sql.DB) error {
 	query := `
-	INSERT INTO coin_chains (chain_code, coin_id, is_native, token_contract, decimals, safeheron_coin_key, min_deposit_amount, token_standard, estimated_arrival_minutes, display_order)
-	    SELECT 'ETHEREUM', id, true,  NULL,                                          18, 'ETH',        '0.001', 'Native', 2, 10 FROM coins WHERE symbol='ETH'
+	INSERT INTO coin_chains (chain_code, coin_id, symbol, is_native, token_contract, decimals, safeheron_coin_key, min_deposit_amount, token_standard, estimated_arrival_minutes, display_order)
+	    SELECT 'ETHEREUM', id, 'ETH',  true,  NULL,                                          18, 'ETH',        '0.001', 'Native', 2, 10 FROM coins WHERE symbol='ETH'
 	UNION ALL
-	    SELECT 'ETHEREUM', id, false, '0xdAC17F958D2ee523a2206206994597C13D831ec7', 6,  'USDT_ERC20', '1',     'ERC20',  2, 20 FROM coins WHERE symbol='USDT'
+	    SELECT 'ETHEREUM', id, 'USDT', false, '0xdAC17F958D2ee523a2206206994597C13D831ec7', 6,  'USDT_ERC20', '1',     'ERC20',  2, 20 FROM coins WHERE symbol='USDT'
 	UNION ALL
-	    SELECT 'ETHEREUM', id, false, '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', 6,  'USDC_ERC20', '1',     'ERC20',  2, 30 FROM coins WHERE symbol='USDC'
+	    SELECT 'ETHEREUM', id, 'USDC', false, '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', 6,  'USDC_ERC20', '1',     'ERC20',  2, 30 FROM coins WHERE symbol='USDC'
 	UNION ALL
-	    SELECT 'BSC',      id, true,  NULL,                                          18, 'BNB_BSC',    '0.005', 'Native', 1, 40 FROM coins WHERE symbol='BNB'
+	    SELECT 'BSC',      id, 'BNB',  true,  NULL,                                          18, 'BNB_BSC',    '0.005', 'Native', 1, 40 FROM coins WHERE symbol='BNB'
 	UNION ALL
-	    SELECT 'BSC',      id, false, '0x55d398326f99059fF775485246999027B3197955',  18, 'USDT_BEP20', '1',     'BEP20',  1, 50 FROM coins WHERE symbol='USDT'
+	    SELECT 'BSC',      id, 'USDT', false, '0x55d398326f99059fF775485246999027B3197955',  18, 'USDT_BEP20', '1',     'BEP20',  1, 50 FROM coins WHERE symbol='USDT'
 	UNION ALL
-	    SELECT 'BSC',      id, false, '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',  18, 'USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET', '1', 'BEP20', 1, 60 FROM coins WHERE symbol='USDC'
+	    SELECT 'BSC',      id, 'USDC', false, '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',  18, 'USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET', '1', 'BEP20', 1, 60 FROM coins WHERE symbol='USDC'
 	UNION ALL
-	    SELECT 'TRON',     id, true,  NULL,                                          6,  'TRX',        '1',     'Native', 1, 70 FROM coins WHERE symbol='TRX'
+	    SELECT 'TRON',     id, 'TRX',  true,  NULL,                                          6,  'TRX',        '1',     'Native', 1, 70 FROM coins WHERE symbol='TRX'
 	UNION ALL
-	    SELECT 'TRON',     id, false, 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',          6,  'USDT_TRC20', '1',     'TRC20',  1, 80 FROM coins WHERE symbol='USDT'
+	    SELECT 'TRON',     id, 'USDT', false, 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',          6,  'USDT_TRC20', '1',     'TRC20',  1, 80 FROM coins WHERE symbol='USDT'
 	ON CONFLICT (safeheron_coin_key) DO NOTHING;
 	`
 	_, err := db.Exec(query)
@@ -602,12 +603,12 @@ func (m *SeedSafeheronPhase1Data) seedProductionCoinChains(db *sql.DB) error {
 
 func (m *SeedSafeheronPhase1Data) seedTestnetCoinChains(db *sql.DB) error {
 	query := `
-	INSERT INTO coin_chains (chain_code, coin_id, is_native, token_contract, decimals, safeheron_coin_key, min_deposit_amount, token_standard, estimated_arrival_minutes, display_order)
-	    SELECT 'ETHEREUM', id, true,  NULL,                                          18, 'ETH(SEPOLIA)_ETHEREUM_SEPOLIA',  '0.0001', 'Native', 2, 10 FROM coins WHERE symbol='ETH'
+	INSERT INTO coin_chains (chain_code, coin_id, symbol, is_native, token_contract, decimals, safeheron_coin_key, min_deposit_amount, token_standard, estimated_arrival_minutes, display_order)
+	    SELECT 'ETHEREUM', id, 'ETH',  true,  NULL,                                          18, 'ETH(SEPOLIA)_ETHEREUM_SEPOLIA',  '0.0001', 'Native', 2, 10 FROM coins WHERE symbol='ETH'
 	UNION ALL
-	    SELECT 'ETHEREUM', id, false, '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', 6,  'USDCOIN_ERC20_ETHEREUM_SEPOLIA', '0.1',    'ERC20',  2, 30 FROM coins WHERE symbol='USDC'
+	    SELECT 'ETHEREUM', id, 'USDC', false, '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', 6,  'USDCOIN_ERC20_ETHEREUM_SEPOLIA', '0.1',    'ERC20',  2, 30 FROM coins WHERE symbol='USDC'
 	UNION ALL
-	    SELECT 'TRON',     id, true,  NULL,                                          6,  'TRX(SHASTA)_TRON_TESTNET',       '0.1',    'Native', 1, 70 FROM coins WHERE symbol='TRX'
+	    SELECT 'TRON',     id, 'TRX',  true,  NULL,                                          6,  'TRX(SHASTA)_TRON_TESTNET',       '0.1',    'Native', 1, 70 FROM coins WHERE symbol='TRX'
 	ON CONFLICT (safeheron_coin_key) DO NOTHING;
 	`
 	_, err := db.Exec(query)
