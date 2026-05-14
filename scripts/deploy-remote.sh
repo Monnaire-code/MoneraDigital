@@ -196,7 +196,11 @@ deploy_frontend() {
         echo "  API_URL: ${API_URL}"
     fi
 
-    if [ -n "${VERCEL_PROJECT}" ]; then
+    # .vercel/project.json: 优先用本地已 link 的，其次用环境变量
+    if [ -f "${PROJECT_DIR}/.vercel/project.json" ]; then
+        mkdir -p "${TEMP_DIR}/.vercel"
+        cp "${PROJECT_DIR}/.vercel/project.json" "${TEMP_DIR}/.vercel/project.json"
+    elif [ -n "${VERCEL_PROJECT}" ]; then
         mkdir -p "${TEMP_DIR}/.vercel"
         cat > "${TEMP_DIR}/.vercel/project.json" << EOF
 {
@@ -204,13 +208,16 @@ deploy_frontend() {
   "orgId": "${VERCEL_ORG}"
 }
 EOF
+    else
+        echo "ERROR: .vercel/project.json not found. Run 'vercel link' in the project root first."
+        exit 1
     fi
 
     echo "  Package size: $(du -sh "${TEMP_DIR}" | cut -f1)"
 
     cd "${TEMP_DIR}"
 
-    VERCEL_ARGS=()
+    VERCEL_ARGS=(--prod)
     [ -n "${VERCEL_TOKEN}" ] && VERCEL_ARGS+=(--token="${VERCEL_TOKEN}")
 
     vercel "${VERCEL_ARGS[@]}"
