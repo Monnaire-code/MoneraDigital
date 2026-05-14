@@ -51,6 +51,7 @@ nohup.out
 test-artifacts/
 openspec/
 main
+.gstack/
 
 # Go binaries
 /migrate
