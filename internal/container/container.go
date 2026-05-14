@@ -163,6 +163,11 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 		c.DepositEventRepo = depRepo
 		c.DepositPipeline = deposit.NewService(depRepo, registry, c.AlertService.Send)
 		c.DepositPipeline.SetKYTDeps(client, kytEnabled, kytOrphanMaxRetry, kytTimeout)
+		amlFirstPollDelay := viper.GetDuration("AML_FIRST_POLL_DELAY")
+		if amlFirstPollDelay <= 0 || amlFirstPollDelay >= kytTimeout {
+			amlFirstPollDelay = 5 * time.Minute
+		}
+		c.DepositPipeline.SetAMLFirstPollDelay(amlFirstPollDelay)
 		webhookAllowedIPs := splitNonEmpty(viper.GetString("SAFEHERON_WEBHOOK_ALLOWED_IPS"))
 		// L-1: production must enforce IP allowlist — empty list opens the
 		// webhook handler to anyone who can reach the port (the SDK verify is
@@ -179,7 +184,7 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 		}
 		amlPollInterval := viper.GetDuration("AML_POLL_INTERVAL")
 		if amlPollInterval <= 0 {
-			amlPollInterval = 100 * time.Second
+			amlPollInterval = 60 * time.Second
 		}
 		c.DepositWorker = deposit.NewWorker(c.DepositPipeline, deposit.WorkerConfig{
 			Interval:        workerInterval,

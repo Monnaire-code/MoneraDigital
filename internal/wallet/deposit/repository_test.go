@@ -330,7 +330,7 @@ func TestLockOneAmlPending_Found(t *testing.T) {
 
 	r := NewRepository(db)
 	tx, _ := r.BeginTx(context.Background())
-	dep, err := r.LockOneAmlPending(context.Background(), tx)
+	dep, err := r.LockOneAmlPending(context.Background(), tx, 0)
 	if err != nil {
 		t.Fatalf("expected deposit, got error: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestLockOneAmlPending_NoRows(t *testing.T) {
 
 	r := NewRepository(db)
 	tx, _ := r.BeginTx(context.Background())
-	_, err := r.LockOneAmlPending(context.Background(), tx)
+	_, err := r.LockOneAmlPending(context.Background(), tx, 0)
 	if !errors.Is(err, ErrNoPending) {
 		t.Fatalf("expected ErrNoPending, got %v", err)
 	}

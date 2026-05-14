@@ -218,7 +218,7 @@ func (r *panickingScanRepo) LockOneKYTPendingTimeout(_ context.Context, _ Tx, _ 
 	panic("synthetic KYT scan panic")
 }
 
-func (r *panickingScanRepo) LockOneAmlPending(_ context.Context, _ Tx) (*DepositRow, error) {
+func (r *panickingScanRepo) LockOneAmlPending(_ context.Context, _ Tx, _ time.Duration) (*DepositRow, error) {
 	return nil, ErrNoPending
 }
 

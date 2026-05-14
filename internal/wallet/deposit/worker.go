@@ -12,7 +12,7 @@ import (
 type WorkerConfig struct {
 	Interval        time.Duration // Main drain cycle interval. Default 1s.
 	KYTScanInterval time.Duration // KYT 20-min timeout scan interval. Default 1m.
-	AMLPollInterval time.Duration // Active KYT result poll (aml_risk_level='PENDING'). Default 100s.
+	AMLPollInterval time.Duration // Safety-net AML poll cadence. Default 60s (SQL minAge guards actual trigger).
 	PanicBackoff    time.Duration // Pause after panic. Default 5s.
 }
 
@@ -30,7 +30,7 @@ func NewWorker(svc *Service, cfg WorkerConfig) *Worker {
 		cfg.KYTScanInterval = time.Minute
 	}
 	if cfg.AMLPollInterval <= 0 {
-		cfg.AMLPollInterval = 100 * time.Second
+		cfg.AMLPollInterval = 60 * time.Second
 	}
 	if cfg.PanicBackoff <= 0 {
 		cfg.PanicBackoff = 5 * time.Second

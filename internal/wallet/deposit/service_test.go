@@ -286,7 +286,7 @@ func (m *mockRepo) LockOneKYTPendingTimeout(_ context.Context, _ Tx, _ time.Dura
 	return nil, ErrNoPending
 }
 
-func (m *mockRepo) LockOneAmlPending(_ context.Context, _ Tx) (*DepositRow, error) {
+func (m *mockRepo) LockOneAmlPending(_ context.Context, _ Tx, _ time.Duration) (*DepositRow, error) {
 	return nil, ErrNoPending
 }
 

@@ -95,15 +95,18 @@ func completedConfirmedPayload(txKey string) PayloadEnvelope {
 	}
 }
 
-// F-KYT-3: TRIGGERED+LOW → CREDITED
-func TestProcessOne_KYT_LowRisk_Credits(t *testing.T) {
+// F-KYT-13: KYT_ENABLED=true + COMPLETED → KYT_PENDING, NO KytReport API call.
+// AML_KYT_ALERT webhook (~78s on mainnet) or ScanAmlPending 5-min safety-net drives the rest.
+func TestProcessOne_KYT_Enabled_MovesKYTPendingNoAPICall(t *testing.T) {
 	repo := newMockRepo()
 	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return lowRiskReport(txKey), nil
+	apiCalled := false
+	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
+		apiCalled = true
+		return nil, errors.New("must not be called")
 	}}
 	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-low"))
+	enqueueRaw(t, repo, completedConfirmedPayload("tx-noapi"))
 
 	processed, err := svc.ProcessOne(context.Background())
 	if err != nil {
@@ -112,63 +115,18 @@ func TestProcessOne_KYT_LowRisk_Credits(t *testing.T) {
 	if !processed {
 		t.Fatal("expected processed=true")
 	}
-	dep := repo.deposits["tx-low"]
-	if dep == nil {
-		t.Fatal("deposit not found")
+	if apiCalled {
+		t.Error("KytReport must NOT be called from ProcessOne (T-β removed; webhook is primary path)")
 	}
-	if dep.Status != DepositStatusCredited {
-		t.Errorf("expected CREDITED, got %s", dep.Status)
-	}
-	if len(repo.doneIDs) != 1 {
-		t.Errorf("expected 1 done event, got %d", len(repo.doneIDs))
-	}
-}
-
-// F-KYT-4: TRIGGERED+HIGH → MANUAL_REVIEW
-func TestProcessOne_KYT_HighRisk_ManualReview(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return highRiskReport(txKey), nil
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-high"))
-
-	processed, err := svc.ProcessOne(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !processed {
-		t.Fatal("expected processed=true")
-	}
-	if reason, ok := repo.manualUpdates[1]; !ok || reason != "KYT_RISK_HIGH" {
-		t.Errorf("expected KYT_RISK_HIGH manual review, got %v", repo.manualUpdates)
-	}
-}
-
-// F-KYT-7: IN_PROGRESS → KYT_PENDING
-func TestProcessOne_KYT_InProgress_KYTPending(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return pendingReport(txKey), nil
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-pending"))
-
-	processed, err := svc.ProcessOne(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !processed {
-		t.Fatal("expected processed=true")
-	}
-	dep := repo.deposits["tx-pending"]
+	dep := repo.deposits["tx-noapi"]
 	if dep == nil {
 		t.Fatal("deposit not found")
 	}
 	if dep.Status != DepositStatusKYTPending {
 		t.Errorf("expected KYT_PENDING, got %s", dep.Status)
+	}
+	if len(repo.doneIDs) != 1 {
+		t.Errorf("expected event marked DONE in T-α, got %d", len(repo.doneIDs))
 	}
 }
 
@@ -200,56 +158,6 @@ func TestProcessOne_KYTDisabled_DirectCredit(t *testing.T) {
 	}
 	if dep.Status != DepositStatusCredited {
 		t.Errorf("expected CREDITED, got %s", dep.Status)
-	}
-}
-
-// handleKYTApiFailure: attempts < max → event stays PENDING
-func TestHandleKYTApiFailure_BelowThreshold(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
-		return nil, errors.New("API timeout")
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-apifail"))
-
-	processed, err := svc.ProcessOne(context.Background())
-	if !processed {
-		t.Fatal("expected processed=true")
-	}
-	if err == nil {
-		t.Fatal("expected error from KYT API failure")
-	}
-	// Event should NOT be done (stays PENDING for retry)
-	if len(repo.doneIDs) != 0 {
-		t.Errorf("event should not be marked done, got %v", repo.doneIDs)
-	}
-}
-
-// handleKYTApiFailure: attempts >= max → MANUAL_REVIEW
-func TestHandleKYTApiFailure_ExceedsThreshold(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
-		return nil, errors.New("API timeout")
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	svc.kytOrphanMaxRetry = 1 // set threshold to 1 so first failure exceeds it
-
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-maxfail"))
-
-	processed, err := svc.ProcessOne(context.Background())
-	if !processed {
-		t.Fatal("expected processed=true")
-	}
-	if err != nil {
-		t.Fatalf("expected nil error after forced MR, got: %v", err)
-	}
-	if reason, ok := repo.manualUpdates[1]; !ok || reason != ReasonKytApiFailed {
-		t.Errorf("expected KYT_API_FAILED manual review, got %v", repo.manualUpdates)
-	}
-	if len(repo.doneIDs) != 1 {
-		t.Errorf("event should be marked done after forced MR, got %v", repo.doneIDs)
 	}
 }
 
@@ -423,18 +331,22 @@ func TestScanKYTTimeouts_Empty(t *testing.T) {
 	}
 }
 
-// F-KYT-2: UNTRIGGERED → MANUAL_REVIEW(WARN)
-func TestProcessOne_KYT_Untriggered_ManualReview(t *testing.T) {
+// processKYTAlert: payload omits amlScreeningTriggeredState (Safeheron AML_KYT_ALERT real-world format)
+// → effectiveState defaults to "TRIGGERED" → LOW risk → CREDITED (not MANUAL_REVIEW via default branch).
+func TestProcessKYTAlert_EmptyTriggeredState_DefaultsToTriggered(t *testing.T) {
 	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return &safeheron.KytReportResponse{
-			TxKey:                      txKey,
-			AmlScreeningTriggeredState: "UNTRIGGERED",
-		}, nil
+	repo.deposits["tx-no-state"] = &DepositRow{
+		ID: 40, UserID: 1, SafeheronTxKey: "tx-no-state", Amount: "0.015", Asset: "USDT",
+		Status: DepositStatusKYTPending,
+	}
+	svc := newKYTSvc(t, repo, nil, true)
+	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
+
+	// Payload: amlScreeningTriggeredState field absent (empty after unmarshal), riskLevel=LOW
+	alertJSON := `{"eventType":"AML_KYT_ALERT","eventDetail":{"txKey":"tx-no-state","amlList":[{"provider":"MistTrack","riskLevel":"LOW","timestamp":"1778746275523","lastUpdateTime":"1778746356576"}]}}`
+	repo.pending = []*Event{{
+		ID: 55, EventID: "evt-no-state", EventType: "AML_KYT_ALERT", RawPayload: []byte(alertJSON),
 	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-untrig"))
 
 	processed, err := svc.ProcessOne(context.Background())
 	if err != nil {
@@ -443,8 +355,39 @@ func TestProcessOne_KYT_Untriggered_ManualReview(t *testing.T) {
 	if !processed {
 		t.Fatal("expected processed=true")
 	}
-	if reason, ok := repo.manualUpdates[1]; !ok || reason != ReasonKytUntriggered {
-		t.Errorf("expected KYT_UNTRIGGERED reason, got %v", repo.manualUpdates)
+	dep := repo.deposits["tx-no-state"]
+	if dep.Status != DepositStatusCredited {
+		t.Errorf("expected CREDITED (effectiveState=TRIGGERED → LOW → credit), got %s", dep.Status)
+	}
+}
+
+// processKYTAlert: amlList entries omit status field (Safeheron AML_KYT_ALERT real-world format)
+// → convertAlertReports defaults status to "COMPLETED" → SummarizeRiskLevel reads riskLevel.
+// HIGH risk without status field must → MANUAL_REVIEW, not LOW (the default maxLevel).
+func TestProcessKYTAlert_EmptyStatus_DefaultsToCompleted(t *testing.T) {
+	repo := newMockRepo()
+	repo.deposits["tx-no-status"] = &DepositRow{
+		ID: 41, UserID: 1, SafeheronTxKey: "tx-no-status", Amount: "0.015", Asset: "USDT",
+		Status: DepositStatusKYTPending,
+	}
+	svc := newKYTSvc(t, repo, nil, true)
+
+	// amlList entry: no "status" field, riskLevel=HIGH. Without the fix, SummarizeRiskLevel
+	// would never enter the COMPLETED branch → returns default KytLow → wrong CREDIT.
+	alertJSON := `{"eventType":"AML_KYT_ALERT","eventDetail":{"txKey":"tx-no-status","amlList":[{"provider":"MistTrack","riskLevel":"HIGH","timestamp":"1778746275523","lastUpdateTime":"1778746356576"}]}}`
+	repo.pending = []*Event{{
+		ID: 56, EventID: "evt-no-status", EventType: "AML_KYT_ALERT", RawPayload: []byte(alertJSON),
+	}}
+
+	processed, err := svc.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !processed {
+		t.Fatal("expected processed=true")
+	}
+	if reason, ok := repo.manualUpdates[41]; !ok || reason != "KYT_RISK_HIGH" {
+		t.Errorf("expected MANUAL_REVIEW KYT_RISK_HIGH (status defaulted to COMPLETED), got %v", repo.manualUpdates)
 	}
 }
 
@@ -634,28 +577,6 @@ func (r *findByTxKeyErrRepo) FindDepositByTxKey(_ context.Context, _ Tx, _ strin
 	return nil, false, r.findErr
 }
 
-// handleKYTApiFailure: IncrementEventAttemptsNoTx fails → just logs, continues
-func TestHandleKYTApiFailure_IncrementFails_StillRetries(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	incrementErrRepo := &incrementErrMockRepo{mockRepo: repo}
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
-		return nil, errors.New("API timeout")
-	}}
-	svc := NewService(incrementErrRepo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
-	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
-	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-inc-err"))
-
-	processed, err := svc.ProcessOne(context.Background())
-	if !processed {
-		t.Fatal("expected processed=true")
-	}
-	if err == nil {
-		t.Fatal("expected error from KYT API failure")
-	}
-}
-
 type incrementErrMockRepo struct {
 	*mockRepo
 }
@@ -697,26 +618,6 @@ func (r *updateAMLErrRepo) UpdateAMLFields(_ context.Context, _ Tx, _ int64, _, 
 	return errors.New("update AML fields boom")
 }
 
-// T-γ: KYT enabled + COMPLETED/CONFIRMED + KytReport returns low → credit in T-γ (full T-α/T-β/T-γ path)
-// This also tests the T-γ UpdateAMLFields path
-func TestProcessOne_KYT_TGamma_UpdateAMLFieldsError(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	amlErrRepo := &updateAMLErrRepo{mockRepo: repo}
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return lowRiskReport(txKey), nil
-	}}
-	svc := NewService(amlErrRepo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
-	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
-	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-tg-amlerr"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error from T-γ UpdateAMLFields failure")
-	}
-}
-
 // flagAndFinalize: flagManualReview fails AND MarkEventError also fails → wraps ErrMarkErrorFailed
 func TestProcessOne_FlagAndFinalize_BothFail(t *testing.T) {
 	repo := newMockRepo()
@@ -743,30 +644,6 @@ func TestProcessOne_FlagAndFinalize_BothFail(t *testing.T) {
 	}
 	if !errors.Is(err, ErrMarkErrorFailed) {
 		t.Errorf("expected ErrMarkErrorFailed sentinel, got: %v", err)
-	}
-}
-
-// handleKYTApiFailure: exceeds threshold BUT BeginTx for tx3 fails
-func TestHandleKYTApiFailure_ExceedsThreshold_BeginTxFails(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
-		return nil, errors.New("API down")
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	svc.kytOrphanMaxRetry = 1
-
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-tx3fail"))
-
-	// After T-α commits, the handleKYTApiFailure will try to BeginTx for tx3.
-	// We set beginTxErr AFTER the first two successful BeginTx calls (T-α + T-γ attempt).
-	beginTxCallTracker := &beginTxFailAfterNRepo{mockRepo: repo, failAfter: 1}
-
-	svc.repo = beginTxCallTracker
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error when tx3 BeginTx fails")
 	}
 }
 
@@ -829,35 +706,6 @@ func (r *beginTxFailAfterNKYTRepo) LockOneKYTPendingTimeout(_ context.Context, _
 		return dep, nil
 	}
 	return nil, ErrNoPending
-}
-
-// T-γ: deposit status changed between T-α and T-γ → just marks event done
-func TestProcessOne_KYT_TGamma_StaleDeposit(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		// Between T-α (MoveToKYTPending) and T-γ, manually change deposit status to simulate concurrent change
-		repo.mu.Lock()
-		if d, ok := repo.deposits[txKey]; ok {
-			d.Status = DepositStatusCredited
-		}
-		repo.mu.Unlock()
-		return lowRiskReport(txKey), nil
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-stale"))
-
-	processed, err := svc.ProcessOne(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !processed {
-		t.Fatal("expected processed=true")
-	}
-	// Should NOT double-credit (deposit was already CREDITED when T-γ re-read it)
-	if len(repo.journalCalls) != 0 {
-		t.Errorf("stale deposit should not be credited again, got %d journal calls", len(repo.journalCalls))
-	}
 }
 
 // C-1 regression: processKYTAlert DB error path releases tx (rollback) BEFORE NoTx increment
@@ -939,25 +787,6 @@ func TestProcessKYTAlert_FindByTxKeyError_IncrementsAttempts(t *testing.T) {
 	defer repo.mu.Unlock()
 	if len(repo.noTxIncrements) != 1 || repo.noTxIncrements[0] != 201 {
 		t.Errorf("I-2: expected IncrementEventAttemptsNoTx(201) on DB error, got %v", repo.noTxIncrements)
-	}
-}
-
-// I-3 regression: KYT API failure below threshold wraps ErrKYTAPIBackoff sentinel
-func TestHandleKYTApiFailure_BelowThreshold_BackoffSentinel(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
-		return nil, errors.New("upstream timeout")
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-i3"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("I-3: expected error from KYT API failure")
-	}
-	if !errors.Is(err, ErrKYTAPIBackoff) {
-		t.Errorf("I-3: expected ErrKYTAPIBackoff sentinel, got: %v", err)
 	}
 }
 
@@ -1308,34 +1137,6 @@ func TestProcessOne_FailedStatusOnCreditedDeposit_Skips(t *testing.T) {
 	}
 }
 
-// --- ProcessOne T-γ: re-read returns error (FindDepositByTxKey failure) ---
-func TestProcessOne_TGamma_ReReadError(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return lowRiskReport(txKey), nil
-	}}
-	// T-α uses UpsertDeposit (not FindDepositByTxKey), so the first FindDepositByTxKey
-	// call is the T-γ re-read — fail on call 1.
-	findErrRepo := &findByTxKeyFailOnCallNRepo{
-		mockRepo:   repo,
-		failOnCall: 1,
-		findErr:    errors.New("re-read boom"),
-	}
-	svc := NewService(findErrRepo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
-	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
-	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-tg-reread"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error from T-γ re-read failure")
-	}
-	if !strings.Contains(err.Error(), "re-read deposit T-γ") {
-		t.Errorf("expected 're-read deposit T-γ' in message, got: %v", err)
-	}
-}
-
 // findByTxKeyFailOnCallNRepo fails FindDepositByTxKey on the Nth call.
 type findByTxKeyFailOnCallNRepo struct {
 	*mockRepo
@@ -1350,29 +1151,6 @@ func (r *findByTxKeyFailOnCallNRepo) FindDepositByTxKey(ctx context.Context, tx 
 		return nil, false, r.findErr
 	}
 	return r.mockRepo.FindDepositByTxKey(ctx, tx, txKey)
-}
-
-// --- ProcessOne T-γ: re-read returns not-found ---
-func TestProcessOne_TGamma_ReReadNotFound(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		// After T-α commits, delete the deposit to simulate not-found in T-γ
-		repo.mu.Lock()
-		delete(repo.deposits, txKey)
-		repo.mu.Unlock()
-		return lowRiskReport(txKey), nil
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-tg-nf"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error from T-γ re-read not found")
-	}
-	if !strings.Contains(err.Error(), "re-read deposit T-γ") {
-		t.Errorf("expected 're-read deposit T-γ' in message, got: %v", err)
-	}
 }
 
 // --- processKYTAlert: credit error in KytActionCredit path ---
@@ -1686,31 +1464,6 @@ func (t *commitErrCounterTx) Commit() error {
 
 func (t *commitErrCounterTx) Rollback() error {
 	return t.inner.Rollback()
-}
-
-// --- ProcessOne T-γ: final commit error ---
-func TestProcessOne_TGamma_CommitError(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return lowRiskReport(txKey), nil
-	}}
-	// Need T-α commit to succeed but T-γ commit to fail.
-	// commitErr on mockRepo applies to ALL fakeTx, which breaks T-α.
-	// Use a counted commit-fail wrapper.
-	commitFailRepo := &commitFailOnCallNRepo{mockRepo: repo, failOn: 2} // T-α is commit 1, T-γ is commit 2
-	svc := NewService(commitFailRepo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
-	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
-	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-tg-commit"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error from T-γ commit failure")
-	}
-	if !strings.Contains(err.Error(), "commit T-γ") {
-		t.Errorf("expected 'commit T-γ' in message, got: %v", err)
-	}
 }
 
 // commitFailOnCallNRepo wraps mockRepo and fails commit on the Nth call.
@@ -2106,109 +1859,6 @@ func TestProcessOne_TAlpha_CommitError(t *testing.T) {
 	}
 }
 
-// --- ProcessOne T-γ: BeginTx error ---
-func TestProcessOne_TGamma_BeginTxError(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return lowRiskReport(txKey), nil
-	}}
-	// T-α BeginTx succeeds (call 1), T-γ BeginTx fails (call 2)
-	beginTxFailRepo := &beginTxFailAfterNRepo{mockRepo: repo, failAfter: 1}
-	svc := NewService(beginTxFailRepo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
-	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
-	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-tg-btx"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error from T-γ BeginTx failure")
-	}
-	if !strings.Contains(err.Error(), "begin tx T-γ") {
-		t.Errorf("expected 'begin tx T-γ' in message, got: %v", err)
-	}
-}
-
-// --- ProcessOne T-γ: MarkEventDone error for stale deposit ---
-func TestProcessOne_TGamma_StaleDeposit_MarkDoneFails(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	repo.markDoneErr = errors.New("mark done stale boom")
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		// Change deposit status between T-α and T-γ to trigger stale path
-		repo.mu.Lock()
-		if d, ok := repo.deposits[txKey]; ok {
-			d.Status = DepositStatusCredited
-		}
-		repo.mu.Unlock()
-		return lowRiskReport(txKey), nil
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-stale-md"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error when MarkEventDone fails in stale path")
-	}
-}
-
-// --- ProcessOne T-γ: credit error ---
-func TestProcessOne_TGamma_CreditError(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	repo.creditErr = errors.New("credit T-γ boom")
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return lowRiskReport(txKey), nil
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-tg-credit"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error from T-γ credit failure")
-	}
-	if !strings.Contains(err.Error(), "credit deposit T-γ") {
-		t.Errorf("expected 'credit deposit T-γ' in message, got: %v", err)
-	}
-}
-
-// --- ProcessOne T-γ: MarkDepositManualReview error ---
-func TestProcessOne_TGamma_ManualReviewError(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	repo.markMRErr = errors.New("mark MR T-γ boom")
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return highRiskReport(txKey), nil
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-tg-mr"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error from T-γ MarkDepositManualReview failure")
-	}
-	if !strings.Contains(err.Error(), "mark manual review T-γ") {
-		t.Errorf("expected 'mark manual review T-γ' in message, got: %v", err)
-	}
-}
-
-// --- ProcessOne T-γ: MarkEventDone error (after successful credit) ---
-func TestProcessOne_TGamma_MarkEventDoneFails(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	repo.markDoneErr = errors.New("mark done T-γ boom")
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		return lowRiskReport(txKey), nil
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-tg-md"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error from T-γ MarkEventDone failure")
-	}
-}
-
 // --- processKYTAlert: MarkEventDone error in non-KYT_PENDING deposit path ---
 func TestProcessKYTAlert_NonPending_MarkDoneFails(t *testing.T) {
 	repo := newMockRepo()
@@ -2298,46 +1948,6 @@ func TestProcessKYTAlert_MarkDoneFails(t *testing.T) {
 	_, err := svc.ProcessOne(context.Background())
 	if err == nil {
 		t.Fatal("expected error from MarkEventDone failure in KYT alert")
-	}
-}
-
-// --- handleKYTApiFailure: exceeds threshold + MarkEventDone error ---
-func TestHandleKYTApiFailure_ExceedsThreshold_MarkDoneFails(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	repo.markDoneErr = errors.New("mark done kyt api boom")
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
-		return nil, errors.New("API down")
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	svc.kytOrphanMaxRetry = 1
-
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-api-md"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error when MarkEventDone fails in handleKYTApiFailure")
-	}
-}
-
-// --- handleKYTApiFailure: exceeds threshold + commit error ---
-func TestHandleKYTApiFailure_ExceedsThreshold_CommitFails(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
-		return nil, errors.New("API down")
-	}}
-	// T-α commit succeeds (call 1), tx3 commit fails (call 2)
-	commitFailRepo := &commitFailOnCallNRepo{mockRepo: repo, failOn: 2}
-	svc := NewService(commitFailRepo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
-	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
-	svc.SetKYTDeps(kyt, true, 1, 20*time.Minute)
-
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-api-ce"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error when commit fails in handleKYTApiFailure")
 	}
 }
 
@@ -2479,51 +2089,6 @@ func TestScanOneKYTTimeout_Phase3MarkMRError(t *testing.T) {
 	// Error is logged, loop continues
 }
 
-// --- handleKYTApiFailure: exceeds threshold + MarkDepositManualReview error ---
-func TestHandleKYTApiFailure_ExceedsThreshold_MarkMRFails(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	repo.markMRErr = errors.New("mark MR kyt api boom")
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
-		return nil, errors.New("API down")
-	}}
-	svc := newKYTSvc(t, repo, kyt, true)
-	svc.kytOrphanMaxRetry = 1
-
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-api-mr"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error when MarkDepositManualReview fails in handleKYTApiFailure")
-	}
-}
-
-// --- ProcessOne T-γ: stale deposit commit error ---
-func TestProcessOne_TGamma_StaleDeposit_CommitFails(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
-		// Change deposit status to simulate concurrent credit
-		repo.mu.Lock()
-		if d, ok := repo.deposits[txKey]; ok {
-			d.Status = DepositStatusCredited
-		}
-		repo.mu.Unlock()
-		return lowRiskReport(txKey), nil
-	}}
-	// T-α commit succeeds (1), T-γ stale commit fails (2)
-	commitFailRepo := &commitFailOnCallNRepo{mockRepo: repo, failOn: 2}
-	svc := NewService(commitFailRepo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
-	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
-	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-stale-ce"))
-
-	_, err := svc.ProcessOne(context.Background())
-	if err == nil {
-		t.Fatal("expected error from T-γ stale commit failure")
-	}
-}
-
 // S-1: orphan AML alert below retry threshold + IncrementEventAttemptsNoTx fails.
 // Without ErrKYTAPIBackoff wrap the worker would tight-loop on the same event.
 func TestProcessKYTAlert_OrphanIncrementFailureYieldsBackoff(t *testing.T) {
@@ -2588,44 +2153,6 @@ func (r *findAndIncrementErrRepo) IncrementEventAttemptsNoTx(_ context.Context, 
 	return errors.New("increment also failed")
 }
 
-// S-2: handleKYTApiFailure with IncrementEventAttemptsNoTx error must surface an
-// ERROR-level alert so ops can see the deposit is at risk of getting stuck.
-func TestHandleKYTApiFailure_IncrementFailureFiresAlert(t *testing.T) {
-	repo := newMockRepo()
-	repo.owners["0xdest"] = 1
-	incRepo := &incrementErrMockRepo{mockRepo: repo}
-	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
-		return nil, errors.New("safeheron 503")
-	}}
-	alertFn, alerts := newAlertCollector()
-	svc := NewService(incRepo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), alertFn)
-	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
-	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
-	enqueueRaw(t, repo, completedConfirmedPayload("tx-s2-alert"))
-
-	if _, err := svc.ProcessOne(context.Background()); err == nil {
-		t.Fatal("expected error from KYT API failure")
-	}
-
-	got := *alerts
-	if len(got) == 0 {
-		t.Fatal("expected ERROR alert when increment counter fails (S-2)")
-	}
-	found := false
-	for _, a := range got {
-		if a.level == "ERROR" && a.title == "KYT attempts counter unwritable" {
-			found = true
-			if a.fields["txKey"] != "tx-s2-alert" {
-				t.Errorf("alert missing txKey field, got %v", a.fields)
-			}
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected 'KYT attempts counter unwritable' ERROR alert, got %+v", got)
-	}
-}
-
 // =========================================================================
 // ScanAmlPending tests
 // =========================================================================
@@ -2636,7 +2163,7 @@ type amlPendingMockRepo struct {
 	amlPendingDep *DepositRow
 }
 
-func (r *amlPendingMockRepo) LockOneAmlPending(_ context.Context, _ Tx) (*DepositRow, error) {
+func (r *amlPendingMockRepo) LockOneAmlPending(_ context.Context, _ Tx, _ time.Duration) (*DepositRow, error) {
 	if r.amlPendingDep != nil {
 		dep := r.amlPendingDep
 		r.amlPendingDep = nil // return once
@@ -2694,6 +2221,37 @@ func TestScanAmlPending_LowRisk_Credits(t *testing.T) {
 
 	if dep.Status != DepositStatusCredited {
 		t.Errorf("expected CREDITED, got %s", dep.Status)
+	}
+}
+
+// ScanAmlPending: UNTRIGGERED → MANUAL_REVIEW.
+// With T-β removed, UNTRIGGERED deposits (below KYT threshold) never receive AML_KYT_ALERT
+// webhook. ScanAmlPending is the only path that handles them; it must NOT short-circuit via
+// KytActionKeepPending and must drive the deposit to MANUAL_REVIEW.
+func TestScanAmlPending_Untriggered_ManualReview(t *testing.T) {
+	base := newMockRepo()
+	dep := &DepositRow{
+		ID: 33, UserID: 1, SafeheronTxKey: "tx-aml-untrig", Amount: "0.0001", Asset: "ETH",
+		Status: DepositStatusKYTPending,
+	}
+	base.deposits["tx-aml-untrig"] = dep
+	repo := &amlPendingMockRepo{mockRepo: base, amlPendingDep: dep}
+
+	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
+		return &safeheron.KytReportResponse{
+			TxKey:                      txKey,
+			AmlScreeningTriggeredState: "UNTRIGGERED",
+		}, nil
+	}}
+
+	svc := NewService(repo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
+	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
+	svc.SetAMLFirstPollDelay(0) // bypass time guard in unit test
+
+	svc.ScanAmlPending(context.Background())
+
+	if reason, ok := base.manualUpdates[33]; !ok || reason != ReasonKytUntriggered {
+		t.Errorf("expected MANUAL_REVIEW with reason %q, got %v", ReasonKytUntriggered, base.manualUpdates)
 	}
 }
 

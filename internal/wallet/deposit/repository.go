@@ -36,9 +36,9 @@ type Repository interface {
 	MoveToKYTPending(ctx context.Context, tx Tx, depositID int64) error
 	LockOneKYTPendingTimeout(ctx context.Context, tx Tx, threshold time.Duration) (*DepositRow, error)
 	// LockOneAmlPending picks up a KYT_PENDING deposit whose KYT result is still
-	// in-flight (aml_risk_level='PENDING'). Unlike LockOneKYTPendingTimeout, it
-	// applies no time threshold — used by ScanAmlPending to poll every tick.
-	LockOneAmlPending(ctx context.Context, tx Tx) (*DepositRow, error)
+	// in-flight (aml_risk_level='PENDING') and that has been waiting at least
+	// minAge. Pass 0 to skip the time guard (tests / manual backfill).
+	LockOneAmlPending(ctx context.Context, tx Tx, minAge time.Duration) (*DepositRow, error)
 	FindDepositByTxKey(ctx context.Context, tx Tx, txKey string) (*DepositRow, bool, error)
 	IncrementEventAttemptsNoTx(ctx context.Context, eventID int64) error
 
@@ -456,11 +456,12 @@ func (r *DBRepository) LockOneKYTPendingTimeout(ctx context.Context, tx Tx, thre
 	return out, nil
 }
 
-func (r *DBRepository) LockOneAmlPending(ctx context.Context, tx Tx) (*DepositRow, error) {
+func (r *DBRepository) LockOneAmlPending(ctx context.Context, tx Tx, minAge time.Duration) (*DepositRow, error) {
 	// Intentionally does NOT update updated_at: callers that skip (KYT still IN_PROGRESS)
 	// must not reset the 20-min clock used by LockOneKYTPendingTimeout.
-	// Performance note: consider a composite index on (status, aml_risk_level) if the
-	// deposits table grows large.
+	// minAge gates how long a deposit must sit in KYT_PENDING before the safety-net
+	// poll fires. AML_KYT_ALERT webhook typically arrives within ~78s; setting
+	// minAge=5m avoids redundant KYT API calls when the webhook is the primary path.
 	row := asSQLTx(tx).QueryRowContext(ctx,
 		`SELECT id, user_id, COALESCE(safeheron_tx_key, ''),
 		        COALESCE(safeheron_coin_key, ''), amount, asset,
@@ -469,10 +470,13 @@ func (r *DBRepository) LockOneAmlPending(ctx context.Context, tx Tx) (*DepositRo
 		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
 		        status
 		 FROM deposits
-		 WHERE status = 'KYT_PENDING' AND aml_risk_level = 'PENDING'
+		 WHERE status = 'KYT_PENDING'
+		   AND aml_risk_level = 'PENDING'
+		   AND updated_at < NOW() - $1::interval
 		 ORDER BY updated_at ASC
 		 FOR UPDATE SKIP LOCKED
 		 LIMIT 1`,
+		fmt.Sprintf("%d seconds", int(minAge.Seconds())),
 	)
 	out := &DepositRow{}
 	if err := row.Scan(

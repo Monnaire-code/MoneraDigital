@@ -44,16 +44,18 @@ type Service struct {
 	safeheronClient   KYTClient
 	kytOrphanMaxRetry int
 	kytTimeout        time.Duration
+	amlFirstPollDelay time.Duration // min age before safety-net poll fires (default 5m)
 }
 
 // NewService wires the deposit state machine. registry/alertFn may be nil — the
 // Service still routes events but degrades gracefully.
 func NewService(repo Repository, reg ChainsRegistry, alertFn AlertFunc) *Service {
 	return &Service{
-		repo:     repo,
-		registry: reg,
-		alertFn:  alertFn,
-		serialFn: defaultSerialNo,
+		repo:              repo,
+		registry:          reg,
+		alertFn:           alertFn,
+		serialFn:          defaultSerialNo,
+		amlFirstPollDelay: 5 * time.Minute,
 	}
 }
 
@@ -81,13 +83,23 @@ func (s *Service) SetKYTDeps(client KYTClient, enabled bool, orphanMaxRetry int,
 	s.kytTimeout = timeout
 }
 
+// SetAMLFirstPollDelay sets the minimum age a KYT_PENDING deposit must have before
+// ScanAmlPending's safety-net poll fires. AML_KYT_ALERT webhook is the primary path
+// (~78s on mainnet); this delay avoids redundant KYT API calls. Default: 5m.
+func (s *Service) SetAMLFirstPollDelay(d time.Duration) {
+	if d < 0 {
+		d = 5 * time.Minute
+	}
+	s.amlFirstPollDelay = d
+}
+
 // ProcessOne is the KYT-aware deposit state machine entry (SPEC §6.4 + §6.5).
 //
-// Three-transaction structure (v1.5, D-33):
+// Single-transaction structure (v1.6):
 //
-//	T-α: Lock event → parse/route → UPSERT deposit → if needsKYT && kytEnabled: MoveToKYTPending + COMMIT
-//	T-β: KytReport API call (outside any DB transaction)
-//	T-γ: UpdateAMLFields → DecideKYT → credit/MR/keep-pending → MarkEventDone + COMMIT
+//	T-α: Lock event → parse/route → UPSERT deposit → if needsKYT && kytEnabled: MoveToKYTPending + MarkEventDone + COMMIT
+//	     AML_KYT_ALERT webhook (primary, ~78s) or ScanAmlPending 5-min safety-net drives T-γ from here.
+//	     ScanKYTTimeouts 20-min fallback forces MANUAL_REVIEW if neither fires.
 func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 	// ========== T-α START ==========
 	tx1, err := s.repo.BeginTx(ctx)
@@ -323,7 +335,10 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		return true, nil
 	}
 
-	// KYT_ENABLED=true: move to KYT_PENDING, commit T-α
+	// KYT_ENABLED=true: move to KYT_PENDING + mark event done (T-α, single tx).
+	// T-β (immediate KytReport) removed: AML_KYT_ALERT webhook is the primary path
+	// (~78s on mainnet). ScanAmlPending 5-min safety-net and ScanKYTTimeouts 20-min
+	// fallback handle any missed webhooks. No KYT API call here.
 	if err := s.repo.MoveToKYTPending(ctx, tx1, dep.ID); err != nil {
 		if errors.Is(err, ErrDepositNotPending) {
 			log.Printf("[WARN] deposit %d no longer PENDING, skipping KYT (concurrent worker advanced it)", dep.ID)
@@ -338,158 +353,13 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		}
 		return true, fmt.Errorf("move to KYT_PENDING: %w", err)
 	}
+	if err := s.repo.MarkEventDone(ctx, tx1, evt.ID); err != nil {
+		return true, fmt.Errorf("mark event done T-α: %w", err)
+	}
 	if err := tx1.Commit(); err != nil {
 		return true, fmt.Errorf("commit T-α: %w", err)
 	}
 	committed1 = true
-	// ========== T-α END (committed, row lock released) ==========
-
-	// ========== T-β START (no DB transaction) ==========
-	report, kytErr := s.safeheronClient.KytReport(ctx, d.TxKey)
-	if kytErr != nil {
-		return s.handleKYTApiFailure(ctx, evt, dep, kytErr)
-	}
-	// ========== T-β END ==========
-
-	// ========== T-γ START ==========
-	tx2, err := s.repo.BeginTx(ctx)
-	if err != nil {
-		return true, fmt.Errorf("begin tx T-γ: %w", err)
-	}
-	committed2 := false
-	defer func() {
-		if !committed2 {
-			_ = tx2.Rollback()
-		}
-	}()
-
-	if err := s.writeAMLFields(ctx, tx2, dep.ID, report.AmlScreeningTriggeredState, report.AmlList); err != nil {
-		return true, fmt.Errorf("update AML fields: %w", err)
-	}
-
-	// Re-verify deposit is still KYT_PENDING (defense-in-depth for horizontal scaling)
-	freshDep, found, err := s.repo.FindDepositByTxKey(ctx, tx2, dep.SafeheronTxKey)
-	if err != nil || !found {
-		return true, fmt.Errorf("re-read deposit T-γ: found=%v err=%w", found, err)
-	}
-	if freshDep.Status != DepositStatusKYTPending {
-		if err := s.repo.MarkEventDone(ctx, tx2, evt.ID); err != nil {
-			return true, fmt.Errorf("mark event done T-γ stale: %w", err)
-		}
-		if err := tx2.Commit(); err != nil {
-			return true, fmt.Errorf("commit T-γ stale: %w", err)
-		}
-		committed2 = true
-		return true, nil
-	}
-
-	decision := DecideKYT(report.AmlScreeningTriggeredState, report.AmlList, false)
-
-	switch decision.Action {
-	case KytActionCredit:
-		if err := s.creditDepositFromRow(ctx, tx2, freshDep); err != nil {
-			return true, fmt.Errorf("credit deposit T-γ: %w", err)
-		}
-	case KytActionKeepPending:
-		// Stay in KYT_PENDING — only AML fields updated
-	case KytActionManualReview:
-		if err := s.repo.MarkDepositManualReview(ctx, tx2, dep.ID, decision.Reason); err != nil {
-			if err := warnIfTerminalState(err, dep.ID, "MANUAL_REVIEW"); err != nil {
-				return true, fmt.Errorf("mark manual review T-γ: %w", err)
-			}
-		}
-		alerts = append(alerts, alertPayload{
-			level: decision.AlertLevel,
-			title: "KYT manual review",
-			fields: map[string]string{
-				"depositId": fmt.Sprintf("%d", dep.ID),
-				"txKey":     dep.SafeheronTxKey,
-				"riskLevel": decision.RiskLevel,
-				"reason":    decision.Reason,
-			},
-		})
-	}
-
-	if err := s.repo.MarkEventDone(ctx, tx2, evt.ID); err != nil {
-		return true, fmt.Errorf("mark event done T-γ: %w", err)
-	}
-	if err := tx2.Commit(); err != nil {
-		return true, fmt.Errorf("commit T-γ: %w", err)
-	}
-	committed2 = true
-	// ========== T-γ END ==========
-
-	s.fireAlerts(alerts)
-	return true, nil
-}
-
-// handleKYTApiFailure handles T-β KYT API call failure.
-// Returns (processed=true, err) so worker continues draining.
-func (s *Service) handleKYTApiFailure(ctx context.Context, evt *Event, dep *DepositRow, kytErr error) (bool, error) {
-	// localAttempts decouples downstream branching from the DB write; if the
-	// counter write fails the deposit must still progress toward the MR ceiling
-	// rather than retrying forever (S-2).
-	localAttempts := evt.ProcessAttempts + 1
-	log.Printf("KYT API failed: txKey=%s err=%v attempts=%d", dep.SafeheronTxKey, kytErr, localAttempts)
-
-	if err := s.repo.IncrementEventAttemptsNoTx(ctx, evt.ID); err != nil {
-		log.Printf("IncrementEventAttempts failed: %v", err)
-		// S-2: counter unwritable means a permanent Safeheron outage + DB hiccup
-		// would silently keep the deposit in KYT_PENDING. Surface to ops so the
-		// 20-minute scan tier becomes the safety net rather than the only signal.
-		s.fireAlerts([]alertPayload{{
-			level: "ERROR",
-			title: "KYT attempts counter unwritable",
-			fields: map[string]string{
-				"depositId":     fmt.Sprintf("%d", dep.ID),
-				"txKey":         dep.SafeheronTxKey,
-				"localAttempts": fmt.Sprintf("%d", localAttempts),
-				"kytErr":        kytErr.Error(),
-				"incrementErr":  err.Error(),
-			},
-		}})
-	}
-
-	if localAttempts < s.kytOrphanMaxRetry {
-		// Wrap so the worker can yield to its ticker — prevents a tight retry
-		// loop during a Safeheron outage (T10-I-3).
-		return true, fmt.Errorf("%w: %v", ErrKYTAPIBackoff, kytErr)
-	}
-
-	// Exceeded retry limit — force MANUAL_REVIEW
-	tx3, err := s.repo.BeginTx(ctx)
-	if err != nil {
-		return true, fmt.Errorf("begin tx KYT failure: %w", err)
-	}
-	committed3 := false
-	defer func() {
-		if !committed3 {
-			_ = tx3.Rollback()
-		}
-	}()
-
-	if err := s.repo.MarkDepositManualReview(ctx, tx3, dep.ID, ReasonKytApiFailed); err != nil {
-		if err := warnIfTerminalState(err, dep.ID, "MANUAL_REVIEW"); err != nil {
-			return true, fmt.Errorf("mark manual review KYT failure: %w", err)
-		}
-	}
-	if err := s.repo.MarkEventDone(ctx, tx3, evt.ID); err != nil {
-		return true, fmt.Errorf("mark event done KYT failure: %w", err)
-	}
-	if err := tx3.Commit(); err != nil {
-		return true, fmt.Errorf("commit KYT failure: %w", err)
-	}
-	committed3 = true
-
-	s.fireAlerts([]alertPayload{{
-		level: "ERROR",
-		title: "KYT API failed after retries",
-		fields: map[string]string{
-			"depositId": fmt.Sprintf("%d", dep.ID),
-			"txKey":     dep.SafeheronTxKey,
-			"attempts":  fmt.Sprintf("%d", evt.ProcessAttempts+1),
-		},
-	}})
 	return true, nil
 }
 
@@ -595,7 +465,15 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 
 	amlReports := convertAlertReports(alert.AmlList)
 
-	if err := s.writeAMLFields(ctx, tx, dep.ID, alert.AmlScreeningTriggeredState, amlReports); err != nil {
+	// AML_KYT_ALERT webhook omits amlScreeningTriggeredState (Safeheron does not
+	// include it in this event type). The webhook itself implies TRIGGERED — treat
+	// empty as "TRIGGERED" so DecideKYT doesn't default to MANUAL_REVIEW.
+	effectiveState := alert.AmlScreeningTriggeredState
+	if effectiveState == "" {
+		effectiveState = "TRIGGERED"
+	}
+
+	if err := s.writeAMLFields(ctx, tx, dep.ID, effectiveState, amlReports); err != nil {
 		return true, fmt.Errorf("update AML fields for alert: %w", err)
 	}
 
@@ -611,7 +489,7 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 		return true, nil
 	}
 
-	decision := DecideKYT(alert.AmlScreeningTriggeredState, amlReports, false)
+	decision := DecideKYT(effectiveState, amlReports, false)
 
 	var alerts []alertPayload
 	switch decision.Action {
@@ -809,7 +687,7 @@ func (s *Service) scanOneKYTTimeout(ctx context.Context) error {
 		return fmt.Errorf("commit KYT scan phase-1: %w", err)
 	}
 
-	// Phase 2: KYT API call outside any DB transaction (mirrors ProcessOne T-β)
+	// Phase 2: KYT API call outside any DB transaction
 	report, kytErr := s.safeheronClient.KytReport(ctx, txKey)
 	if kytErr != nil {
 		log.Printf("KYT timeout scan API failed: txKey=%s err=%v", txKey, kytErr)
@@ -920,7 +798,7 @@ func (s *Service) scanOneAmlPending(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("begin tx AML scan: %w", err)
 	}
-	dep, err := s.repo.LockOneAmlPending(ctx, tx1)
+	dep, err := s.repo.LockOneAmlPending(ctx, tx1, s.amlFirstPollDelay)
 	if err != nil {
 		_ = tx1.Rollback()
 		return err // ErrNoPending propagates
@@ -1044,10 +922,16 @@ func (s *Service) markKYTPendingManualReviewIfStillPending(ctx context.Context, 
 func convertAlertReports(list []AMLKYTAlertReport) []safeheron.AmlReport {
 	out := make([]safeheron.AmlReport, len(list))
 	for i, r := range list {
+		status := r.Status
+		if status == "" {
+			// AML_KYT_ALERT omits status; the webhook fires only when results are
+			// ready, so treat missing status as COMPLETED for SummarizeRiskLevel.
+			status = "COMPLETED"
+		}
 		out[i] = safeheron.AmlReport{
 			Provider:       r.Provider,
 			Timestamp:      r.Timestamp,
-			Status:         r.Status,
+			Status:         status,
 			RiskLevel:      r.RiskLevel,
 			LastUpdateTime: r.LastUpdateTime,
 			Payload:        r.Payload,

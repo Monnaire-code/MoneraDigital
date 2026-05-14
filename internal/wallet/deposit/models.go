@@ -117,10 +117,10 @@ var ErrNoPending = errors.New("no pending event")
 // hot-looping on the same un-markable row. T7-I-5.
 var ErrMarkErrorFailed = errors.New("mark event error failed; event remains pending")
 
-// ErrKYTAPIBackoff signals that a KYT API call failed but the event is below
-// the orphan retry threshold (event stays PENDING for the next cycle). The
-// worker yields to its ticker so we don't burn Safeheron quota in a tight loop
-// during an upstream outage. T10-I-3.
+// ErrKYTAPIBackoff signals that processing an AML_KYT_ALERT orphan event hit a
+// transient error (DB counter write failure). The worker yields to its ticker on
+// this sentinel so it doesn't tight-loop on the same event between drain cycles.
+// Used exclusively in processKYTAlert orphan paths (T-β was removed in v1.6).
 var ErrKYTAPIBackoff = errors.New("KYT API failed; backing off until next tick")
 
 // ErrDepositTerminalState signals an attempt to overwrite a deposit in a
