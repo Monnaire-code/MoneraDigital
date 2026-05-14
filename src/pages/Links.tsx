@@ -87,16 +87,14 @@ const Links = () => {
           {/* Links */}
           <div className="space-y-4">
             {socialLinks.map((link) => (
-              <a
-                key={link.label}
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`flex items-center gap-4 p-4 rounded-xl text-primary-foreground font-semibold transition-all duration-200 ${link.gradient} shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98]`}
-              >
-                <link.icon className="w-6 h-6" />
-                <span className="flex-1">{link.label}</span>
-              </a>
+          <a
+            href="https://t.me/MoneraDigitalhe/16149"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            Market News
+          </a>
             ))}
           </div>
 
