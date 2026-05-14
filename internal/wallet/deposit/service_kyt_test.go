@@ -2625,3 +2625,101 @@ func TestHandleKYTApiFailure_IncrementFailureFiresAlert(t *testing.T) {
 		t.Errorf("expected 'KYT attempts counter unwritable' ERROR alert, got %+v", got)
 	}
 }
+
+// =========================================================================
+// ScanAmlPending tests
+// =========================================================================
+
+// amlPendingMockRepo overrides LockOneAmlPending to return a configured deposit.
+type amlPendingMockRepo struct {
+	*mockRepo
+	amlPendingDep *DepositRow
+}
+
+func (r *amlPendingMockRepo) LockOneAmlPending(_ context.Context, _ Tx) (*DepositRow, error) {
+	if r.amlPendingDep != nil {
+		dep := r.amlPendingDep
+		r.amlPendingDep = nil // return once
+		return dep, nil
+	}
+	return nil, ErrNoPending
+}
+
+// ScanAmlPending: KYT still IN_PROGRESS → deposit stays KYT_PENDING, no MANUAL_REVIEW
+func TestScanAmlPending_StillPending_KeepsKYTPending(t *testing.T) {
+	base := newMockRepo()
+	dep := &DepositRow{
+		ID: 30, UserID: 1, SafeheronTxKey: "tx-aml-pending", Amount: "0.011", Asset: "ETH",
+		Status: DepositStatusKYTPending,
+	}
+	base.deposits["tx-aml-pending"] = dep
+	repo := &amlPendingMockRepo{mockRepo: base, amlPendingDep: dep}
+
+	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
+		return pendingReport(txKey), nil
+	}}
+
+	svc := NewService(repo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
+	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
+
+	svc.ScanAmlPending(context.Background())
+
+	if dep.Status != DepositStatusKYTPending {
+		t.Errorf("expected KYT_PENDING, got %s (should not mark MR for in-flight KYT)", dep.Status)
+	}
+	if len(base.manualUpdates) != 0 {
+		t.Errorf("expected no MANUAL_REVIEW, got %v", base.manualUpdates)
+	}
+}
+
+// ScanAmlPending: KYT resolved LOW → CREDITED
+func TestScanAmlPending_LowRisk_Credits(t *testing.T) {
+	base := newMockRepo()
+	dep := &DepositRow{
+		ID: 31, UserID: 1, SafeheronTxKey: "tx-aml-low", Amount: "0.011", Asset: "ETH",
+		Status: DepositStatusKYTPending,
+	}
+	base.deposits["tx-aml-low"] = dep
+	repo := &amlPendingMockRepo{mockRepo: base, amlPendingDep: dep}
+
+	kyt := &mockKYTClient{reportFn: func(_ context.Context, txKey string) (*safeheron.KytReportResponse, error) {
+		return lowRiskReport(txKey), nil
+	}}
+
+	svc := NewService(repo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
+	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
+	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
+
+	svc.ScanAmlPending(context.Background())
+
+	if dep.Status != DepositStatusCredited {
+		t.Errorf("expected CREDITED, got %s", dep.Status)
+	}
+}
+
+// ScanAmlPending: KYT API error → no MANUAL_REVIEW, deposit stays KYT_PENDING
+func TestScanAmlPending_APIError_NoAction(t *testing.T) {
+	base := newMockRepo()
+	dep := &DepositRow{
+		ID: 32, UserID: 1, SafeheronTxKey: "tx-aml-err", Amount: "0.011", Asset: "ETH",
+		Status: DepositStatusKYTPending,
+	}
+	base.deposits["tx-aml-err"] = dep
+	repo := &amlPendingMockRepo{mockRepo: base, amlPendingDep: dep}
+
+	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
+		return nil, errors.New("KYT API unreachable")
+	}}
+
+	svc := NewService(repo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), nil)
+	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
+
+	svc.ScanAmlPending(context.Background())
+
+	if dep.Status != DepositStatusKYTPending {
+		t.Errorf("expected KYT_PENDING on API error, got %s", dep.Status)
+	}
+	if len(base.manualUpdates) != 0 {
+		t.Errorf("expected no MANUAL_REVIEW on API error, got %v", base.manualUpdates)
+	}
+}

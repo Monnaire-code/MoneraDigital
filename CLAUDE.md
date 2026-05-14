@@ -98,6 +98,7 @@ Frontend code must match: `data.userId`, `data.accessToken`, etc.
 3. **KISS**: 高内聚低耦合，不过度设计
 4. **Testing**: TDD（先写测试），coverage ≥ 80%
 5. **Isolation**: 改动不影响无关功能
+6. **Goroutine Recover 铁律**: 所有 `go func()` 或 `go obj.Method()` 启动的 goroutine **必须**在函数体开头加 `defer func() { if r := recover(); r != nil { log.Printf(...) } }()` 兜底。goroutine 内 panic 不会被外层捕获，会直接崩整个进程
 
 ---
 
@@ -238,14 +239,17 @@ ENCRYPTION_KEY                  # AES-256-GCM 密钥（64 hex chars）
 ```
 
 ### Safeheron
+
+⚠️ **v1.6 起 4 个 RSA 密钥不再以 PEM 内容形式配置，改为指向 `secrets/` 目录的文件路径**，详见 SPEC §10.1。运维需 `mkdir -p secrets && chmod 0700 secrets`，把 4 个 PEM 放进去并 `chmod 0600 *-private.pem *-priv.pem` / `chmod 0644 *-pub.pem`。`secrets/` 已加入 `.gitignore`。
+
 ```
-SAFEHERON_API_KEY               # API Key（Console 生成）
-SAFEHERON_API_BASE_URL          # https://api.safeheron.com（生产）
-SAFEHERON_PRIVATE_KEY_PEM       # 客户端 RSA 私钥
-SAFEHERON_PLATFORM_PUBLIC_KEY_PEM  # Safeheron 平台公钥
-SAFEHERON_WEBHOOK_PUBLIC_KEY_PEM   # Webhook 验签公钥
-SAFEHERON_WEBHOOK_PRIVATE_KEY_PEM  # Webhook 解密私钥
-SAFEHERON_WEBHOOK_ALLOWED_IPS      # Webhook 源 IP 白名单（逗号分隔）
+SAFEHERON_API_KEY                       # API Key（Console 生成）
+SAFEHERON_API_BASE_URL                  # https://api.safeheron.com（生产）
+SAFEHERON_PRIVATE_KEY_PATH              # 客户端 RSA 私钥文件路径（0600）
+SAFEHERON_PLATFORM_PUBLIC_KEY_PATH      # Safeheron 平台公钥文件路径（0644）
+SAFEHERON_WEBHOOK_PUBLIC_KEY_PATH       # Webhook 验签公钥文件路径（0644）
+SAFEHERON_WEBHOOK_PRIVATE_KEY_PATH      # Webhook 解密私钥文件路径（0600）
+SAFEHERON_WEBHOOK_ALLOWED_IPS           # Webhook 源 IP 白名单（逗号分隔）
 ```
 
 ### KYT / Alert

@@ -36,7 +36,8 @@ const (
 )
 
 // JournalBizTypeDeposit identifies deposit ledger rows in account_journal.
-const JournalBizTypeDeposit = 10
+// account_journal.biz_type is VARCHAR(32), so this must be a string.
+const JournalBizTypeDeposit = "10"
 
 // Event mirrors a safeheron_webhook_events row.
 type Event struct {

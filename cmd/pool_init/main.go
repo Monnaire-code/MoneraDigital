@@ -47,13 +47,13 @@ func main() {
 	}
 
 	client, err := safeheron.NewClient(safeheron.Config{
-		BaseURL:              viper.GetString("SAFEHERON_API_BASE_URL"),
-		APIKey:               viper.GetString("SAFEHERON_API_KEY"),
-		PrivateKeyPEM:        viper.GetString("SAFEHERON_PRIVATE_KEY_PEM"),
-		PlatformPublicKeyPEM: viper.GetString("SAFEHERON_PLATFORM_PUBLIC_KEY_PEM"),
-		WebhookPublicKeyPEM:  viper.GetString("SAFEHERON_WEBHOOK_PUBLIC_KEY_PEM"),
-		WebhookPrivateKeyPEM: viper.GetString("SAFEHERON_WEBHOOK_PRIVATE_KEY_PEM"),
-		RequestTimeoutMS:     30000,
+		BaseURL:               viper.GetString("SAFEHERON_API_BASE_URL"),
+		APIKey:                viper.GetString("SAFEHERON_API_KEY"),
+		PrivateKeyPath:        viper.GetString("SAFEHERON_PRIVATE_KEY_PATH"),
+		PlatformPublicKeyPath: viper.GetString("SAFEHERON_PLATFORM_PUBLIC_KEY_PATH"),
+		WebhookPublicKeyPath:  viper.GetString("SAFEHERON_WEBHOOK_PUBLIC_KEY_PATH"),
+		WebhookPrivateKeyPath: viper.GetString("SAFEHERON_WEBHOOK_PRIVATE_KEY_PATH"),
+		RequestTimeoutMS:      30000,
 	})
 	if err != nil {
 		log.Fatalf("safeheron client init: %v", err)

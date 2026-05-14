@@ -1,13 +1,15 @@
 package safeheron
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -69,12 +71,40 @@ func newTestClient(acct accountAPIClient, wh webhookConverter) *Client {
 	return &Client{account: acct, webhookConv: wh}
 }
 
+// --- file-based PEM fixtures (v1.6) ---
+
+// writePEMFile drops a placeholder PEM into dir with the given perm and
+// returns the absolute path. NewClient only stats the file; the SDK reads it
+// lazily on the first signed request, which never happens in unit tests.
+func writePEMFile(t *testing.T, dir, name string, perm os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	body := fmt.Sprintf("-----BEGIN TEST KEY-----\n%s\n-----END TEST KEY-----\n", name)
+	if err := os.WriteFile(path, []byte(body), perm); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}
+
+// fixtureKeys writes the four PEM files NewClient validates and returns their
+// paths in (priv, plat, whPub, whPriv) order.
+func fixtureKeys(t *testing.T) (string, string, string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	priv := writePEMFile(t, dir, "private.pem", 0o600)
+	plat := writePEMFile(t, dir, "platform.pem", 0o644)
+	whPub := writePEMFile(t, dir, "webhook-pub.pem", 0o644)
+	whPriv := writePEMFile(t, dir, "webhook-priv.pem", 0o600)
+	return priv, plat, whPub, whPriv
+}
+
 // --- NewClient validation tests ---
 
 func TestNewClient_MissingAPIKey(t *testing.T) {
+	priv, plat, _, _ := fixtureKeys(t)
 	_, err := NewClient(Config{
-		PrivateKeyPEM:        "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----",
-		PlatformPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
+		PrivateKeyPath:        priv,
+		PlatformPublicKeyPath: plat,
 	})
 	if err == nil || !strings.Contains(err.Error(), "APIKey") {
 		t.Fatalf("expected APIKey error, got: %v", err)
@@ -82,85 +112,366 @@ func TestNewClient_MissingAPIKey(t *testing.T) {
 }
 
 func TestNewClient_MissingPrivateKey(t *testing.T) {
+	_, plat, _, _ := fixtureKeys(t)
 	_, err := NewClient(Config{
-		APIKey:               "test-key",
-		PlatformPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
+		APIKey:                "test-key",
+		PlatformPublicKeyPath: plat,
 	})
-	if err == nil || !strings.Contains(err.Error(), "PrivateKeyPEM") {
-		t.Fatalf("expected PrivateKeyPEM error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "PrivateKeyPath") || !strings.Contains(err.Error(), "path is required") {
+		t.Fatalf("expected PrivateKeyPath required error, got: %v", err)
 	}
 }
 
 func TestNewClient_MissingPlatformKey(t *testing.T) {
+	priv, _, _, _ := fixtureKeys(t)
 	_, err := NewClient(Config{
-		APIKey:        "test-key",
-		PrivateKeyPEM: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----",
+		APIKey:         "test-key",
+		PrivateKeyPath: priv,
 	})
-	if err == nil || !strings.Contains(err.Error(), "PlatformPublicKeyPEM") {
-		t.Fatalf("expected PlatformPublicKeyPEM error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "PlatformPublicKeyPath") || !strings.Contains(err.Error(), "path is required") {
+		t.Fatalf("expected PlatformPublicKeyPath required error, got: %v", err)
 	}
 }
 
-func TestNewClient_TempFilesCreatedAndCleaned(t *testing.T) {
+func TestNewClient_FilePathsHappyPath(t *testing.T) {
+	priv, plat, whPub, whPriv := fixtureKeys(t)
 	c, err := NewClient(Config{
-		BaseURL:              "https://api.safeheron.vip",
-		APIKey:               "test-api-key",
-		PrivateKeyPEM:        "-----BEGIN PRIVATE KEY-----\nMIIEvgI=\n-----END PRIVATE KEY-----",
-		PlatformPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMIIBIjA=\n-----END PUBLIC KEY-----",
-		RequestTimeoutMS:     30000,
+		BaseURL:               "https://api.safeheron.vip",
+		APIKey:                "test-api-key",
+		PrivateKeyPath:        priv,
+		PlatformPublicKeyPath: plat,
+		WebhookPublicKeyPath:  whPub,
+		WebhookPrivateKeyPath: whPriv,
+		RequestTimeoutMS:      30000,
 	})
 	if err != nil {
-		t.Fatalf("NewClient failed: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
-	if len(c.tempFiles) != 2 {
-		t.Fatalf("expected 2 temp files, got %d", len(c.tempFiles))
+	if c.account == nil || c.compliance == nil || c.transaction == nil {
+		t.Fatal("expected all SDK API clients to be wired")
 	}
-	for _, f := range c.tempFiles {
-		info, err := os.Stat(f)
-		if err != nil {
-			t.Fatalf("temp file %s missing: %v", f, err)
-		}
-		if info.Mode().Perm() != 0600 {
-			t.Fatalf("wrong permissions on %s: %v", f, info.Mode().Perm())
-		}
-		if !strings.HasPrefix(filepath.Base(f), "safeheron-") {
-			t.Fatalf("unexpected filename: %s", f)
-		}
-	}
-
-	saved := make([]string, len(c.tempFiles))
-	copy(saved, c.tempFiles)
-	tempDir := c.tempDir
-	if tempDir == "" {
-		t.Fatal("expected tempDir to be set (SEC-2)")
-	}
-	c.Close()
-	for _, f := range saved {
-		if _, err := os.Stat(f); !os.IsNotExist(err) {
-			t.Fatalf("temp file %s not cleaned up", f)
-		}
-	}
-	if c.tempFiles != nil {
-		t.Fatal("tempFiles should be nil after Close")
-	}
-	// SEC-2: process tempDir must also be removed so PEM data does not survive
-	// process exit even if a future code path forgets to track a file.
-	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
-		t.Fatalf("tempDir %s should be removed after Close (SEC-2)", tempDir)
-	}
-	if c.tempDir != "" {
-		t.Fatal("tempDir field should be cleared after Close")
+	if c.webhookConv == nil {
+		t.Fatal("expected webhook converter to be configured")
 	}
 }
 
-// SEC-2: Close() must be idempotent so the signal handler can call it after
-// the process already cleaned up via defer (or vice versa).
-func TestClient_CloseIsIdempotent(t *testing.T) {
+func TestNewClient_PrivateKeyPathMissing(t *testing.T) {
+	_, plat, _, _ := fixtureKeys(t)
+	_, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        "",
+		PlatformPublicKeyPath: plat,
+	})
+	if err == nil || !strings.Contains(err.Error(), "path is required") {
+		t.Fatalf("expected path is required error, got: %v", err)
+	}
+}
+
+func TestNewClient_PrivateKeyFileNotFound(t *testing.T) {
+	_, plat, _, _ := fixtureKeys(t)
+	bogus := filepath.Join(t.TempDir(), "does-not-exist.pem")
+	_, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        bogus,
+		PlatformPublicKeyPath: plat,
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent private key file")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected error to wrap os.ErrNotExist, got: %v", err)
+	}
+}
+
+func TestNewClient_PrivateKeyPathIsNotRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	// Named pipe (FIFO) is a portable non-regular file under Linux/macOS;
+	// exercises the IsRegular() guard in validateKeyFile that catches
+	// device/socket/pipe types missed by the dir/symlink checks.
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo not supported: %v", err)
+	}
+	plat := writePEMFile(t, dir, "platform.pem", 0o644)
+
+	_, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        fifo,
+		PlatformPublicKeyPath: plat,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("expected not-regular-file error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "PrivateKeyPath") {
+		t.Fatalf("expected error to identify PrivateKeyPath, got: %v", err)
+	}
+}
+
+func TestNewClient_PrivateKeyPathIsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := writePEMFile(t, dir, "real-private.pem", 0o600)
+	link := filepath.Join(dir, "private.pem")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+	plat := writePEMFile(t, dir, "platform.pem", 0o644)
+
+	_, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        link,
+		PlatformPublicKeyPath: plat,
+	})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink rejection, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "PrivateKeyPath") {
+		t.Fatalf("expected error to identify PrivateKeyPath, got: %v", err)
+	}
+}
+
+func TestNewClient_PrivateKeyPathIsDir(t *testing.T) {
+	dir := t.TempDir()
+	plat := writePEMFile(t, dir, "platform.pem", 0o644)
+	_, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        dir, // pointing at a directory, not a file
+		PlatformPublicKeyPath: plat,
+	})
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("expected 'is a directory' error, got: %v", err)
+	}
+}
+
+func TestNewClient_WithWebhookKeys(t *testing.T) {
+	priv, plat, whPub, whPriv := fixtureKeys(t)
 	c, err := NewClient(Config{
-		BaseURL:              "https://api.safeheron.vip",
-		APIKey:               "test-api-key",
-		PrivateKeyPEM:        "-----BEGIN PRIVATE KEY-----\nA=\n-----END PRIVATE KEY-----",
-		PlatformPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nB=\n-----END PUBLIC KEY-----",
+		BaseURL:               "https://api.safeheron.vip",
+		APIKey:                "test-api-key",
+		PrivateKeyPath:        priv,
+		PlatformPublicKeyPath: plat,
+		WebhookPublicKeyPath:  whPub,
+		WebhookPrivateKeyPath: whPriv,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer c.Close()
+	if c.webhookConv == nil {
+		t.Fatal("expected webhook converter to be wired when both webhook paths are set")
+	}
+}
+
+func TestNewClient_WebhookKeysMustBeBothOrNeither(t *testing.T) {
+	priv, plat, whPub, whPriv := fixtureKeys(t)
+
+	cases := []struct {
+		name     string
+		pubPath  string
+		privPath string
+	}{
+		{"public only", whPub, ""},
+		{"private only", "", whPriv},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewClient(Config{
+				APIKey:                "test-key",
+				PrivateKeyPath:        priv,
+				PlatformPublicKeyPath: plat,
+				WebhookPublicKeyPath:  tc.pubPath,
+				WebhookPrivateKeyPath: tc.privPath,
+			})
+			if err == nil {
+				t.Fatal("expected error for partial webhook config")
+			}
+			msg := err.Error()
+			// Must use the "both ... must be set, or neither" wording from §10.1
+			// AND name both fields so operators can grep the log for either env.
+			if !strings.Contains(msg, "both") {
+				t.Fatalf("expected message to contain 'both', got: %v", err)
+			}
+			if !strings.Contains(msg, "WebhookPublicKeyPath") || !strings.Contains(msg, "WebhookPrivateKeyPath") {
+				t.Fatalf("expected message to name both webhook fields, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewClient_PermissionWarningEmittedButNotBlocking(t *testing.T) {
+	dir := t.TempDir()
+	priv := writePEMFile(t, dir, "private.pem", 0o644) // wider than recommended 0600
+	plat := writePEMFile(t, dir, "platform.pem", 0o644)
+
+	var buf bytes.Buffer
+	prevOut := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	}()
+
+	c, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        priv,
+		PlatformPublicKeyPath: plat,
+	})
+	if err != nil {
+		t.Fatalf("NewClient should not block on wider perms, got: %v", err)
+	}
+	defer c.Close()
+
+	logged := buf.String()
+	if !strings.Contains(logged, "wider than recommended") {
+		t.Fatalf("expected permission warning in log, got: %q", logged)
+	}
+	if !strings.Contains(logged, "PrivateKeyPath") {
+		t.Fatalf("expected warning to identify the field name, got: %q", logged)
+	}
+}
+
+func TestNewClient_WebhookPublicKeyFileMissing(t *testing.T) {
+	priv, plat, _, whPriv := fixtureKeys(t)
+	bogus := filepath.Join(t.TempDir(), "missing-webhook-pub.pem")
+	_, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        priv,
+		PlatformPublicKeyPath: plat,
+		WebhookPublicKeyPath:  bogus,
+		WebhookPrivateKeyPath: whPriv,
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent webhook public key file")
+	}
+	if !strings.Contains(err.Error(), "WebhookPublicKeyPath") {
+		t.Fatalf("expected error to identify WebhookPublicKeyPath, got: %v", err)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected error to wrap os.ErrNotExist, got: %v", err)
+	}
+}
+
+func TestNewClient_WebhookPrivateKeyFileMissing(t *testing.T) {
+	priv, plat, whPub, _ := fixtureKeys(t)
+	bogus := filepath.Join(t.TempDir(), "missing-webhook-priv.pem")
+	_, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        priv,
+		PlatformPublicKeyPath: plat,
+		WebhookPublicKeyPath:  whPub,
+		WebhookPrivateKeyPath: bogus,
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent webhook private key file")
+	}
+	if !strings.Contains(err.Error(), "WebhookPrivateKeyPath") {
+		t.Fatalf("expected error to identify WebhookPrivateKeyPath, got: %v", err)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected error to wrap os.ErrNotExist, got: %v", err)
+	}
+}
+
+func TestNewClient_WebhookPublicKeyPathIsDir(t *testing.T) {
+	priv, plat, _, whPriv := fixtureKeys(t)
+	dir := t.TempDir()
+	_, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        priv,
+		PlatformPublicKeyPath: plat,
+		WebhookPublicKeyPath:  dir,
+		WebhookPrivateKeyPath: whPriv,
+	})
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("expected webhook public key 'is a directory' error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "WebhookPublicKeyPath") {
+		t.Fatalf("expected error to identify WebhookPublicKeyPath, got: %v", err)
+	}
+}
+
+func TestNewClient_WebhookPrivateKeyPathIsDir(t *testing.T) {
+	priv, plat, whPub, _ := fixtureKeys(t)
+	dir := t.TempDir()
+	_, err := NewClient(Config{
+		APIKey:                "test-key",
+		PrivateKeyPath:        priv,
+		PlatformPublicKeyPath: plat,
+		WebhookPublicKeyPath:  whPub,
+		WebhookPrivateKeyPath: dir,
+	})
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("expected webhook private key 'is a directory' error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "WebhookPrivateKeyPath") {
+		t.Fatalf("expected error to identify WebhookPrivateKeyPath, got: %v", err)
+	}
+}
+
+// Locks the WARN/no-WARN matrix for validateKeyFile's permission mask. The
+// rule is "warn when actual has any bit beyond recommended" — stricter perms
+// (e.g. 0600 file with 0644 recommended) must NOT warn, looser perms must.
+// If someone replaces actual&^recommendedPerm with actual != recommendedPerm
+// or actual > recommendedPerm, this matrix catches it.
+func TestValidateKeyFile_PermissionMaskMatrix(t *testing.T) {
+	cases := []struct {
+		name        string
+		recommended os.FileMode
+		actual      os.FileMode
+		wantWarn    bool
+	}{
+		{"private exact match no warn", 0o600, 0o600, false},
+		{"private stricter no warn", 0o600, 0o400, false},
+		{"private group-read warns", 0o600, 0o640, true},
+		{"private world-read warns", 0o600, 0o644, true},
+		{"public exact match no warn", 0o644, 0o644, false},
+		{"public stricter no warn", 0o644, 0o600, false},
+		{"public group-write warns", 0o644, 0o664, true},
+		{"public exec bit warns", 0o644, 0o755, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writePEMFile(t, t.TempDir(), "key.pem", tc.actual)
+			// writePEMFile honours the mode arg, but umask can mask it; force
+			// it explicitly so the assertion is deterministic.
+			if err := os.Chmod(path, tc.actual); err != nil {
+				t.Fatalf("chmod: %v", err)
+			}
+
+			var buf bytes.Buffer
+			prevOut := log.Writer()
+			prevFlags := log.Flags()
+			log.SetOutput(&buf)
+			log.SetFlags(0)
+			defer func() {
+				log.SetOutput(prevOut)
+				log.SetFlags(prevFlags)
+			}()
+
+			if err := validateKeyFile(path, "TestField", tc.recommended); err != nil {
+				t.Fatalf("validateKeyFile must not return error for valid file: %v", err)
+			}
+
+			gotWarn := strings.Contains(buf.String(), "wider than recommended")
+			if gotWarn != tc.wantWarn {
+				t.Fatalf("warn=%v want=%v (recommended=%#o actual=%#o), log=%q",
+					gotWarn, tc.wantWarn, tc.recommended, tc.actual, buf.String())
+			}
+		})
+	}
+}
+
+// Close() is retained as a no-op for SIGTERM handlers and deferred cleanup;
+// it must remain idempotent so callers can fire it from multiple paths.
+func TestClient_CloseIsIdempotent(t *testing.T) {
+	priv, plat, _, _ := fixtureKeys(t)
+	c, err := NewClient(Config{
+		APIKey:                "test-api-key",
+		PrivateKeyPath:        priv,
+		PlatformPublicKeyPath: plat,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -170,39 +481,6 @@ func TestClient_CloseIsIdempotent(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Fatalf("second Close must not error: %v", err)
-	}
-}
-
-func TestNewClient_WithWebhookKeys(t *testing.T) {
-	c, err := NewClient(Config{
-		BaseURL:              "https://api.safeheron.vip",
-		APIKey:               "test-api-key",
-		PrivateKeyPEM:        "-----BEGIN PRIVATE KEY-----\nMIIEvgI=\n-----END PRIVATE KEY-----",
-		PlatformPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMIIBIjA=\n-----END PUBLIC KEY-----",
-		WebhookPublicKeyPEM:  "-----BEGIN PUBLIC KEY-----\nWHPUB=\n-----END PUBLIC KEY-----",
-		WebhookPrivateKeyPEM: "-----BEGIN PRIVATE KEY-----\nWHPRIV=\n-----END PRIVATE KEY-----",
-	})
-	if err != nil {
-		t.Fatalf("NewClient failed: %v", err)
-	}
-	defer c.Close()
-	if len(c.tempFiles) != 4 {
-		t.Fatalf("expected 4 temp files, got %d", len(c.tempFiles))
-	}
-}
-
-func TestNewClient_TempFileWriteFailure(t *testing.T) {
-	orig := os.Getenv("TMPDIR")
-	os.Setenv("TMPDIR", "/nonexistent-path-safeheron-test")
-	defer os.Setenv("TMPDIR", orig)
-
-	_, err := NewClient(Config{
-		APIKey:               "test-key",
-		PrivateKeyPEM:        "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----",
-		PlatformPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
-	})
-	if err == nil {
-		t.Fatal("expected error when temp dir is invalid")
 	}
 }
 
@@ -488,65 +766,6 @@ func TestListAccountCoin_EmptyResponse(t *testing.T) {
 	}
 }
 
-func TestNewClient_PartialWebhookKeyRejectsConfig(t *testing.T) {
-	privPEM := "-----BEGIN PRIVATE KEY-----\nMIIEvgI=\n-----END PRIVATE KEY-----"
-	pubPEM := "-----BEGIN PUBLIC KEY-----\nMIIBIjA=\n-----END PUBLIC KEY-----"
-
-	_, err := NewClient(Config{
-		APIKey:               "test-key",
-		PrivateKeyPEM:        privPEM,
-		PlatformPublicKeyPEM: pubPEM,
-		WebhookPublicKeyPEM:  pubPEM,
-	})
-	if err == nil || !strings.Contains(err.Error(), "both") {
-		t.Fatalf("expected partial webhook key error, got: %v", err)
-	}
-
-	_, err = NewClient(Config{
-		APIKey:               "test-key",
-		PrivateKeyPEM:        privPEM,
-		PlatformPublicKeyPEM: pubPEM,
-		WebhookPrivateKeyPEM: privPEM,
-	})
-	if err == nil || !strings.Contains(err.Error(), "both") {
-		t.Fatalf("expected partial webhook key error, got: %v", err)
-	}
-}
-
-func TestNewClient_WebhookPubKeyWriteFailure(t *testing.T) {
-	privPEM := "-----BEGIN PRIVATE KEY-----\nMIIEvgI=\n-----END PRIVATE KEY-----"
-	pubPEM := "-----BEGIN PUBLIC KEY-----\nMIIBIjA=\n-----END PUBLIC KEY-----"
-
-	orig := os.Getenv("TMPDIR")
-
-	c, err := NewClient(Config{
-		APIKey:               "test-key",
-		PrivateKeyPEM:        privPEM,
-		PlatformPublicKeyPEM: pubPEM,
-	})
-	if err != nil {
-		t.Fatalf("base NewClient failed: %v", err)
-	}
-	c.Close()
-
-	os.Setenv("TMPDIR", "/nonexistent-webhook-test")
-	defer os.Setenv("TMPDIR", orig)
-
-	_, err = NewClient(Config{
-		APIKey:               "test-key",
-		PrivateKeyPEM:        privPEM,
-		PlatformPublicKeyPEM: pubPEM,
-		WebhookPublicKeyPEM:  pubPEM,
-		WebhookPrivateKeyPEM: privPEM,
-	})
-	if err == nil {
-		t.Fatal("expected error when webhook PEM temp dir is invalid")
-	}
-	if !strings.Contains(err.Error(), "webhook") {
-		t.Fatalf("expected webhook error, got: %v", err)
-	}
-}
-
 // --- WebhookConvert tests ---
 
 func TestWebhookConvert_NotConfigured(t *testing.T) {
@@ -620,56 +839,6 @@ func TestWebhookConvert_InvalidEventJSON(t *testing.T) {
 	_, err := c.WebhookConvert([]byte(body))
 	if err == nil || !strings.Contains(err.Error(), "parse event") {
 		t.Fatalf("expected parse event error, got: %v", err)
-	}
-}
-
-// --- Helper function tests ---
-
-func TestWriteTempPEM(t *testing.T) {
-	dir := t.TempDir()
-	content := "-----BEGIN TEST-----\ndata\n-----END TEST-----"
-	path, err := writeTempPEM(dir, "test", content)
-	if err != nil {
-		t.Fatalf("writeTempPEM failed: %v", err)
-	}
-	defer os.Remove(path)
-
-	got, _ := os.ReadFile(path)
-	if string(got) != content {
-		t.Fatalf("content mismatch: got %q", string(got))
-	}
-	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("wrong permissions: %v", info.Mode().Perm())
-	}
-}
-
-func TestCleanupFiles(t *testing.T) {
-	dir := t.TempDir()
-	f1, _ := writeTempPEM(dir, "cleanup1", "test1")
-	f2, _ := writeTempPEM(dir, "cleanup2", "test2")
-	cleanupFiles([]string{f1, f2})
-	for _, f := range []string{f1, f2} {
-		if _, err := os.Stat(f); !os.IsNotExist(err) {
-			t.Fatalf("file %s should have been removed", f)
-		}
-	}
-}
-
-func TestCleanupFiles_NonexistentPath(t *testing.T) {
-	cleanupFiles([]string{"/nonexistent/file.pem"})
-}
-
-func TestClose_Idempotent(t *testing.T) {
-	c, _ := NewClient(Config{
-		BaseURL:              "https://api.safeheron.vip",
-		APIKey:               "test-api-key",
-		PrivateKeyPEM:        "-----BEGIN PRIVATE KEY-----\nMIIEvgI=\n-----END PRIVATE KEY-----",
-		PlatformPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMIIBIjA=\n-----END PUBLIC KEY-----",
-	})
-	c.Close()
-	if err := c.Close(); err != nil {
-		t.Fatalf("second Close should be safe: %v", err)
 	}
 }
 
@@ -977,7 +1146,6 @@ func TestCreateTransaction_EmptyNote(t *testing.T) {
 func TestGetTransaction_EmptyFields(t *testing.T) {
 	mock := &mockTransactionAPI{
 		oneTxFn: func(_ api.OneTransactionsRequest, resp *api.OneTransactionsResponse) error {
-			// SDK returns a response with all fields empty/zero
 			resp.TxKey = "tx-empty"
 			return nil
 		},
@@ -990,23 +1158,11 @@ func TestGetTransaction_EmptyFields(t *testing.T) {
 	if detail.TxKey != "tx-empty" {
 		t.Fatalf("expected tx-empty, got %s", detail.TxKey)
 	}
-	if detail.TxHash != "" {
-		t.Fatalf("expected empty TxHash, got %s", detail.TxHash)
+	if detail.TxHash != "" || detail.CoinKey != "" || detail.TxAmount != "" {
+		t.Fatalf("expected empty optional fields, got: %+v", detail)
 	}
-	if detail.CoinKey != "" {
-		t.Fatalf("expected empty CoinKey, got %s", detail.CoinKey)
-	}
-	if detail.TxAmount != "" {
-		t.Fatalf("expected empty TxAmount, got %s", detail.TxAmount)
-	}
-	if detail.TransactionStatus != "" {
-		t.Fatalf("expected empty TransactionStatus, got %s", detail.TransactionStatus)
-	}
-	if detail.SourceAddress != "" {
-		t.Fatalf("expected empty SourceAddress, got %s", detail.SourceAddress)
-	}
-	if detail.DestinationAddress != "" {
-		t.Fatalf("expected empty DestinationAddress, got %s", detail.DestinationAddress)
+	if detail.TransactionStatus != "" || detail.SourceAddress != "" || detail.DestinationAddress != "" {
+		t.Fatalf("expected empty status/addresses, got: %+v", detail)
 	}
 }
 
@@ -1057,119 +1213,8 @@ func TestKytReport_NilPayload(t *testing.T) {
 	if len(resp.AmlList) != 1 {
 		t.Fatalf("expected 1 AmlReport, got %d", len(resp.AmlList))
 	}
-	// json.Marshal(nil) returns "null"
 	if string(resp.AmlList[0].Payload) != "null" {
 		t.Fatalf("expected null Payload, got %s", string(resp.AmlList[0].Payload))
-	}
-}
-
-// --- NewClient: selective write failure coverage ---
-//
-// These tests use a goroutine that busy-waits for N files to appear in a
-// custom TMPDIR, then chmod 0555 the directory so the (N+1)-th
-// os.CreateTemp call inside NewClient fails with "permission denied".
-// The Chmod+WriteString+Close work inside writeTempPEM between CreateTemp
-// calls provides enough time for the watcher goroutine to act reliably.
-
-// lockDirAfterNFiles spins until at least n files exist in dir, then
-// removes write permission so subsequent os.CreateTemp calls fail.
-func lockDirAfterNFiles(dir string, n int, locked *atomic.Bool) {
-	for {
-		entries, _ := os.ReadDir(dir)
-		if len(entries) >= n && !locked.Load() {
-			os.Chmod(dir, 0555)
-			locked.Store(true)
-			return
-		}
-	}
-}
-
-func TestNewClient_PlatformKeyWriteFailure_Cleanup(t *testing.T) {
-	// Private key write succeeds (1 file), platform key write fails.
-	// Exercises lines 73-76: cleanupFiles(tempFiles) + return.
-	//
-	// The goroutine must lock the directory between the first and second
-	// writeTempPEM calls. This is a tight race (single Chmod+WriteString+Close
-	// gap), so we retry a few times before giving up.
-	orig := os.Getenv("TMPDIR")
-	defer os.Setenv("TMPDIR", orig)
-
-	for range 5 {
-		os.Setenv("TMPDIR", orig) // restore before MkdirTemp
-		dir, err := os.MkdirTemp("", "platform-fail-")
-		if err != nil {
-			t.Fatalf("mkdtemp: %v", err)
-		}
-
-		var locked atomic.Bool
-		go lockDirAfterNFiles(dir, 1, &locked)
-
-		os.Setenv("TMPDIR", dir)
-		c, err := NewClient(Config{
-			APIKey:               "test-key",
-			PrivateKeyPEM:        "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----",
-			PlatformPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
-		})
-
-		os.Chmod(dir, 0755)
-		os.RemoveAll(dir)
-
-		if err == nil {
-			// Race lost: both writes completed before chmod. Clean up and retry.
-			c.Close()
-			continue
-		}
-		if !strings.Contains(err.Error(), "platform public key") {
-			t.Fatalf("expected 'platform public key' error, got: %v", err)
-		}
-		return // success
-	}
-	t.Skip("could not win the race after 5 attempts (platform key write failure)")
-}
-
-// SEC-2 refactor note: TestNewClient_WebhookPubKeyWriteFailure_Cleanup and
-// TestNewClient_WebhookPrivKeyWriteFailure_Cleanup were removed alongside the
-// switch to a process-owned tempDir. Their lockDirAfterNFiles trick chmod-ed
-// the OUTER tmp dir after N entries existed; the new layout creates a single
-// safeheron-* subdir and writes key files INSIDE it, so the race never fires
-// and the chmod no longer affects writes. Cleanup is now dominated by the
-// unconditional `defer os.RemoveAll(tempDir)` exercised by
-// TestClient_CloseIsIdempotent and TestNewClient_TempFilesCreatedAndCleaned.
-
-// --- writeTempPEM edge cases ---
-
-func TestWriteTempPEM_CreateTempFailure(t *testing.T) {
-	_, err := writeTempPEM("/nonexistent-dir-for-createtemp-test", "test", "content")
-	if err == nil {
-		t.Fatal("expected error when dir is invalid")
-	}
-}
-
-func TestWriteTempPEM_ContentPreserved(t *testing.T) {
-	// Verify multi-line PEM content with special characters is preserved exactly.
-	dir := t.TempDir()
-	content := "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQ+/=\nmore+data==\n-----END RSA PRIVATE KEY-----"
-	path, err := writeTempPEM(dir, "multiline", content)
-	if err != nil {
-		t.Fatalf("writeTempPEM failed: %v", err)
-	}
-	defer os.Remove(path)
-
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read temp file: %v", err)
-	}
-	if string(got) != content {
-		t.Fatalf("content mismatch:\nwant: %q\ngot:  %q", content, string(got))
-	}
-}
-
-func TestCleanupFiles_MixedExistentAndNonexistent(t *testing.T) {
-	dir := t.TempDir()
-	f1, _ := writeTempPEM(dir, "mixed1", "test")
-	cleanupFiles([]string{f1, "/nonexistent/mixed2.pem", f1})
-	if _, err := os.Stat(f1); !os.IsNotExist(err) {
-		t.Fatalf("file %s should have been removed", f1)
 	}
 }
 
@@ -1181,11 +1226,11 @@ func TestIntegration_CreateWithdrawal(t *testing.T) {
 	}
 
 	cfg := Config{
-		BaseURL:              os.Getenv("SAFEHERON_API_BASE_URL"),
-		APIKey:               os.Getenv("SAFEHERON_API_KEY"),
-		PrivateKeyPEM:        os.Getenv("SAFEHERON_PRIVATE_KEY_PEM"),
-		PlatformPublicKeyPEM: os.Getenv("SAFEHERON_PLATFORM_PUBLIC_KEY_PEM"),
-		RequestTimeoutMS:     30000,
+		BaseURL:               os.Getenv("SAFEHERON_API_BASE_URL"),
+		APIKey:                os.Getenv("SAFEHERON_API_KEY"),
+		PrivateKeyPath:        os.Getenv("SAFEHERON_PRIVATE_KEY_PATH"),
+		PlatformPublicKeyPath: os.Getenv("SAFEHERON_PLATFORM_PUBLIC_KEY_PATH"),
+		RequestTimeoutMS:      30000,
 	}
 	client, err := NewClient(cfg)
 	if err != nil {

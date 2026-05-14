@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -98,6 +99,11 @@ func (r *Registry) Load(ctx context.Context) error {
 
 func (r *Registry) StartBackgroundRefresh(ctx context.Context) {
 	go func() {
+		defer func() {
+			if rv := recover(); rv != nil {
+				log.Printf("registry refresh panic recovered: %v\n%s", rv, debug.Stack())
+			}
+		}()
 		ticker := time.NewTicker(r.refreshInterval)
 		defer ticker.Stop()
 		for {

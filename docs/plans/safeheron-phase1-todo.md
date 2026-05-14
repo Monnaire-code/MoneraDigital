@@ -17,8 +17,9 @@
 |------|------|------|
 | **T1 ~ T9** | ✅ **已完成并合并到 dev 分支** | 见 `git log --oneline | grep "feat(safeheron)"`：T2/T3 SDK Adapter + Registry、T4/T5 Pool Init + Manager + Replenisher、T6 用户 API、T7 Webhook 同步 + 异步 worker、T8 前端切换、T9 充值页面 UX 重构都已 commit |
 | **T10** | ✅ **已完成** | v1.5 KYT 合规筛查已实现（三事务架构 + 决策矩阵 + 超时扫描） |
-| **T11** | ⏸️ **待施工** | v1.6 安全审计 8 项修复 + .env 优先（共 9 项）：状态覆写保护 / IP 白名单 / 余额约束 / KYT 校验 / fallback 锁 / RowsAffected / network_family / 注释 / .env 优先 |
-| **T12** | ⏸️ 待 T11 完成后验收 | Sandbox 端到端 + 灰度上线 |
+| **T11** | ✅ **已完成（commit `fc44c99`）** | v1.6 安全审计 11 项修复（Tier 1 + Tier 2 + 代码质量）：S-1/S-2 KYT hot-loop / S-3 maxLastUpdateTime / SEC-1 trusted proxies / SEC-2 临时文件目录（**T12 将彻底移除该机制**） / L-1 webhook IP 白名单 prod 校验 / G-2/G-3 RowsAffected + Marshal / F-1/F-2/F-3 前端错误态 |
+| **T12** | ⏸️ **待施工**（合并 PR 前完成） | RSA 密钥文件化：`*_KEY_PEM` env → `*_KEY_PATH` env，删 writeTempPEM/tempDir 整套机制；详见 SPEC §10.1 |
+| **T13** | ⏸️ 待 T12 完成后验收 | Sandbox 端到端 + 灰度上线 |
 
 > **施工者必读**：T10 改造 `internal/wallet/deposit/service.go` 现有的 `ProcessOne` 方法，**这是已上线代码**（仅本地 dev 环境，prod 还未上线），改造时必须保证原 T7 测试用例（`service_test.go`）全部不退化（见 T10.9）。
 
@@ -151,9 +152,12 @@
 
 ### T2.2 — `internal/safeheron/client.go`
 
+> ⚠️ **v1.6 T12 已重构**：本节描述的 `PrivateKeyPEM` env 字符串注入 + `writeTempPEM` + `tempFiles` cleanup 整套机制**已被 T12 删除**。当前架构（commit T12 之后）：4 个 RSA 密钥通过 `*_KEY_PATH` env 直接传给 SDK 的 `secrets/` 真实文件路径，`NewClient` 只做存在/类型/权限校验。**新施工以 T12 为准**，下方代码保留作为 T2~T11 阶段历史。
+
 实现 `Client` struct，包装 SDK。**关键约束**（plan §4 D-3）：SDK 配置字段 `RsaPrivateKey` / `SafeheronRsaPublicKey` 接受**文件路径**而非 PEM 字符串。Phase 1 实现：
 
 ```go
+// ⚠️ v1.6 T12 已废弃：Config 字段 *PEM 重命名为 *Path（运维放 secrets/ 真实文件）
 type Config struct {
     BaseURL                    string
     APIKey                     string
@@ -164,6 +168,7 @@ type Config struct {
     RequestTimeoutMS           int64
 }
 
+// ⚠️ v1.6 T12 已废弃：tempFiles 机制完全移除（无需 cleanup）
 type Client struct {
     accountAPI  api.AccountApi
     coinAPI     api.CoinApi
@@ -173,13 +178,14 @@ type Client struct {
 }
 
 func NewClient(cfg Config) (*Client, error) {
+    // ⚠️ v1.6 T12 已废弃：不再写临时文件
     // 1. 把 4 个 PEM 字符串写入 /tmp/safeheron-{private,platform,whpub,whpriv}-{pid}-{rand}.pem
     //    权限 0600；记录路径到 tempFiles
     // 2. 用 safeheron.Client{Config: safeheron.ApiConfig{...}} 构造
     // 3. 用 webhook.WebhookConverter{Config: webhook.WebHookConfig{...}} 构造
 }
 
-func (c *Client) Close() error  // 删除 tempFiles
+func (c *Client) Close() error  // 删除 tempFiles —— v1.6 T12 后简化为 no-op
 
 // 业务方法（不暴露 SDK 类型）
 func (c *Client) CreateAssetWallet(ctx, req) (*Wallet, error)
@@ -191,11 +197,11 @@ func (c *Client) WebhookConvert(rawBody []byte) (plaintext string, err error)
 
 参考实测代码 `~/scratch/safeheron-sandbox-test/client.go:137-170`。
 
-**DoD**：
-- [ ] `Client` 实现以上 6 个方法 + `Close()`
-- [ ] `NewClient` 缺失任一 env 返回 error；临时文件写入失败也返回 error
-- [ ] 临时文件权限 `0600`，程序退出时 `Close()` 删除
-- [ ] 单测验证：构造 → 临时文件存在 → Close → 文件删除
+**DoD**（⚠️ 后 3 项已被 T12 替代，新施工请看 T12 DoD）：
+- [x] `Client` 实现以上 6 个方法 + `Close()`
+- [x] ~~`NewClient` 缺失任一 env 返回 error；临时文件写入失败也返回 error~~（T12：路径不存在/不可读返回 error，权限宽 WARN）
+- [x] ~~临时文件权限 `0600`，程序退出时 `Close()` 删除~~（T12：直接读 `secrets/` 真实文件，无临时文件）
+- [x] ~~单测验证：构造 → 临时文件存在 → Close → 文件删除~~（T12：替换为 7 个文件路径相关用例）
 
 ### T2.3 — `internal/safeheron/types.go`
 
@@ -2399,15 +2405,15 @@ go vet ./internal/...                                # 无 warning
 
 ---
 
-## T12. Sandbox 端到端 + 灰度上线
+## T13. Sandbox 端到端 + 灰度上线
 
-> **注**：原 T10，2026-05-12 T10 KYT 合规筛查插入后顺延为 T11；2026-05-13 T11 安全加固插入后再次顺延为 T12。子任务 T10.X → T11.X → T12.X。
+> **注**：原 T10，2026-05-12 T10 KYT 合规筛查插入后顺延为 T11；2026-05-13 T11 安全加固插入后顺延为 T12；2026-05-14 RSA 密钥文件化插入为 T12 后再次顺延为 T13。子任务 T10.X → T11.X → T12.X → T13.X。
 
 **依赖**：T1-T11（T11 安全加固必须先完成，否则状态覆写/IP 暴露等风险点会带到生产）
 **估时**：1d
 **输出**：测试报告 + 上线 checklist
 
-### T12.1 — Sandbox E2E 矩阵（充值主路径）
+### T13.1 — Sandbox E2E 矩阵（充值主路径）
 
 按 SPEC §11.1 必须各成功 1 笔：
 
@@ -2424,7 +2430,7 @@ go vet ./internal/...                                # 无 warning
 - [ ] `account.balance` 增加值等于 `txAmount`
 - [ ] `journal.biz_type=10`、`ref_id=deposits.id`、`amount=txAmount`
 
-### T12.2 — KYT 真实告警路径实测（v1.5 新增）
+### T13.2 — KYT 真实告警路径实测（v1.5 新增）
 
 **前提**：在公司电脑配置好 Safeheron 密钥 + Console AML 已开启 + Webhook 通知已启用。
 
@@ -2435,7 +2441,7 @@ go vet ./internal/...                                # 无 warning
 - [ ] **KYT-E2E-4**：制造一笔需要等待 KYT 评估的充值（如果 sandbox 不能模拟可跳过，标 N/A），观察 KYT_PENDING 状态 → 收到 AML_KYT_ALERT 后推进
 - [ ] **KYT-E2E-5**：手动 SQL 把一笔 deposit 设为 `status='KYT_PENDING' AND updated_at = NOW() - INTERVAL '21 min'`，下一个 ticker（≤1min）触发兜底 API 调用，日志可见
 
-### T12.3 — 异常路径覆盖（人工构造）
+### T13.3 — 异常路径覆盖（人工构造）
 
 - [ ] **AC-1**：转账到未分配地址 → 用 SDK 手动建一个 hidden 钱包，往里打 testnet ETH → webhook 进 MANUAL_REVIEW + 飞书消息
 - [ ] **AC-2**：金额低于 min_deposit → 发 0.00001 Sepolia ETH（< 0.0001）→ MANUAL_REVIEW
@@ -2444,7 +2450,7 @@ go vet ./internal/...                                # 无 warning
 - [ ] **AC-5**：worker 中途崩溃 → kill -9 进程 → 重启后未完成事件仍能处理
 - [ ] **AC-6**（v1.5 新增）：手动给 worker 注入 KYT API 失败（mock 或临时改错 base url），事件回 PENDING 自动重试，process_attempts 增长正确
 
-### T12.4 — 非功能验证
+### T13.4 — 非功能验证
 
 - [ ] `wrk -t4 -c10 -d30s` 打 webhook handler，P99 latency < 2s
 - [ ] 用日志直方图统计 webhook 落库 → CREDITED 延迟 P99 < 30s（KYT_ENABLED=true 下，含 KYT API 调用时间，可适当放宽到 P99 < 60s）
@@ -2452,11 +2458,14 @@ go vet ./internal/...                                # 无 warning
 - [ ] `go vet ./...` 无 warning
 - [ ] `npm run build` + `npm run test` 通过
 
-### T12.5 — 上线 Checklist（部署前 ops 确认）
+### T13.5 — 上线 Checklist（部署前 ops 确认）
 
 - [ ] 生产 Safeheron API Key 已申请，权限含「读取 + 钱包账户管理 + 合规筛查 (Compliance)」（**不**含「发起/取消交易」）
-- [ ] 生产 RSA 密钥对已生成，私钥已注入生产 env `SAFEHERON_PRIVATE_KEY_PEM`
-- [ ] Safeheron 平台公钥、Webhook 公钥已注入对应 env
+- [ ] **v1.6 T12 secrets/ 部署**（替代旧 `_PEM` env 注入方式）：
+  - [ ] 服务器创建 `secrets/` 目录：`mkdir -p secrets && chmod 0700 secrets`
+  - [ ] 4 个 PEM 文件已 scp 放入：`safeheron-private.pem` (0600) / `safeheron-platform-pub.pem` (0644) / `safeheron-webhook-pub.pem` (0644) / `safeheron-webhook-priv.pem` (0600)
+  - [ ] 生产 env 已配置 4 个 `SAFEHERON_*_KEY_PATH` 变量指向上述文件路径
+  - [ ] `ls -la secrets/` 权限符合预期，启动 log 无 "permission ... wider than recommended" WARN（如有，运维 chmod 到位）
 - [ ] 生产出口 IP 固定且已加白名单（至少 2 个 IP）
 - [ ] Webhook 接收 URL 配置到 Safeheron 控制台（生产）
 - [ ] `APP_ENV=production` 确认；`KYT_ENABLED` 未设置（默认 true）或显式 true，**不能为 false**（启动会 panic）
@@ -2474,7 +2483,7 @@ go vet ./internal/...                                # 无 warning
   - [ ] 015 执行后 `psql -c "\d account"` 确认含 `ck_balance_non_negative` + `ck_frozen_non_negative` 两条 CHECK 约束
   - [ ] `journal.biz_type=10` 入账记录数 = `deposits WHERE status='CREDITED'` 记录数（手工一致性校验，对账系统未建前的兜底）
 
-### T12.6 — 灰度上线策略
+### T13.6 — 灰度上线策略
 
 - 阶段 1：先上前端 + 后端代码，**不**改 Safeheron 控制台 webhook URL（webhook 仍指向 staging）
 - 阶段 2：staging 用生产 Safeheron team 真小额做 5 个 mainnet 币种最终验证（SPEC §13 dev/test 覆盖差距）+ KYT 路径验证（KYT-E2E-1/2 至少各一次）
@@ -2483,6 +2492,234 @@ go vet ./internal/...                                # 无 warning
   - 监控 `failed_reason LIKE 'KYT_%'` 占比 < 5%（v1.5 新增）
   - 监控 `status='KYT_PENDING'` 最长停留时间 < 5min（v1.5 新增）
 - 阶段 4：通知业务可对外宣传 deposit 功能
+
+---
+
+## T12. RSA 密钥文件化（PEM 内容 → 文件路径）[⏸️ 待施工]
+
+**依赖**：T11（已完成 commit `fc44c99` 引入临时文件 SEC-2 修复）；本任务在合并 dev → test PR 之前完成
+**估时**：0.5d
+**输出**：`internal/safeheron/client.go` 重构 + `*_KEY_PEM` env 全部改名 `*_KEY_PATH` + `secrets/` 目录 + 测试改写
+**SPEC 来源**：`docs/spec/safeheron-phase1-spec.md` §10.1（v1.6）
+
+> **施工动机**：commit `fc44c99` SEC-2 把 PEM 文本从 env 写到进程级 0700 临时目录，绕一圈就是为了把 env 字符串塞进文件供 SDK 读取——SDK 本就要求文件路径。env 中存大段 PEM 文本不优雅（多行换行需 `\n` 转义），临时文件归属 / 权限 / 清理都得自己管，进程被 OOM kill 不走 SIGTERM 时 tempDir 会残留。**T12 直接让 SDK 读 `secrets/` 真实文件**，删除 `writeTempPEM` / `tempDir` / `tempFiles` / `cleanupFiles` 整套机制。
+
+### 决策对齐（已锁定，施工不可重开）
+
+| 问题 | 决定 | 影响 |
+|------|------|------|
+| 旧 `*_PEM` env 兼容 | **硬切换** — 完全删除旧读取代码 | 运维必须同步部署 secrets/ 后再切代码 |
+| 启动时文件权限校验 | **WARN 不阻塞** — perm 宽于推荐时 log 警告 | 不需要 APP_ENV 分支逻辑 |
+| CI / 测试服务器密钥分发 | **服务器手工放置一次** — 不改 `.github/workflows/` | 本任务**不**包含 workflow 改动 |
+
+### 依赖图（自下而上）
+
+```
+T12.1 (代码核心：client.go 重构)
+   │
+   ├── T12.2 (测试改写：client_test.go) ─── 跑 `go test ./internal/safeheron/...`
+   │
+   └── T12.3 (env 切换：container.go + cmd/pool_init/main.go) ─── 跑 `go build ./...`
+          │
+          └── T12.4 (.env.example + .gitignore + CLAUDE.md 文档同步)
+                 │
+                 └── T12.5 (本地手动验证 + 删除残留 SEC-2 文档痕迹)
+                        │
+                        └── T12.6 (PR 合并前最终 checklist)
+```
+
+每完成一个子任务必须跑：`go test -race -cover ./internal/safeheron/... ./internal/container/... && go vet ./...`
+
+---
+
+### T12.1 — `internal/safeheron/client.go` 重构
+
+**Acceptance**：
+
+- [ ] `Config` 字段 `PrivateKeyPEM` / `PlatformPublicKeyPEM` / `WebhookPublicKeyPEM` / `WebhookPrivateKeyPEM` 分别重命名为 `PrivateKeyPath` / `PlatformPublicKeyPath` / `WebhookPublicKeyPath` / `WebhookPrivateKeyPath`
+- [ ] 删除 `writeTempPEM` / `cleanupFiles` 函数
+- [ ] 删除 `Client.tempDir` / `Client.tempFiles` 字段
+- [ ] 新增 `validateKeyFile(path, label string, recommendedPerm os.FileMode) error` 帮助函数（详见 SPEC §10.1）
+- [ ] `NewClient` 改为：4 个路径分别调 `validateKeyFile`，存在/类型错误返回 wrapped error；权限宽于推荐 log warn 不阻塞；SDK Config 直接传 `cfg.PrivateKeyPath` 等
+- [ ] `Close()` 简化为 `return nil`（保留方法签名，向 SIGTERM handler 兼容）
+- [ ] webhook 两个路径仍保持「both-or-neither」校验语义
+
+**Verification**：
+```bash
+go build ./internal/safeheron/...
+go vet ./internal/safeheron/...
+grep -n 'writeTempPEM\|tempDir\|tempFiles\|cleanupFiles\|MkdirTemp' internal/safeheron/client.go
+# 期望：grep 无任何输出
+grep -n 'PrivateKeyPEM\|PlatformPublicKeyPEM\|WebhookPublicKeyPEM\|WebhookPrivateKeyPEM' internal/safeheron/client.go
+# 期望：grep 无任何输出（旧字段全部消失）
+```
+
+**Files touched**：`internal/safeheron/client.go`（单文件）
+
+---
+
+### T12.2 — `internal/safeheron/client_test.go` 改写
+
+**Acceptance**：
+
+#### 必须删除的测试（依赖已删除的 tempDir / writeTempPEM / cleanupFiles 机制，全部失效）
+
+| 行号 | 测试名 | 删除原因 |
+|------|--------|----------|
+| 104 | `TestNewClient_TempFilesCreatedAndCleaned` | tempDir 已不存在 |
+| 158 | `TestClient_CloseIsIdempotent`（旧版本） | 与下方新版合并 |
+| 194 | `TestNewClient_TempFileWriteFailure` | 不再写临时文件 |
+| 516 | `TestNewClient_WebhookPubKeyWriteFailure` | 同上 |
+| 628 | `TestWriteTempPEM` | 函数已删 |
+| 647 | `TestCleanupFiles` | 函数已删 |
+| 659 | `TestCleanupFiles_NonexistentPath` | 同上 |
+| 663 | `TestClose_Idempotent` | 与新 `TestClient_CloseIsIdempotent` 合并 |
+| 1087 | `TestNewClient_PlatformKeyWriteFailure_Cleanup` | tempDir 已不存在 |
+| 1141 | `TestWriteTempPEM_CreateTempFailure` | 函数已删 |
+| 1148 | `TestWriteTempPEM_ContentPreserved` | 同上 |
+| 1167 | `TestCleanupFiles_MixedExistentAndNonexistent` | 函数已删 |
+
+#### 必须改写断言（保留测试但语义改变）
+
+| 行号 | 测试名 | 改动 |
+|------|--------|------|
+| 84 | `TestNewClient_MissingPrivateKey` | 断言从「PrivateKeyPEM is required」改为「PrivateKeyPath ... path is required」 |
+| 94 | `TestNewClient_MissingPlatformKey` | 同上，`PlatformPublicKeyPath` |
+| 176 | `TestNewClient_WithWebhookKeys` | 配置改为 4 个真实文件路径（用 `t.TempDir()` 写 PEM）|
+| 491 | `TestNewClient_PartialWebhookKeyRejectsConfig` | 配置改为路径形式，断言文案不变 |
+
+#### 必须**完整保留**（与本次重构无关，误删会破坏 webhook 验签 / SDK 业务方法回归）
+
+```
+TestNewClient_MissingAPIKey                    (74)
+TestCreateAssetWallet_*                        (211, 263, 433, 441)
+TestAddCoin_*                                  (278, 323, 458)
+TestListAccountCoin_*                          (338, 376, 475)
+TestGetAccountByAddress_*                      (391, 420)
+TestWebhookConvert_*  (5 个 — 关键验签测试)    (552, 560, 587, 596, 611)
+TestKytReport_*                                (678, 724, 755, 783, 1015, 1036)
+TestCreateTransaction_*                        (802, 848, 913, 949)
+TestGetTransaction_*                           (866, 895, 977)
+TestIntegration_CreateWithdrawal               (1178)
+```
+
+#### 新增 7 个文件路径用例
+
+| # | 用例 | 断言 |
+|---|------|------|
+| 1 | `TestNewClient_FilePathsHappyPath` | `t.TempDir()` 写 4 个真实 PEM 文件 → NewClient 成功 |
+| 2 | `TestNewClient_PrivateKeyPathMissing` | 空 `PrivateKeyPath` → 错误含 "path is required" |
+| 3 | `TestNewClient_PrivateKeyFileNotFound` | 路径指向不存在文件 → 错误 unwrap 到 `os.ErrNotExist` |
+| 4 | `TestNewClient_PrivateKeyPathIsDir` | 路径指向 `t.TempDir()` 自身（目录）→ 错误含 "is a directory" |
+| 5 | `TestNewClient_WebhookKeysMustBeBothOrNeither` | 仅设 webhook pub 不设 priv → 错误 |
+| 6 | `TestNewClient_PermissionWarningEmittedButNotBlocking` | 私钥 chmod 0644 → log 含 "wider than recommended"，但 NewClient 成功（用 `log.SetOutput(&bytes.Buffer{})` 捕获后断言） |
+| 7 | `TestClient_CloseIsIdempotent` | 多次 `Close()` 不 panic（保留以备未来注入资源） |
+
+**Verification**：
+```bash
+go test -race ./internal/safeheron/... -v -run 'TestNewClient|TestClient_Close|TestWebhookConvert' 2>&1 | tail -40
+# 期望：所有 NewClient/Close/WebhookConvert 用例绿，无 missing function 编译错误
+go test -cover ./internal/safeheron/...
+# 期望：覆盖率 ≥ 88.3%（T11 完成时实测基线，commit fc44c99）
+```
+
+**Files touched**：`internal/safeheron/client_test.go`（单文件）
+
+---
+
+### T12.3 — `container.go` + `cmd/pool_init/main.go` env 切换
+
+**Acceptance**：
+
+- [ ] `internal/container/container.go` 第 65-68 行 `viper.GetString("SAFEHERON_*_KEY_PEM")` 改为 `SAFEHERON_*_KEY_PATH`，4 处局部变量名 `privKey` / `platKey` / `whPub` / `whPriv` 改为 `privPath` / `platPath` / `whPubPath` / `whPrivPath`，传给 `safeheron.NewClient` 的字段名也跟着改
+- [ ] `cmd/pool_init/main.go` 同样的 env 名 + 字段名同步
+- [ ] disabled-fallback log message（"SAFEHERON_API_KEY/PRIVATE_KEY/PLATFORM_PUBLIC_KEY not configured"）更新为 "PATH" 措辞
+- [ ] `grep -rn 'SAFEHERON.*PEM' --include="*.go"` 在 `internal/` 和 `cmd/` 下**完全无业务命中**
+
+**Verification**：
+```bash
+go build ./...
+go vet ./...
+grep -rn 'SAFEHERON.*PEM\|PrivateKeyPEM\|PlatformPublicKeyPEM\|WebhookPublicKeyPEM\|WebhookPrivateKeyPEM' \
+  --include='*.go' internal/ cmd/
+# 期望：无输出
+```
+
+**Files touched**：`internal/container/container.go` / `cmd/pool_init/main.go`
+
+---
+
+### T12.4 — `.env.example` + `.gitignore` + `CLAUDE.md` 文档同步
+
+**Acceptance**：
+
+- [ ] **`.env.example`**（实测当前行 32-43 是 Safeheron 段）：
+  - 行 37 `SAFEHERON_PRIVATE_KEY_PEM=<paste-pem-here>` → `SAFEHERON_PRIVATE_KEY_PATH=./secrets/safeheron-private.pem`
+  - 行 39 `SAFEHERON_PLATFORM_PUBLIC_KEY_PEM=<paste-pem-here>` → `SAFEHERON_PLATFORM_PUBLIC_KEY_PATH=./secrets/safeheron-platform-pub.pem`
+  - 行 41 `SAFEHERON_WEBHOOK_PUBLIC_KEY_PEM=<paste-pem-here>` → `SAFEHERON_WEBHOOK_PUBLIC_KEY_PATH=./secrets/safeheron-webhook-pub.pem`
+  - **新增第 4 行 `SAFEHERON_WEBHOOK_PRIVATE_KEY_PATH=./secrets/safeheron-webhook-priv.pem`**（**历史遗留补齐**：当前 .env.example 漏配此 env，但 `container.go:68` 实际读它，否则 webhook 解密无法工作）
+  - 上方注释块统一改为：「RSA 密钥不再存 PEM 内容，改为指向 `secrets/` 文件路径。运维需 `mkdir -p secrets && chmod 0700 secrets`，把 4 个 PEM 放进去并 `chmod 0600 *-private.pem *-priv.pem` / `chmod 0644 *-pub.pem`」
+- [ ] **`.gitignore`** 追加 `/secrets/`（建议放在第 24 行 `.env.vercel.local` 后的「Environment variables」段末尾）
+- [ ] **`CLAUDE.md`** 第 244-247 行的 4 个 `SAFEHERON_*_KEY_PEM` 重命名为 `_PATH`，并在该段开头加一句「⚠️ v1.6 起 4 个 RSA 密钥不再以 PEM 内容形式配置，改为指向 `secrets/` 目录的文件路径，详见 SPEC §10.1」
+- [ ] 验证：`git check-ignore secrets/foo.pem` 返回 0；仓库内无任何 `*.pem` 文件
+
+**Verification**：
+```bash
+git check-ignore secrets/foo.pem && echo "ignored OK"
+git ls-files | grep '\.pem$'                                          # 期望：空输出
+grep -n 'SAFEHERON_.*_KEY_PATH' .env.example                          # 期望：4 行命中（含新增的 webhook private）
+grep -n 'SAFEHERON_.*_KEY_PEM' .env.example                           # 期望：无输出
+grep -n 'SAFEHERON_.*_KEY_PATH\|SAFEHERON_.*_KEY_PEM' CLAUDE.md       # 期望：仅 _PATH 命中
+grep -c '^/secrets/$' .gitignore                                      # 期望：1
+```
+
+**Files touched**：`.env.example` / `.gitignore` / `CLAUDE.md`
+
+---
+
+### T12.5 — 本地手动验证 + 残留文档清理
+
+**Acceptance**：
+
+- [ ] 本地 `mkdir -p secrets && chmod 0700 secrets`，从原 `.env`（或 1Password）拷 4 个 PEM 进去，正确 chmod
+- [ ] `go build -o ./bin/server ./cmd/server/ && ./bin/server` 启动正常，log 见 "Safeheron pool enabled"
+- [ ] 触发一次 `GET /api/wallet/deposit-address?networkFamily=EVM`（带 JWT）→ 返回 200 + 真实地址（证明 SDK 能用真实文件路径完成 RSA 签名）
+- [ ] 故意 `chmod 0644 secrets/safeheron-private.pem` 重启 → 见 WARN log，server 仍启动（证明 warn 不阻塞）
+- [ ] `kill -TERM <pid>` → server 优雅退出，**$TMPDIR 下不应再产生 `safeheron-*` 残留目录**（旧 SEC-2 残留路径已无）
+- [ ] `grep -rn 'tempDir\|writeTempPEM' docs/` 应只剩历史变更记录提及（v1.6 标注 superseded），不应有当前生效的描述
+
+**Verification**：见上述每条命令
+
+**Files touched**：无代码改动；本地 `secrets/` 目录布置 + 文档残留 grep
+
+---
+
+### T12.6 — PR 合并前最终 checklist
+
+合并 dev → test PR 之前必须全部 ✅：
+
+- [ ] T12.1 ~ T12.5 DoD 全勾
+- [ ] `go test -race ./internal/safeheron/... ./internal/container/...` 全绿
+- [ ] `go test -cover ./internal/safeheron/...` 覆盖率 ≥ 88.3%（T11 完成时实测基线，commit fc44c99）
+- [ ] `go vet ./...` + `gofmt -l internal/ cmd/` 无输出
+- [ ] `grep -rn 'SAFEHERON.*PEM\|writeTempPEM\|tempDir' --include='*.go' internal/ cmd/` 无业务命中
+- [ ] PR 描述新增一段「v1.6 T12 RSA 密钥文件化」说明部署变更（运维需先布置 `secrets/`）
+- [ ] T13.5 部署 checklist 已更新（已在本次同步）
+
+---
+
+### 风险与缓解
+
+| 风险 | 影响 | 缓解 |
+|------|------|------|
+| 运维忘记部署 `secrets/` 直接合并 → server 启动失败 | 高 | T13.5 checklist 强制 + PR description 高亮 |
+| 旧 `_PEM` env 残留在 GH Actions secrets 里 | 低 | T12 范围内不动 CI（用户已决定）；后续 cleanup 单独 PR |
+| 私钥权限部署成 0644 | 中 | WARN log 在启动时立刻可见；运维操作手册补 `chmod` 步骤 |
+| `secrets/` 误提交到仓库 | **极高** | `.gitignore` 在 T12.4 加；提交前 `git status` 二次确认；PR review 必看 |
+
+### Open Questions
+
+无 — 3 个关键决策（兼容/权限/CI）已在 SPEC §10.1 明确，施工无需额外决策。
 
 ---
 

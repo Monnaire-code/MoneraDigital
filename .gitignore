@@ -24,6 +24,9 @@ dist-ssr
 .env.test.local
 .env.vercel.local
 
+# Safeheron RSA key material (v1.6) — never commit
+/secrets/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -52,6 +55,7 @@ main
 # Go binaries
 /migrate
 /pool_init
+/backfill_addcoin
 
 # Coverage reports (vitest html + Go cover.out)
 coverage.html

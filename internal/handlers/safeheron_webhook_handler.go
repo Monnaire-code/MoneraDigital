@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -83,6 +82,9 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		}
 	}
 
+	clientIP := c.ClientIP()
+	log.Printf("[webhook] received ip=%s", clientIP)
+
 	// Plan D-12: http.MaxBytesReader caps body at 1MB AND surfaces an explicit
 	// *http.MaxBytesError on overflow — unlike io.LimitReader which silently
 	// truncates and would let attackers slip past the verifier with garbage.
@@ -91,22 +93,25 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			log.Printf("safeheron webhook body exceeds %d bytes: %v", MaxWebhookBodyBytes, err)
+			log.Printf("[webhook] REJECT ip=%s body exceeds %d bytes", clientIP, MaxWebhookBodyBytes)
 			c.AbortWithStatus(http.StatusRequestEntityTooLarge)
 			return
 		}
-		log.Printf("safeheron webhook read body error: %v", err)
+		log.Printf("[webhook] REJECT ip=%s read body error: %v", clientIP, err)
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
 	if len(body) == 0 {
+		log.Printf("[webhook] REJECT ip=%s empty body", clientIP)
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
 
+	log.Printf("[webhook] verifying ip=%s bytes=%d", clientIP, len(body))
 	evt, err := h.Verifier.WebhookConvert(body)
 	if err != nil {
-		log.Printf("safeheron webhook verify failed: %v", err)
+		sum := sha256.Sum256(body)
+		log.Printf("[webhook] REJECT ip=%s verify failed bodyHash=%s err=%v", clientIP, hex.EncodeToString(sum[:8]), err)
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return
 	}
@@ -122,14 +127,20 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		eventID = evt.EventDetail.TxKey + ":AML_KYT_ALERT:" + hex.EncodeToString(sum[:8])
 	}
 	if evt.EventDetail.TxKey == "" {
-		log.Printf("safeheron webhook missing txKey, eventType=%s", evt.EventType)
+		log.Printf("[webhook] REJECT ip=%s eventType=%s missing txKey", clientIP, evt.EventType)
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
 
-	decryptedPayload, err := json.Marshal(evt)
-	if err != nil {
-		log.Printf("safeheron webhook marshal decrypted event failed: %v", err)
+	log.Printf("[webhook] OK ip=%s eventType=%s txKey=%s status=%s bodyLen=%d",
+		clientIP, evt.EventType, evt.EventDetail.TxKey, evt.EventDetail.TransactionStatus, len(evt.RawBody))
+
+	// Use the raw decrypted plaintext as the stored payload so that fields
+	// not captured by safeheron.EventDetail (e.g. AML_KYT_ALERT's amlList,
+	// amlScreeningTriggeredState) are preserved for the async worker.
+	decryptedPayload := evt.RawBody
+	if len(decryptedPayload) == 0 {
+		log.Printf("[webhook] REJECT ip=%s empty RawBody after verify", clientIP)
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
@@ -144,12 +155,16 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 	if err != nil {
 		// A DB outage is the only reasonable cause; let Safeheron retry by
 		// returning 5xx (does not match the ack body, deliberately).
-		log.Printf("safeheron webhook insert failed eventId=%s: %v", eventID, err)
+		log.Printf("[webhook] ERROR ip=%s insert failed eventId=%s: %v", clientIP, eventID, err)
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 	if !inserted {
-		log.Printf("safeheron webhook duplicate eventId=%s — replying SUCCESS", eventID)
+		log.Printf("[webhook] DUPLICATE ip=%s eventType=%s txKey=%s eventId=%s — ack SUCCESS",
+			clientIP, evt.EventType, evt.EventDetail.TxKey, eventID)
+	} else {
+		log.Printf("[webhook] STORED ip=%s eventType=%s txKey=%s eventId=%s",
+			clientIP, evt.EventType, evt.EventDetail.TxKey, eventID)
 	}
 
 	c.Header("Content-Type", "application/json")

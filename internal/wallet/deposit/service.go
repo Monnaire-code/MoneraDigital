@@ -905,6 +905,105 @@ func (s *Service) scanOneKYTTimeout(ctx context.Context) error {
 	return nil
 }
 
+// ScanAmlPending polls KYT results for deposits with aml_risk_level='PENDING' (KYT
+// in-flight). Unlike ScanKYTTimeouts, it does NOT convert still-pending KYT to
+// MANUAL_REVIEW — it simply skips, leaving the row for the next tick. Processes at
+// most 1 deposit per call to avoid hammering the KYT API.
+func (s *Service) ScanAmlPending(ctx context.Context) {
+	if err := s.scanOneAmlPending(ctx); err != nil && !errors.Is(err, ErrNoPending) {
+		log.Printf("scan AML pending: %v", err)
+	}
+}
+
+func (s *Service) scanOneAmlPending(ctx context.Context) error {
+	tx1, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx AML scan: %w", err)
+	}
+	dep, err := s.repo.LockOneAmlPending(ctx, tx1)
+	if err != nil {
+		_ = tx1.Rollback()
+		return err // ErrNoPending propagates
+	}
+	txKey := dep.SafeheronTxKey
+	depID := dep.ID
+	if err := tx1.Commit(); err != nil {
+		return fmt.Errorf("commit AML scan phase-1: %w", err)
+	}
+
+	report, kytErr := s.safeheronClient.KytReport(ctx, txKey)
+	if kytErr != nil {
+		log.Printf("AML pending scan KYT API failed: txKey=%s err=%v", txKey, kytErr)
+		return nil // transient — retry next tick
+	}
+
+	decision := DecideKYT(report.AmlScreeningTriggeredState, report.AmlList, false)
+	if decision.Action == KytActionKeepPending {
+		// KYT result not yet available; don't update DB — LockOneAmlPending will
+		// pick this up again on the next tick without resetting the timeout clock.
+		return nil
+	}
+
+	tx2, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx AML scan phase-2: %w", err)
+	}
+	committed2 := false
+	defer func() {
+		if !committed2 {
+			_ = tx2.Rollback()
+		}
+	}()
+
+	freshDep, found, err := s.repo.FindDepositByTxKey(ctx, tx2, txKey)
+	if err != nil || !found {
+		return fmt.Errorf("re-read deposit AML scan: found=%v err=%w", found, err)
+	}
+	if freshDep.Status != DepositStatusKYTPending {
+		_ = tx2.Commit()
+		committed2 = true
+		return nil // concurrent peer already handled it
+	}
+
+	if err := s.writeAMLFields(ctx, tx2, depID, report.AmlScreeningTriggeredState, report.AmlList); err != nil {
+		return fmt.Errorf("update AML fields AML scan: %w", err)
+	}
+
+	var alerts []alertPayload
+	switch decision.Action {
+	case KytActionCredit:
+		if err := s.creditDepositFromRow(ctx, tx2, freshDep); err != nil {
+			return fmt.Errorf("credit deposit AML scan: %w", err)
+		}
+	case KytActionManualReview:
+		mrErr := s.repo.MarkDepositManualReview(ctx, tx2, depID, decision.Reason)
+		if mrErr != nil {
+			if err := warnIfTerminalState(mrErr, depID, "MANUAL_REVIEW"); err != nil {
+				return fmt.Errorf("mark manual review AML scan: %w", err)
+			}
+			// 终态竞争：deposit 已被其他路径处理，不触发告警
+		} else {
+			alerts = append(alerts, alertPayload{
+				level: decision.AlertLevel,
+				title: "KYT manual review",
+				fields: map[string]string{
+					"depositId": fmt.Sprintf("%d", depID),
+					"txKey":     txKey,
+					"riskLevel": decision.RiskLevel,
+					"reason":    decision.Reason,
+				},
+			})
+		}
+	}
+
+	if err := tx2.Commit(); err != nil {
+		return fmt.Errorf("commit AML scan phase-2: %w", err)
+	}
+	committed2 = true
+	s.fireAlerts(alerts)
+	return nil
+}
+
 // markKYTPendingManualReviewIfStillPending re-reads the deposit under FOR UPDATE
 // and only flips KYT_PENDING rows to MANUAL_REVIEW — protects against stomping a
 // row a concurrent peer already moved to CREDITED.

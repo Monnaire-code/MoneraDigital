@@ -1295,13 +1295,120 @@ KYT_ORPHAN_ALERT_MAX_RETRY=100                     # AML_KYT_ALERT 找不到 dep
 | 并发地址分配 | `SELECT FOR UPDATE SKIP LOCKED` |
 | 多 worker 竞争 | `safeheron_webhook_events` 拉取也用 `FOR UPDATE SKIP LOCKED` |
 | 6 层并发防御 | 详见 §6.4 并发防御层级表 |
-| 私钥不入仓 | `.gitignore` 验证，`.env.example` 仅占位，生产密钥走环境变量 |
+| 私钥不入仓 | `.gitignore` 排除 `secrets/` 与 `.env`；4 个 RSA PEM 经 `SAFEHERON_*_KEY_PATH` env 指向 `secrets/` 下的真实文件（v1.6 起），代码不再处理 PEM 内容，详见 §10.1 |
 | 日志脱敏 | 私钥、API Key、签名头、`sig` / `key` / `bizContent` 字段不写日志 |
 | 环境隔离 | `APP_ENV` 区分 local / test / production，密钥 + coinKey 集合 + Safeheron API Key 全套独立 |
 | KYT 强制启用 (prod) | `APP_ENV=production` 启动时若 `KYT_ENABLED=false` 直接 panic（K-16）|
 | KYT 不变量 | `CREDITED` 必须满足 `aml_risk_level='LOW'` 或 `KYT_ENABLED=false`；`aml_list` 写入后永不删除（审计要求） |
 | KYT 终态保护 | `MANUAL_REVIEW` 是终态，KYT 后续变化不自动改回 CREDITED（K-18） |
 | AML_KYT_ALERT 乱序保护 | webhook 找不到 deposit 时事件保留为 PENDING 待下次轮询；超过 `KYT_ORPHAN_ALERT_MAX_RETRY` 转 `MANUAL_REVIEW(KYT_ORPHAN_ALERT)` |
+
+### 10.1 RSA 密钥文件化（v1.6 — 原 Phase 2 提前）
+
+**目标**：消除 `writeTempPEM` / `tempDir` 整套机制，让 Safeheron SDK 直接读取运维放置在 `secrets/` 目录下的真实 PEM 文件。
+
+**Why**：commit `fc44c99` 的 SEC-2 修复把 PEM 文本从 env 写到进程级 0700 临时目录，绕一圈就是为了把 env 字符串塞进文件供 SDK 读取——SDK 本就要求文件路径。env 中存大段 PEM 文本不优雅（多行换行需 `\n` 转义），临时文件归属/权限/清理都得自己管，进程被 OOM kill 不走 SIGTERM 时 tempDir 会残留。
+
+#### 决策对齐（已明确，不可重开）
+
+| 问题 | 决定 |
+|------|------|
+| 旧 `*_PEM` env 兼容 | **硬切换** — 完全删除旧读取代码，运维同步部署 |
+| 启动时文件权限校验 | **WARN 不阻塞** — perm 宽于推荐时 log 警告，不影响启动 |
+| CI / 测试服务器密钥分发 | **服务器手工放置一次** — 不改 `.github/workflows/`，运维 scp 后 chmod |
+
+#### 目录布局（运维职责，仓库不跟踪）
+
+```
+<repo-root>/
+├── secrets/                          # 0700, 在 .gitignore 中
+│   ├── safeheron-private.pem         # 0600 — 客户端 RSA 私钥
+│   ├── safeheron-platform-pub.pem    # 0644 — Safeheron 平台公钥（验签 API 响应）
+│   ├── safeheron-webhook-pub.pem     # 0644 — Webhook 验签公钥
+│   └── safeheron-webhook-priv.pem    # 0600 — Webhook 解密私钥
+```
+
+#### 影响文件清单
+
+| 文件 | 改动 |
+|------|------|
+| `internal/safeheron/client.go` | 删 `writeTempPEM` / `tempDir` / `tempFiles` / `cleanupFiles`；`Config.*PEM` → `Config.*Path`；`NewClient` 改为校验文件存在 + 权限 warn；`Close()` 简化为 no-op |
+| `internal/safeheron/client_test.go` | 删 tempDir 相关测试；新增 7 个文件路径测试用例 |
+| `internal/container/container.go` | viper 读 `SAFEHERON_*_KEY_PATH` |
+| `cmd/pool_init/main.go` | 同上 |
+| `.env.example` | 4 个 key 重命名 `*_PEM` → `*_PATH` + 部署注释 |
+| `.gitignore` | 追加 `/secrets/` |
+| `CLAUDE.md` | "Environment Variables → Safeheron" 段更新 |
+
+#### Config 结构（重命名）
+
+```go
+type Config struct {
+    BaseURL               string
+    APIKey                string
+    PrivateKeyPath        string // 必填，0600 推荐
+    PlatformPublicKeyPath string // 必填，0644 推荐
+    WebhookPublicKeyPath  string // 选填（与 WebhookPrivateKeyPath 同时设置）
+    WebhookPrivateKeyPath string // 选填
+    RequestTimeoutMS      int64
+}
+```
+
+#### 校验帮助函数
+
+```go
+// validateKeyFile 检查路径存在 + 可读，权限位过宽时打 warn log。
+// 失败时返回 wrapped error 让 NewClient 直接返回；权限超出时仅 log 不阻塞。
+func validateKeyFile(path, label string, recommendedPerm os.FileMode) error {
+    if path == "" {
+        return fmt.Errorf("safeheron: %s path is required", label)
+    }
+    info, err := os.Stat(path)
+    if err != nil {
+        return fmt.Errorf("safeheron: %s stat %q: %w", label, path, err)
+    }
+    if info.IsDir() {
+        return fmt.Errorf("safeheron: %s path %q is a directory", label, path)
+    }
+    if actual := info.Mode().Perm(); actual&^recommendedPerm != 0 {
+        log.Printf("safeheron: %s file %q permission %#o is wider than recommended %#o; tighten via chmod",
+            label, path, actual, recommendedPerm)
+    }
+    return nil
+}
+```
+
+#### 验收标准
+
+| # | 条件 | 验证方式 |
+|---|------|----------|
+| K-PATH-1 | `client.go` 不再含 `writeTempPEM` / `tempDir` / `MkdirTemp` 任何引用 | `grep -n 'writeTempPEM\|tempDir\|MkdirTemp' internal/safeheron/client.go` 无输出 |
+| K-PATH-2 | `Config` 字段为 `*Path` | grep + 编译通过 |
+| K-PATH-3 | env 4 项更名为 `*_PATH`，旧 `*_PEM` 完全不存在于业务代码 | `grep -rn 'SAFEHERON.*PEM' --include="*.go"` 无业务命中 |
+| K-PATH-4 | 文件不存在 / 不可读 → `NewClient` 返回错误（非 panic）；权限位宽于推荐 → WARN log 不阻塞 | 单元测试覆盖 |
+| K-PATH-5 | `secrets/` 在 `.gitignore`，仓库无任何 `*.pem` | `git check-ignore secrets/foo.pem` 返回 0；`git ls-files \| grep '\.pem$'` 空 |
+| K-PATH-6 | 本地 dev 通过：`secrets/` 放 4 个文件 → `./bin/server` 启动成功，pool 初始化正常 | 手动验证 |
+| K-PATH-7 | `client_test.go` 全绿；`go vet` 无新警告；覆盖率不低于现状 | `go test -race -cover ./internal/safeheron/...` |
+
+#### 单元测试用例（替换原 tempDir 测试）
+
+| 用例 | 断言 |
+|------|------|
+| `TestNewClient_FilePathsHappyPath` | 4 个 PEM 文件齐备 → NewClient 成功 |
+| `TestNewClient_PrivateKeyPathMissing` | 空 PrivateKeyPath → "path is required" |
+| `TestNewClient_PrivateKeyFileNotFound` | 路径指向不存在文件 → wrapped `ErrNotExist` |
+| `TestNewClient_PrivateKeyPathIsDir` | 路径指向目录 → "is a directory" |
+| `TestNewClient_WebhookKeysMustBeBothOrNeither` | 仅设 pub 不设 priv → 错误（保持原语义） |
+| `TestNewClient_PermissionWarningEmittedButNotBlocking` | 私钥 perm=0644 → log 含 warn，但 NewClient 成功 |
+| `TestClient_CloseIsIdempotent` | 多次 Close 不 panic（保留以便未来注入资源） |
+
+#### 非目标
+
+- ❌ Vault / sops / AWS Secrets Manager 集成（Phase 3 议题）
+- ❌ 任何 backwards-compatibility shim 兼容旧 `*_PEM` env
+- ❌ Go 代码创建 `secrets/` 或写入示例文件（运维职责）
+- ❌ 修改 `.github/workflows/deploy-backend-test-env.yml`
+- ❌ 强制权限校验导致启动失败
 
 ---
 
@@ -1481,4 +1588,5 @@ KYT_ORPHAN_ALERT_MAX_RETRY=100                     # AML_KYT_ALERT 找不到 dep
 | 2026-05-11 | v1.2 sandbox 实测产出落地（V2/V3/V4/V5 通过）：(a) §2.3 / §4.7 coinKey 实测修正 — `USDT_BSC`→`USDT_BEP20`、`USDC_BSC`→`USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET`、`USDT_TRX`→`USDT_TRC20`，全部 8 行 token_contract / decimals 实测确认。(b) §4.4 / §6.1 地址池预生成改为按 `network_family` 而非按 chain — 实测证实单 EVM 钱包同时 AddCoin ETH+BSC 全部 coinKey 共享同一 `0x...` 地址，钱包数减半。(c) §13 删除「coinKey 训练数据可能过时」（已验证），新增「API Key 钱包账户管理权限缺失」风险。(d) §6.4 webhook 字段映射 / §10 签名 Header 部分待 V6 实测后修订。 |
 | 2026-05-11 | v1.3 sandbox V6/V7 webhook 实测 + 官方文档对齐：(a) **环境分层** — §2.3 拆 2.3.1 生产 (mainnet) + 2.3.2 测试 (testnet) coinKey，schema 不变靠 `APP_ENV` 注入；§2.3.2 已实测 `ETH(SEPOLIA)_..._SEPOLIA` / `USDCOIN_ERC20_..._SEPOLIA` / `TRX(SHASTA)_..._TESTNET` 三个，其他 D1 阶段补；§4.7 seed 拆 mainnet/testnet 两套 SQL；§4.4 / §6.1 AddCoin coinKey 集合从环境内 `coin_chains` 表动态注入。(b) **§4.6 deposits 表重设计** — 删除 `log_index` 字段（V7 + 官方文档确认 webhook 无此字段）；UNIQUE 改为 `(safeheron_tx_key)` 单字段；新增 `safeheron_status` + `safeheron_sub_status` + `status_rank` 单调字段防 webhook 状态乱序回退。(c) **§6.4 webhook 完全重写** — 真实结构是嵌套 `{eventType, eventDetail}`；`eventType` 14 种 Phase 1 只关心 `TRANSACTION_CREATED` + `TRANSACTION_STATUS_CHANGED`；入账条件改为 `transactionStatus='COMPLETED' AND transactionSubStatus='CONFIRMED' AND transactionDirection='INFLOW'`；幂等键 = `(txKey, transactionStatus)`；UPSERT + status_rank 守卫；ack body 必须严格匹配 `{"code":"200","message":"SUCCESS"}` 否则 30s/1m/5m/1h/12h/24h 重试 6 次（V6 实测踩过）；记录 Safeheron 提供的 `/v1/webhook/resend*` 补救接口。(d) **§10** — 签名从 X-Sign Header 假设改为信封内 `sig` 字段 + SDK `WebhookConverter` 一步处理；并发防御 5→6 层（新增乱序保护）。(e) **§13** — 新增 4 个风险：ack body 错误、状态乱序、回溯扫描不推 webhook、生产/测试 coinKey 误用。**纠正 v1.2 错误判断**：原以为 sandbox = mainnet 视图、testnet 走后台路由；实际 sandbox 有独立 testnet coinKey 集合，不存在自动路由。 |
 | 2026-05-11 | v1.4 D1 收尾：(a) §2.3.2 testnet 表收紧 — sandbox `/v1/coin/list` 实测返回 325 个 coin **全是 mainnet**（不含 testnet），结合 list-accounts 钱包 1 默认带的 27 个 coin 反查，确认测试 team 只支持 3 个 testnet coinKey（ETH/USDC Sepolia + TRX Shasta），不支持 BSC 测试网整条 + USDT 测试系列共 5 项。(b) §4.7 testnet seed 收紧为只插 3 行（不支持的 5 个不进 dev/test 数据库），Sepolia USDC token_contract = `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`（Circle 官方）。(c) §13 新增「Dev/test 环境覆盖不全」风险条目，staging 环境用 prod team API Key 真小额做最终验证。 |
+| 2026-05-14 | v1.6 RSA 密钥文件化（**T12 任务**，原 Phase 2 提前到本期合并前）：(a) §10 表格「私钥不入仓」行更新，指向新 §10.1；(b) **新增 §10.1** — 4 个 RSA PEM 从 env 文本（`SAFEHERON_*_KEY_PEM`）改为文件路径（`SAFEHERON_*_KEY_PATH`），运维放置在仓库根 `secrets/` 目录（已加 `.gitignore`），SDK 直接读取真实文件；删除 `internal/safeheron/client.go` 的 `writeTempPEM` / `tempDir` / `cleanupFiles` 整套机制及 `Close()` 中的清理逻辑（commit `fc44c99` SEC-2 引入）；新增 `validateKeyFile` 帮助函数做存在/类型/权限校验；**顺带补 `.env.example` 历史遗留**（缺 `SAFEHERON_WEBHOOK_PRIVATE_KEY_PEM` env 占位，container.go 实际读取此 env）。**决策对齐**：硬切换不兼容旧 env、权限 warn 不阻塞、CI 不动（测试服务器手工放置一次）。验收标准 K-PATH-1 ~ K-PATH-7（详见 §10.1）。原 T12 / T13 编号交换：新 T12 = RSA 密钥文件化、新 T13 = Sandbox 端到端 + 灰度上线。 |
 | 2026-05-12 | v1.5 KYT 合规筛查并入 Phase 1（19 项决策 K-1 ~ K-19）：(a) §2.1 In Scope 新增 KYT 项；(b) §4.6 deposits 表扩展 4 个 AML 字段（`aml_screening_state` / `aml_risk_level` / `aml_evaluated_at` / `aml_list JSONB`）+ 新增 `idx_deposits_kyt_pending` 部分索引；status 枚举新增 `KYT_PENDING`；(c) §6.4 入账伪代码插入 KYT 初查节点，TRIGGERED+LOW 才放行入账；(d) **新增 §6.5 KYT 合规筛查** — 处置矩阵（K-1/K-5/K-6/K-7/K-8）、主路径 AML_KYT_ALERT webhook（含 K-13 乱序保护：找不到 deposit 则事件保留 PENDING 待轮询）、辅路径 API 初查 + 超时兜底（K-9 20min）、K-19 超时仍 IN_PROGRESS 直接 MANUAL_REVIEW；原 §6.5 异常处理重命名为 §6.6；(e) §7.1 / §7.2 状态机加 KYT_PENDING 流转；(f) §8.2 webhook 注明 AML_KYT_ALERT 由统一入口分发；(g) §9.1 API Key 权限加 Compliance/KytReport + Console 配置清单（开启 AML + Webhook 通知）；(h) §9.6 加 4 个环境变量（`KYT_ENABLED` / `KYT_TIMEOUT=20m` / `KYT_SCAN_INTERVAL=1m` / `KYT_ORPHAN_ALERT_MAX_RETRY=100`）+ K-16 启动校验（prod 强制 enable）；(i) §10 加 4 条 KYT 安全要求；(j) §11.1 加 15 条 KYT 功能验收项 F-KYT-1 ~ F-KYT-15；(k) §13 加 5 条 KYT 风险；(l) §14 Phase 2 删除「KYT 接入」（已上移到 Phase 1），新增「KYT 扩展」TODO（三家服务商 / 运维放行接口 K-18 / 提现 KYT / 动态阈值）。**决策对齐**：仅接 MistTrack 一家（K-4），前端 KYT_PENDING 文案「Under compliance review」（K-15），不回填历史数据（K-14）。 |

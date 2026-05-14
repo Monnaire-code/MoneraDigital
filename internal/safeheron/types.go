@@ -92,6 +92,10 @@ type TransactionDetail struct {
 type WebhookEvent struct {
 	EventType   string      `json:"eventType"`
 	EventDetail EventDetail `json:"eventDetail"`
+	// RawBody holds the full decrypted Safeheron plaintext. Not serialized to
+	// JSON — populated by WebhookConvert so callers can store the lossless
+	// payload (AML_KYT_ALERT eventDetail fields are not in EventDetail).
+	RawBody []byte `json:"-"`
 }
 
 type EventDetail struct {

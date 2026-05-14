@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -23,7 +24,15 @@ type fakeVerifier struct {
 }
 
 func (f *fakeVerifier) WebhookConvert(body []byte) (*safeheron.WebhookEvent, error) {
-	return f.convertFn(body)
+	evt, err := f.convertFn(body)
+	// Simulate real SDK: populate RawBody with the full decrypted plaintext so
+	// the handler can store lossless payload (AML fields etc.).
+	if err == nil && evt != nil && len(evt.RawBody) == 0 {
+		if raw, merr := json.Marshal(evt); merr == nil {
+			evt.RawBody = raw
+		}
+	}
+	return evt, err
 }
 
 type fakeRecorder struct {

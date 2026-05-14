@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -253,6 +254,11 @@ func (h *Handler) CreateAccount(c *gin.Context) {
 
 	// Trigger async KYC workflow
 	go func() {
+		defer func() {
+			if rv := recover(); rv != nil {
+				log.Printf("KYC workflow panic recovered: %v", rv)
+			}
+		}()
 		// Move to PENDING_KYC after 2 seconds
 		time.Sleep(2 * time.Second)
 		store.UpdateAccount(accountID, func(acc *CoreAccount) {

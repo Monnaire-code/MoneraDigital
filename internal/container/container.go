@@ -56,19 +56,20 @@ func WithEncryption(key string) ContainerOption {
 // environments where Safeheron credentials aren't provisioned yet.
 //
 // Callers must pass a long-lived ctx (typically the server lifecycle ctx); the
-// replenisher goroutine exits when ctx is cancelled. The SDK client's temp PEM
-// files are cleaned up via Container.Close().
+// replenisher goroutine exits when ctx is cancelled. v1.6: PEM files now live
+// at SAFEHERON_*_KEY_PATH locations under secrets/ — operators are responsible
+// for placing them with correct permissions before startup.
 func WithSafeheronPool(ctx context.Context) ContainerOption {
 	return func(c *Container) {
 		baseURL := viper.GetString("SAFEHERON_API_BASE_URL")
 		apiKey := viper.GetString("SAFEHERON_API_KEY")
-		privKey := viper.GetString("SAFEHERON_PRIVATE_KEY_PEM")
-		platKey := viper.GetString("SAFEHERON_PLATFORM_PUBLIC_KEY_PEM")
-		whPub := viper.GetString("SAFEHERON_WEBHOOK_PUBLIC_KEY_PEM")
-		whPriv := viper.GetString("SAFEHERON_WEBHOOK_PRIVATE_KEY_PEM")
+		privPath := viper.GetString("SAFEHERON_PRIVATE_KEY_PATH")
+		platPath := viper.GetString("SAFEHERON_PLATFORM_PUBLIC_KEY_PATH")
+		whPubPath := viper.GetString("SAFEHERON_WEBHOOK_PUBLIC_KEY_PATH")
+		whPrivPath := viper.GetString("SAFEHERON_WEBHOOK_PRIVATE_KEY_PATH")
 
-		if apiKey == "" || privKey == "" || platKey == "" {
-			log.Printf("Safeheron pool disabled: SAFEHERON_API_KEY/PRIVATE_KEY/PLATFORM_PUBLIC_KEY not configured")
+		if apiKey == "" || privPath == "" || platPath == "" {
+			log.Printf("Safeheron pool disabled: SAFEHERON_API_KEY/PRIVATE_KEY_PATH/PLATFORM_PUBLIC_KEY_PATH not configured")
 			return
 		}
 
@@ -81,13 +82,13 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 		c.WalletRegistry = registry
 
 		client, err := safeheron.NewClient(safeheron.Config{
-			BaseURL:              baseURL,
-			APIKey:               apiKey,
-			PrivateKeyPEM:        privKey,
-			PlatformPublicKeyPEM: platKey,
-			WebhookPublicKeyPEM:  whPub,
-			WebhookPrivateKeyPEM: whPriv,
-			RequestTimeoutMS:     30000,
+			BaseURL:               baseURL,
+			APIKey:                apiKey,
+			PrivateKeyPath:        privPath,
+			PlatformPublicKeyPath: platPath,
+			WebhookPublicKeyPath:  whPubPath,
+			WebhookPrivateKeyPath: whPrivPath,
+			RequestTimeoutMS:      30000,
 		})
 		if err != nil {
 			log.Printf("Safeheron pool disabled: client init failed: %v", err)
@@ -176,9 +177,14 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 		if workerInterval <= 0 {
 			workerInterval = time.Second
 		}
+		amlPollInterval := viper.GetDuration("AML_POLL_INTERVAL")
+		if amlPollInterval <= 0 {
+			amlPollInterval = 100 * time.Second
+		}
 		c.DepositWorker = deposit.NewWorker(c.DepositPipeline, deposit.WorkerConfig{
 			Interval:        workerInterval,
 			KYTScanInterval: kytScanInterval,
+			AMLPollInterval: amlPollInterval,
 			PanicBackoff:    5 * time.Second,
 		})
 		go c.DepositWorker.Run(ctx)
@@ -358,9 +364,10 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 
 // Close 关闭容器中的资源
 //
-// 顺序：TokenBlacklist → SafeheronClient (清理 /tmp/safeheron-*.pem 0600 私钥)
-// → DB。任一资源 Close 失败仅记录首个错误，后续资源仍会尝试关闭，
-// 避免私钥文件残留磁盘（plan D-3 锁定）。
+// 顺序：TokenBlacklist → SafeheronClient → DB。任一资源 Close 失败仅记录首个
+// 错误，后续资源仍会尝试关闭。v1.6 起 SafeheronClient.Close 是 no-op（PEM
+// 改读 secrets/ 真实文件，不再有进程托管的临时文件），保留调用是为了向后兼容
+// 接口契约。
 func (c *Container) Close() error {
 	var firstErr error
 

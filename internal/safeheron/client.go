@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 
 	sdk "github.com/Safeheron/safeheron-api-sdk-go/safeheron"
@@ -31,14 +32,18 @@ type webhookConverter interface {
 	Convert(webhook.WebHook) (string, error)
 }
 
+// Config carries paths to PEM files on disk. The SDK reads these files directly
+// for RSA signing / verification. Operators are responsible for placing the
+// files under secrets/ with the recommended permissions (0600 for private keys,
+// 0644 for public keys); see SPEC §10.1.
 type Config struct {
-	BaseURL              string
-	APIKey               string
-	PrivateKeyPEM        string
-	PlatformPublicKeyPEM string
-	WebhookPublicKeyPEM  string
-	WebhookPrivateKeyPEM string
-	RequestTimeoutMS     int64
+	BaseURL               string
+	APIKey                string
+	PrivateKeyPath        string
+	PlatformPublicKeyPath string
+	WebhookPublicKeyPath  string
+	WebhookPrivateKeyPath string
+	RequestTimeoutMS      int64
 }
 
 type Client struct {
@@ -46,112 +51,90 @@ type Client struct {
 	compliance  complianceAPIClient
 	transaction transactionAPIClient
 	webhookConv webhookConverter
-	// SEC-2: keys live inside a process-owned tempDir (perm 0700) instead of
-	// the shared system /tmp. Close() blows the whole directory away — even if
-	// the process crashes, the K8s/systemd shutdown signal handler in
-	// cmd/server/main.go invokes Close() before exit.
-	tempDir   string
-	tempFiles []string
-	sdkClient sdk.Client
 }
 
 func NewClient(cfg Config) (*Client, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("safeheron: APIKey is required")
 	}
-	if cfg.PrivateKeyPEM == "" {
-		return nil, fmt.Errorf("safeheron: PrivateKeyPEM is required")
+	if err := validateKeyFile(cfg.PrivateKeyPath, "PrivateKeyPath", 0o600); err != nil {
+		return nil, err
 	}
-	if cfg.PlatformPublicKeyPEM == "" {
-		return nil, fmt.Errorf("safeheron: PlatformPublicKeyPEM is required")
+	if err := validateKeyFile(cfg.PlatformPublicKeyPath, "PlatformPublicKeyPath", 0o644); err != nil {
+		return nil, err
 	}
-
-	// SEC-2: process-owned 0700 directory under $TMPDIR; cleaned by Close().
-	tempDir, err := os.MkdirTemp("", fmt.Sprintf("safeheron-%d-", os.Getpid()))
-	if err != nil {
-		return nil, fmt.Errorf("safeheron: mkdir temp: %w", err)
-	}
-	if err := os.Chmod(tempDir, 0o700); err != nil {
-		_ = os.RemoveAll(tempDir)
-		return nil, fmt.Errorf("safeheron: chmod temp dir: %w", err)
-	}
-
-	var tempFiles []string
-
-	privPath, err := writeTempPEM(tempDir, "private", cfg.PrivateKeyPEM)
-	if err != nil {
-		_ = os.RemoveAll(tempDir)
-		return nil, fmt.Errorf("safeheron: write private key: %w", err)
-	}
-	tempFiles = append(tempFiles, privPath)
-
-	platPath, err := writeTempPEM(tempDir, "platform", cfg.PlatformPublicKeyPEM)
-	if err != nil {
-		_ = os.RemoveAll(tempDir)
-		return nil, fmt.Errorf("safeheron: write platform public key: %w", err)
-	}
-	tempFiles = append(tempFiles, platPath)
 
 	baseClient := sdk.Client{Config: sdk.ApiConfig{
 		BaseUrl:               cfg.BaseURL,
 		ApiKey:                cfg.APIKey,
-		RsaPrivateKey:         privPath,
-		SafeheronRsaPublicKey: platPath,
+		RsaPrivateKey:         cfg.PrivateKeyPath,
+		SafeheronRsaPublicKey: cfg.PlatformPublicKeyPath,
 		RequestTimeout:        cfg.RequestTimeoutMS,
 	}}
 
-	sdkAccount := &api.AccountApi{Client: baseClient}
-	sdkCompliance := &api.ComplianceApi{Client: baseClient}
-	sdkTransaction := &api.TransactionApi{Client: baseClient}
-
 	c := &Client{
-		account:     sdkAccount,
-		compliance:  sdkCompliance,
-		transaction: sdkTransaction,
-		tempDir:     tempDir,
-		tempFiles:   tempFiles,
-		sdkClient:   baseClient,
+		account:     &api.AccountApi{Client: baseClient},
+		compliance:  &api.ComplianceApi{Client: baseClient},
+		transaction: &api.TransactionApi{Client: baseClient},
 	}
 
-	if (cfg.WebhookPublicKeyPEM == "") != (cfg.WebhookPrivateKeyPEM == "") {
-		c.Close()
-		return nil, fmt.Errorf("safeheron: both WebhookPublicKeyPEM and WebhookPrivateKeyPEM must be set, or neither")
+	if (cfg.WebhookPublicKeyPath == "") != (cfg.WebhookPrivateKeyPath == "") {
+		return nil, fmt.Errorf("safeheron: both WebhookPublicKeyPath and WebhookPrivateKeyPath must be set, or neither")
 	}
 
-	if cfg.WebhookPublicKeyPEM != "" && cfg.WebhookPrivateKeyPEM != "" {
-		whPubPath, err := writeTempPEM(tempDir, "whpub", cfg.WebhookPublicKeyPEM)
-		if err != nil {
-			c.Close()
-			return nil, fmt.Errorf("safeheron: write webhook public key: %w", err)
+	if cfg.WebhookPublicKeyPath != "" && cfg.WebhookPrivateKeyPath != "" {
+		if err := validateKeyFile(cfg.WebhookPublicKeyPath, "WebhookPublicKeyPath", 0o644); err != nil {
+			return nil, err
 		}
-		c.tempFiles = append(c.tempFiles, whPubPath)
-
-		whPrivPath, err := writeTempPEM(tempDir, "whpriv", cfg.WebhookPrivateKeyPEM)
-		if err != nil {
-			c.Close()
-			return nil, fmt.Errorf("safeheron: write webhook private key: %w", err)
+		if err := validateKeyFile(cfg.WebhookPrivateKeyPath, "WebhookPrivateKeyPath", 0o600); err != nil {
+			return nil, err
 		}
-		c.tempFiles = append(c.tempFiles, whPrivPath)
-
-		conv := &webhook.WebhookConverter{Config: webhook.WebHookConfig{
-			SafeheronWebHookRsaPublicKey: whPubPath,
-			WebHookRsaPrivateKey:         whPrivPath,
+		c.webhookConv = &webhook.WebhookConverter{Config: webhook.WebHookConfig{
+			SafeheronWebHookRsaPublicKey: cfg.WebhookPublicKeyPath,
+			WebHookRsaPrivateKey:         cfg.WebhookPrivateKeyPath,
 		}}
-		c.webhookConv = conv
 	}
 
 	return c, nil
 }
 
+// Close is retained as a no-op so existing call sites (signal handlers,
+// container teardown, deferred cleanup) keep working after the temp-file
+// machinery was removed in v1.6.
 func (c *Client) Close() error {
-	// SEC-2: Close() is idempotent and safe to call from a signal handler. We
-	// remove individual files first so a partial cleanup is still useful, then
-	// nuke the whole tempDir as a backstop (handles files we don't track).
-	cleanupFiles(c.tempFiles)
-	c.tempFiles = nil
-	if c.tempDir != "" {
-		_ = os.RemoveAll(c.tempDir)
-		c.tempDir = ""
+	return nil
+}
+
+// validateKeyFile ensures path points at an existing regular file (no
+// directories, no symlinks). Symlinks are rejected outright so that the
+// secrets/ directory cannot be repurposed to read PEMs from arbitrary
+// locations even if the directory's 0700 perms are loosened by mistake.
+//
+// If the permission bits are wider than recommendedPerm we log a warning but
+// do not block startup — operators sometimes need looser permissions on
+// shared dev boxes, and a noisy log is enough signal for production
+// hardening.
+func validateKeyFile(path, label string, recommendedPerm os.FileMode) error {
+	if path == "" {
+		return fmt.Errorf("safeheron: %s path is required", label)
+	}
+	// Lstat (not Stat) so symlinks are inspected directly, not followed.
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("safeheron: %s stat %q: %w", label, path, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("safeheron: %s path %q is a directory", label, path)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("safeheron: %s path %q is a symlink; place the real PEM file under secrets/", label, path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("safeheron: %s path %q is not a regular file", label, path)
+	}
+	if actual := info.Mode().Perm(); actual&^recommendedPerm != 0 {
+		log.Printf("safeheron: %s file %q permission %#o is wider than recommended %#o; tighten via chmod",
+			label, path, actual, recommendedPerm)
 	}
 	return nil
 }
@@ -278,7 +261,7 @@ func (c *Client) KytReport(_ context.Context, txKey string) (*KytReportResponse,
 		// breadcrumb instead of going dark.
 		payload, err := json.Marshal(r.Payload)
 		if err != nil {
-			payload = []byte(fmt.Sprintf(`{"_marshal_error":%q}`, err.Error()))
+			payload = fmt.Appendf(nil, `{"_marshal_error":%q}`, err.Error())
 		}
 		out.AmlList = append(out.AmlList, AmlReport{
 			Provider:       r.Provider,
@@ -339,7 +322,7 @@ func (c *Client) GetTransaction(_ context.Context, txKey string) (*TransactionDe
 
 func (c *Client) WebhookConvert(rawBody []byte) (*WebhookEvent, error) {
 	if c.webhookConv == nil {
-		return nil, fmt.Errorf("safeheron: webhook not configured (missing WebhookPublicKeyPEM or WebhookPrivateKeyPEM)")
+		return nil, fmt.Errorf("safeheron: webhook not configured (missing WebhookPublicKeyPath or WebhookPrivateKeyPath)")
 	}
 
 	var wh webhook.WebHook
@@ -356,37 +339,6 @@ func (c *Client) WebhookConvert(rawBody []byte) (*WebhookEvent, error) {
 	if err := json.Unmarshal([]byte(plaintext), &evt); err != nil {
 		return nil, fmt.Errorf("safeheron webhook parse event: %w", err)
 	}
+	evt.RawBody = []byte(plaintext)
 	return &evt, nil
-}
-
-// writeTempPEM creates a 0600 PEM file under dir (the process-owned 0700
-// safeheron-* tempDir from NewClient). Caller appends the returned path to the
-// Client's tempFiles slice so Close() can clean them individually before the
-// blanket os.RemoveAll(tempDir) backstop.
-func writeTempPEM(dir, name, content string) (string, error) {
-	prefix := fmt.Sprintf("safeheron-%s-", name)
-	f, err := os.CreateTemp(dir, prefix)
-	if err != nil {
-		return "", err
-	}
-	path := f.Name()
-
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		os.Remove(path)
-		return "", err
-	}
-	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		os.Remove(path)
-		return "", err
-	}
-	f.Close()
-	return path, nil
-}
-
-func cleanupFiles(paths []string) {
-	for _, p := range paths {
-		os.Remove(p)
-	}
 }

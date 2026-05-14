@@ -286,6 +286,10 @@ func (m *mockRepo) LockOneKYTPendingTimeout(_ context.Context, _ Tx, _ time.Dura
 	return nil, ErrNoPending
 }
 
+func (m *mockRepo) LockOneAmlPending(_ context.Context, _ Tx) (*DepositRow, error) {
+	return nil, ErrNoPending
+}
+
 func (m *mockRepo) FindDepositByTxKey(_ context.Context, _ Tx, txKey string) (*DepositRow, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -239,7 +239,7 @@ func TestWriteJournal(t *testing.T) {
 	defer db.Close()
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO account_journal").
-		WithArgs("S1", int64(42), int64(101), "1.5", "3.0", 10, int64(7)).
+		WithArgs("S1", int64(42), int64(101), "1.5", "3.0", "10", int64(7)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -306,4 +306,58 @@ func TestAsSQLTx_PanicsOnWrongType(t *testing.T) {
 		}
 	}()
 	asSQLTx(&fakeTx{})
+}
+
+func TestLockOneAmlPending_Found(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cols := []string{"id", "user_id", "safeheron_tx_key", "safeheron_coin_key",
+		"amount", "asset", "chain_code", "coin_chain_id",
+		"safeheron_status", "safeheron_sub_status", "status_rank",
+		"block_height", "block_hash", "status"}
+
+	mock.ExpectBegin()
+	// Query must filter on aml_risk_level='PENDING'
+	mock.ExpectQuery(`aml_risk_level`).
+		WillReturnRows(sqlmock.NewRows(cols).
+			AddRow(50, 1, "tx-aml-pending", "ETH_KEY", "0.011", "USDT",
+				"BSC", 1, "COMPLETED", "CONFIRMED", 5, 99999, "0xhash", "KYT_PENDING"))
+	mock.ExpectCommit()
+
+	r := NewRepository(db)
+	tx, _ := r.BeginTx(context.Background())
+	dep, err := r.LockOneAmlPending(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("expected deposit, got error: %v", err)
+	}
+	if dep.ID != 50 {
+		t.Errorf("expected id=50, got %d", dep.ID)
+	}
+	_ = tx.Commit()
+}
+
+func TestLockOneAmlPending_NoRows(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+
+	cols := []string{"id", "user_id", "safeheron_tx_key", "safeheron_coin_key",
+		"amount", "asset", "chain_code", "coin_chain_id",
+		"safeheron_status", "safeheron_sub_status", "status_rank",
+		"block_height", "block_hash", "status"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`aml_risk_level`).WillReturnRows(sqlmock.NewRows(cols))
+	mock.ExpectRollback()
+
+	r := NewRepository(db)
+	tx, _ := r.BeginTx(context.Background())
+	_, err := r.LockOneAmlPending(context.Background(), tx)
+	if !errors.Is(err, ErrNoPending) {
+		t.Fatalf("expected ErrNoPending, got %v", err)
+	}
+	_ = tx.Rollback()
 }

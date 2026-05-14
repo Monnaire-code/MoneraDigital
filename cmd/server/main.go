@@ -159,10 +159,10 @@ func main() {
 		})
 	}
 
-	// SEC-2: graceful shutdown with explicit container.Close() — invoked on
-	// SIGINT/SIGTERM so the Safeheron RSA temp directory is removed before the
-	// process exits. Without this, pkill or systemd `stop` leaves PEM files in
-	// /tmp on disk.
+	// Graceful shutdown: SIGINT/SIGTERM cancels bg ctx (worker/replenisher),
+	// drains in-flight HTTP requests, then closes the container (DB, token
+	// blacklist). v1.6: Safeheron PEMs live at fixed secrets/ paths and are
+	// not managed by the process, so there is nothing to clean up on disk.
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           r,
@@ -198,7 +198,7 @@ func main() {
 		}
 
 		if err := cont.Close(); err != nil {
-			logger.Warn("Container close error (PEM cleanup may be incomplete)", "error", err.Error())
+			logger.Warn("Container close error", "error", err.Error())
 		}
 		logger.Info("Server stopped cleanly")
 	}

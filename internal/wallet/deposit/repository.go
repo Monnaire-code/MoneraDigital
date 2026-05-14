@@ -35,6 +35,10 @@ type Repository interface {
 	UpdateAMLFields(ctx context.Context, tx Tx, depositID int64, screeningState, riskLevel string, evaluatedAt time.Time, amlListJSON []byte) error
 	MoveToKYTPending(ctx context.Context, tx Tx, depositID int64) error
 	LockOneKYTPendingTimeout(ctx context.Context, tx Tx, threshold time.Duration) (*DepositRow, error)
+	// LockOneAmlPending picks up a KYT_PENDING deposit whose KYT result is still
+	// in-flight (aml_risk_level='PENDING'). Unlike LockOneKYTPendingTimeout, it
+	// applies no time threshold — used by ScanAmlPending to poll every tick.
+	LockOneAmlPending(ctx context.Context, tx Tx) (*DepositRow, error)
 	FindDepositByTxKey(ctx context.Context, tx Tx, txKey string) (*DepositRow, bool, error)
 	IncrementEventAttemptsNoTx(ctx context.Context, eventID int64) error
 
@@ -77,7 +81,7 @@ type JournalEntry struct {
 	AccountID       int64
 	Amount          string
 	BalanceSnapshot string
-	BizType         int
+	BizType         string // account_journal.biz_type is VARCHAR(32)
 	RefID           int64
 }
 
@@ -448,6 +452,40 @@ func (r *DBRepository) LockOneKYTPendingTimeout(ctx context.Context, tx Tx, thre
 			return nil, ErrNoPending
 		}
 		return nil, fmt.Errorf("lock KYT_PENDING timeout: %w", err)
+	}
+	return out, nil
+}
+
+func (r *DBRepository) LockOneAmlPending(ctx context.Context, tx Tx) (*DepositRow, error) {
+	// Intentionally does NOT update updated_at: callers that skip (KYT still IN_PROGRESS)
+	// must not reset the 20-min clock used by LockOneKYTPendingTimeout.
+	// Performance note: consider a composite index on (status, aml_risk_level) if the
+	// deposits table grows large.
+	row := asSQLTx(tx).QueryRowContext(ctx,
+		`SELECT id, user_id, COALESCE(safeheron_tx_key, ''),
+		        COALESCE(safeheron_coin_key, ''), amount, asset,
+		        COALESCE(chain_code, ''), COALESCE(coin_chain_id, 0),
+		        COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
+		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
+		        status
+		 FROM deposits
+		 WHERE status = 'KYT_PENDING' AND aml_risk_level = 'PENDING'
+		 ORDER BY updated_at ASC
+		 FOR UPDATE SKIP LOCKED
+		 LIMIT 1`,
+	)
+	out := &DepositRow{}
+	if err := row.Scan(
+		&out.ID, &out.UserID, &out.SafeheronTxKey, &out.SafeheronCoinKey,
+		&out.Amount, &out.Asset,
+		&out.ChainCode, &out.CoinChainID,
+		&out.SafeheronStatus, &out.SafeheronSubStatus,
+		&out.StatusRank, &out.BlockHeight, &out.BlockHash, &out.Status,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNoPending
+		}
+		return nil, fmt.Errorf("lock AML pending: %w", err)
 	}
 	return out, nil
 }

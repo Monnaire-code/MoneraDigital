@@ -95,7 +95,7 @@
             └─────────────┬────────────────────────────────┘
                           ▼
             ┌─────────────────────────────────┐
-            │ T12 Sandbox 端到端 + 灰度上线   │
+            │ T13 Sandbox 端到端 + 灰度上线   │
             │ (3 链 × 2-3 币 + KYT 路径 +     │
             │  异常路径覆盖)                  │
             └─────────────────────────────────┘
@@ -110,8 +110,8 @@
 - T8 是前端切换 → 第四个 demo 检查点（用户可见）
 - T9 是 T8 落地后的 UX 二次迭代（对齐币安/欧易），独立交付
 - **T10 是 v1.5 spec 新增的 KYT 合规筛查**，依赖 T7 的入账状态机；ProcessOne 被改造为两阶段（KYT API 调用脱离 DB 事务），整笔 deposit 必须经 KYT 检查才能 CREDITED
-- **T11 是 v1.6 安全审计补充**，依赖 T10 的状态机和 webhook handler；必须在 T12 端到端验收前完成，否则状态覆写/IP 暴露等风险点会带到生产
-- T12 是灰度上线前的最终验收（原 T10 → T11 → T12 两次顺延）
+- **T11 是 v1.6 安全审计补充**，依赖 T10 的状态机和 webhook handler；必须在 T13 端到端验收前完成，否则状态覆写/IP 暴露等风险点会带到生产
+- T13 是灰度上线前的最终验收（原 T10 → T11 → T13 两次顺延）
 
 ---
 
@@ -129,7 +129,7 @@
 | **P6 充值 UX 重构** | T9 | 选币→选链→展示地址三步流程；deposit-coins 端点；DB 加 short_name/token_standard/estimated_arrival_minutes 列 | D6 |
 | **P7 KYT 合规筛查** | T10 | `KYT_ENABLED=true` 下，构造 webhook payload 跑通 9 个分支：UNTRIGGERED→MR / TRIGGERED+LOW→CREDITED / MEDIUM→MR / HIGH→MR(ERROR) / SEVERE→MR(ERROR) / FAILED→MR / SKIPPED→MR / IN_PROGRESS→KYT_PENDING 后 AML_KYT_ALERT 推进 / 20min 超时兜底；`KYT_ENABLED=false` 下走原流程 | D7 |
 | **P9 安全加固** | T11 | 状态覆写保护 + IP 白名单 + 余额 CHECK + KYT 二次校验 + fallback FOR UPDATE + MoveToKYTPending 幂等 + LookupAddressOwner 精确匹配 + **.env 优先 shell env** | D8 |
-| **P10 端到端验收 + 灰度** | T12 | 3 链 × 2-3 币种端到端各成功 1 次 + KYT 真实告警路径（明天 sandbox 实测） + 异常路径覆盖 + 灰度上线 | D9 |
+| **P10 端到端验收 + 灰度** | T13 | 3 链 × 2-3 币种端到端各成功 1 次 + KYT 真实告警路径（明天 sandbox 实测） + 异常路径覆盖 + 灰度上线 | D9 |
 
 **检查点强制要求**：每阶段结束**必须** demo 给团队看（或录屏），未通过不进入下一阶段。
 
@@ -160,16 +160,16 @@
 |------|------|------|
 | 包路径 | `internal/safeheron/` | SPEC §3.1 |
 | Go SDK | `github.com/Safeheron/safeheron-api-sdk-go`（最新版 `go get` 时确定） | SPEC §9 |
-| 私钥来源 | env `SAFEHERON_PRIVATE_KEY_PEM` 直接放 PEM 字符串（不再用文件路径，避免容器挂载麻烦） | SPEC §9.6，但**简化为单字符串**：sandbox 已验证 SDK 支持字符串输入（实测 demo 已通） |
-| 平台 / Webhook 公钥来源 | env `SAFEHERON_PLATFORM_PUBLIC_KEY_PEM` + `SAFEHERON_WEBHOOK_PUBLIC_KEY_PEM` | SPEC §9.6 |
+| 私钥来源（**v1.6 T12 重构**） | env `SAFEHERON_PRIVATE_KEY_PATH` 指向 `secrets/safeheron-private.pem`（运维放置，0600） | SPEC §10.1 |
+| 平台 / Webhook 公钥来源（**v1.6 T12 重构**） | env `SAFEHERON_PLATFORM_PUBLIC_KEY_PATH` / `SAFEHERON_WEBHOOK_PUBLIC_KEY_PATH` / `SAFEHERON_WEBHOOK_PRIVATE_KEY_PATH` 指向 `secrets/*.pem`（公钥 0644，私钥 0600） | SPEC §10.1 |
 | SDK adapter 必须封装的方法 | `CreateAssetWallet` / `AddCoin` / `ListAccountCoin` / `GetAccountByAddress` / `WebhookConvert`（其余按需添加） | SPEC §6.1 / §6.3 / §6.4 |
 | 重试策略 | 5s / 30s / 120s 指数退避，3 次失败后落 ERROR | SPEC §6.1 |
 | Webhook 验签 | 完全交给 SDK `webhook.WebhookConverter.Convert(env)`，**不自己拼签名串** | SPEC §10 |
-| **SDK 私钥/公钥输入格式（重要修正）** | SDK 读 **PEM 文件路径**（实测 `client.go`：`ApiConfig.RsaPrivateKey` 字段是文件路径字符串，**不是 PEM 内容**）。Phase 1 实现：env 注入 PEM 字符串 → 启动时写 `/tmp/safeheron-{name}.pem` 0600 权限 → 把路径传给 SDK。退出时清理。 | `~/scratch/safeheron-sandbox-test/client.go:137-170` 实测 |
+| **SDK 私钥/公钥输入格式** | SDK 读 **PEM 文件路径**（`ApiConfig.RsaPrivateKey` 字段是文件路径字符串，不是 PEM 内容）。**v1.6 T12 简化**：直接传 `secrets/` 下真实文件路径给 SDK，**取消 writeTempPEM / tempDir 整套机制**；`NewClient` 启动校验文件存在 + 类型，权限位宽于推荐值时 WARN log 不阻塞 | `~/scratch/safeheron-sandbox-test/client.go:137-170` 实测 + SPEC §10.1 |
 | SDK import 路径 | `github.com/Safeheron/safeheron-api-sdk-go/safeheron`, `.../safeheron/api`, `.../safeheron/webhook` 三个子包 | `client.go:10-13` 实测 |
 | SDK client 构造 | `safeheron.Client{Config: safeheron.ApiConfig{BaseUrl, ApiKey, RsaPrivateKey, SafeheronRsaPublicKey, RequestTimeout}}`；各 API 用 `api.AccountApi{Client: cl}` / `api.CoinApi{Client: cl}` / `api.TransactionApi{Client: cl}` 包装 | `client.go:137-157` 实测 |
-| WebhookConverter 构造 | `webhook.WebhookConverter{Config: webhook.WebHookConfig{SafeheronWebHookRsaPublicKey, WebHookRsaPrivateKey}}`，两字段也是**文件路径** | `client.go:159-170` 实测 |
-| 启动校验 | `APP_ENV=production` 时缺失任一 Safeheron env → panic；启动前先把 3 个 PEM 写入临时文件，**任一写入失败也 panic** | SPEC §9.5 + O-1 锁定 |
+| WebhookConverter 构造 | `webhook.WebhookConverter{Config: webhook.WebHookConfig{SafeheronWebHookRsaPublicKey, WebHookRsaPrivateKey}}`，两字段也是**文件路径**（v1.6 起直接传 `secrets/` 真实路径） | `client.go:159-170` 实测 |
+| 启动校验 | `APP_ENV=production` 时缺失任一 Safeheron env → panic；**v1.6 T12** 起 4 个 `*_KEY_PATH` 路径不存在或不可读时 `NewClient` 返回 error；权限位宽于推荐 WARN log 不阻塞 | SPEC §9.5 + §10.1 + O-1 锁定 |
 
 ### 3.3 Registry
 
@@ -261,9 +261,12 @@
 APP_ENV=production
 SAFEHERON_API_BASE_URL=
 SAFEHERON_API_KEY=
-SAFEHERON_PRIVATE_KEY_PEM=
-SAFEHERON_PLATFORM_PUBLIC_KEY_PEM=
-SAFEHERON_WEBHOOK_PUBLIC_KEY_PEM=
+# v1.6 T12: 4 个 RSA 密钥从 PEM 内容改为指向 secrets/ 目录的文件路径
+# 运维需事先 mkdir -p secrets && chmod 0700 secrets，把 4 个 PEM 放进去并设置正确权限
+SAFEHERON_PRIVATE_KEY_PATH=./secrets/safeheron-private.pem        # 0600
+SAFEHERON_PLATFORM_PUBLIC_KEY_PATH=./secrets/safeheron-platform-pub.pem    # 0644
+SAFEHERON_WEBHOOK_PUBLIC_KEY_PATH=./secrets/safeheron-webhook-pub.pem      # 0644
+SAFEHERON_WEBHOOK_PRIVATE_KEY_PATH=./secrets/safeheron-webhook-priv.pem    # 0600
 WALLET_CONFIG_REFRESH_INTERVAL=60s
 POOL_REPLENISH_INTERVAL=10m
 POOL_LOW_WATERMARK_EVM=50
@@ -383,9 +386,9 @@ SAFEHERON_WEBHOOK_ALLOWED_IPS=
 
 - ✅ 已规划，不属于代码决策：
   - 生产出口 IP 列表（部署 ops 提供）→ 已在 §9.4 / §7 风险表中追踪
-  - 生产 Safeheron team API Key（需在控制台生成）→ T12.5 上线 checklist
-  - 飞书机器人 webhook URL（运营创建后给到）→ T12.5
-  - **Safeheron Console KYT 配置**：AML 功能开启 + 风险等级映射 + Webhook 通知启用（K-2 用户已确认；T10.7 中再核对一次） → T12.5
+  - 生产 Safeheron team API Key（需在控制台生成）→ T13.5 上线 checklist
+  - 飞书机器人 webhook URL（运营创建后给到）→ T13.5
+  - **Safeheron Console KYT 配置**：AML 功能开启 + 风险等级映射 + Webhook 通知启用（K-2 用户已确认；T10.7 中再核对一次） → T13.5
 
 这些**不是代码决策开放点**，是部署运维的输入参数。代码侧已经准备好读 env，部署时填即可。
 
@@ -408,9 +411,9 @@ SAFEHERON_WEBHOOK_ALLOWED_IPS=
 | T9   | **充值页面 UX 重构**（选币→选链→展示地址 + 后端 deposit-coins 端点 + DB 展示字段） | T6, T8 | 1d |
 | T10  | **KYT 合规筛查**（015 补 AML 字段 + KYT_PENDING 状态 + ProcessOne 两阶段 + KytReport adapter + AML_KYT_ALERT webhook + 超时兜底扫描 + 前端文案 + 现有测试回归）（v1.5 spec 新增） | T7 | 1.5d |
 | T11  | **充值流水线安全加固**（状态覆写保护 + Webhook IP 白名单 + 余额非负约束 + KYT 环境二次校验 + UpsertDeposit fallback 加锁 + MoveToKYTPending RowsAffected 检查 + LookupAddressOwner network_family 过滤 + FindOrCreateAccountForUpdate 注释澄清 + **.env 优先于 shell env (D-51)**）| T7, T10 | 0.5d |
-| T12  | Sandbox 端到端（3 链 × 2-3 币 + KYT 真实告警路径 + 异常路径） + 灰度上线 | T1-T11 | 1d |
+| T13  | Sandbox 端到端（3 链 × 2-3 币 + KYT 真实告警路径 + 异常路径） + 灰度上线 | T1-T11 | 1d |
 
-总估时 9.5 人日（T11 在 T10 完成后插入，T12 依赖 T11），含缓冲两周内可完成。
+总估时 9.5 人日（T11 在 T10 完成后插入，T13 依赖 T11），含缓冲两周内可完成。
 
 ---
 
