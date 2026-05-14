@@ -44,8 +44,8 @@ fi
 deploy_backend() {
     case "$ENV" in
         test)
-            APP_DIR="/opt/monera-digital-test"
-            SERVICE_NAME="monera-digital-test"
+            APP_DIR="/opt/monera-digital"
+            SERVICE_NAME="monera-digital"
             PORT="${PORT:-8086}"
             ;;
         *)
@@ -79,13 +79,16 @@ ENCRYPTION_KEY=change-me-64-hex-chars
 # Safeheron
 SAFEHERON_API_KEY=
 SAFEHERON_API_BASE_URL=https://api.safeheron.com
-SAFEHERON_PRIVATE_KEY_PEM=
-SAFEHERON_PLATFORM_PUBLIC_KEY_PEM=
-SAFEHERON_WEBHOOK_PUBLIC_KEY_PEM=
-SAFEHERON_WEBHOOK_PRIVATE_KEY_PEM=
+SAFEHERON_PRIVATE_KEY_PATH=./secrets/safeheron-private.pem
+SAFEHERON_PLATFORM_PUBLIC_KEY_PATH=./secrets/safeheron-platform-pub.pem
+SAFEHERON_WEBHOOK_PUBLIC_KEY_PATH=./secrets/safeheron-webhook-pub.pem
+SAFEHERON_WEBHOOK_PRIVATE_KEY_PATH=./secrets/safeheron-webhook-priv.pem
 SAFEHERON_WEBHOOK_ALLOWED_IPS=
 # KYT
 KYT_ENABLED=true
+KYT_TIMEOUT=20m
+AML_FIRST_POLL_DELAY=5m
+AML_POLL_INTERVAL=60s
 # Alert
 ALERT_WEBHOOK_URL=
 ALERT_EMAIL_RECIPIENTS=

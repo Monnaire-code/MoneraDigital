@@ -39,7 +39,7 @@ jobs:
           cp monera-server deploy/
           cp monera-migrate deploy/
           cp scripts/deploy-remote.sh deploy/
-          tar -czf monera-digital-test.tar.gz -C deploy .
+          tar -czf monera-digital.tar.gz -C deploy .
 
       - name: Copy package to server
         uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634 # v0.1.7
@@ -47,7 +47,7 @@ jobs:
           host: ${{ secrets.TEST_ENV_HOST }}
           username: ${{ secrets.TEST_ENV_USER }}
           key: ${{ secrets.TEST_ENV_SSH_KEY }}
-          source: "monera-digital-test.tar.gz"
+          source: "monera-digital.tar.gz"
           target: "/tmp"
 
       - name: Execute Remote Deploy
@@ -58,11 +58,11 @@ jobs:
           key: ${{ secrets.TEST_ENV_SSH_KEY }}
           envs: DEPLOY_USER
           script: |
-            sudo mkdir -p /opt/monera-digital-test
-            sudo tar -xzf /tmp/monera-digital-test.tar.gz -C /opt/monera-digital-test
-            sudo chown -R "${DEPLOY_USER}:${DEPLOY_USER}" /opt/monera-digital-test
-            rm -f /tmp/monera-digital-test.tar.gz
-            cd /opt/monera-digital-test
+            sudo mkdir -p /opt/monera-digital
+            sudo tar -xzf /tmp/monera-digital.tar.gz -C /opt/monera-digital
+            sudo chown -R "${DEPLOY_USER}:${DEPLOY_USER}" /opt/monera-digital
+            rm -f /tmp/monera-digital.tar.gz
+            cd /opt/monera-digital
             bash ./deploy-remote.sh --env test --port 8086
         env:
           DEPLOY_USER: ${{ secrets.TEST_ENV_USER }}
