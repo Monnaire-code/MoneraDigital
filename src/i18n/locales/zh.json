@@ -337,7 +337,8 @@
     "add": "添加",
     "submit": "提交",
     "copied": "已复制",
-    "refresh": "刷新"
+    "refresh": "刷新",
+    "error": "未知错误"
   },
   "addresses": {
     "title": "地址管理",
@@ -849,42 +850,64 @@
   "deposit": {
     "title": "充值",
     "description": "充值数字资产到您的安全钱包。",
-    "selectAsset": "选择币种",
-    "selectNetwork": "选择网络",
-    "address": "充值地址",
-    "copy": "复制地址",
-    "copied": "已复制！",
-    "minDeposit": "最小充值金额：10 USDT",
-    "warning": "请务必确认您选择的是 {{network}} 网络。充值到错误的网络将无法找回。",
-    "testnetWarning": "这是测试网络地址。请勿充值真实资产 - 仅用于测试。充值到测试网络地址的真实资产将无法找回。",
-    "history": "充值记录",
     "status": {
       "PENDING": "确认中",
       "CONFIRMED": "成功",
-      "FAILED": "失败"
+      "FAILED": "失败",
+      "CHAIN_VERIFYING": "验证中",
+      "CHAIN_VERIFIED": "已验证",
+      "CREDITED": "已完成",
+      "MANUAL_REVIEW": "审核中",
+      "KYT_PENDING": "合规审核中"
     },
-    "noHistory": "暂无充值记录",
+    "coinsLoadError": "无法加载可用币种",
     "activate": "开通账户",
     "activateDesc": "请先开通您的钱包账户以获取充值地址。",
-    "comingSoon": {
-      "title": "充值服务即将上线",
-      "description": "我们正在准备充值服务中。请联系我们以安排充值。",
-      "howToDeposit": "如何充值",
-      "step1": {
-        "title": "联系我们的团队",
-        "desc": "通过电子邮件与我们联系，告知您的充值需求"
-      },
-      "step2": {
-        "title": "接收指示",
-        "desc": "我们将为您提供详细的充值指示"
-      },
-      "step3": {
-        "title": "完成充值",
-        "desc": "将资金转入指定地址并与我们确认"
-      },
-      "contactUs": "联系我们",
-      "contactDesc": "如需充值咨询，请联系我们的运营团队：",
-      "supportedCoins": "支持的币种"
+    "steps": {
+      "selectCoin": "选择币种",
+      "selectNetwork": "选择网络",
+      "depositAddress": "充值地址"
+    },
+    "coinSelector": {
+      "title": "选择要充值的币种",
+      "empty": "暂无可充值的币种。"
+    },
+    "networkSelector": {
+      "title": "选择网络",
+      "placeholder": "请选择网络",
+      "warning": "请确保仅通过 {{network}} 网络发送 {{symbol}}。充值到错误的网络将无法找回。"
+    },
+    "addressCard": {
+      "copy": "复制地址",
+      "copied": "地址已复制",
+      "copyFailed": "复制失败",
+      "errorTitle": "无法加载充值地址",
+      "retry": "重试",
+      "qrAlt": "充值地址二维码"
+    },
+    "details": {
+      "minDeposit": "最小充值金额",
+      "confirmations": "到账条件",
+      "confirmationsValue": "{{count}} 个网络确认",
+      "arrivalTime": "预计到账时间",
+      "arrivalTimeValue": "≈ {{minutes}} 分钟",
+      "contractAddress": "合约地址尾号",
+      "viewContract": "查看合约"
+    },
+    "recent": {
+      "title": "近期充币记录",
+      "empty": "暂无充值记录",
+      "error": "加载充值记录失败",
+      "retry": "重试",
+      "viewTx": "查看交易",
+      "coin": "币种",
+      "amount": "数量",
+      "time": "时间",
+      "network": "转账网络",
+      "address": "地址",
+      "txid": "TxID",
+      "status": "状态",
+      "viewMore": "更多"
     }
   },
   "wallet": {

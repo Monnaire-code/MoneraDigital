@@ -9,12 +9,18 @@ import (
 	"log"
 	"os"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"monera-digital/internal/migration"
 	"monera-digital/internal/migration/migrations"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
+	}
+
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		log.Fatal("DATABASE_URL environment variable is required")
@@ -31,6 +37,9 @@ func main() {
 	migrator.Register(&migrations.AddIsPrimaryToWhitelist{})
 	migrator.Register(&migrations.CreateDepositsTable{})
 	migrator.Register(&migrations.AddFrozenUntilToWhitelist{})
+
+	// Safeheron Phase 1
+	migrator.Register(&migrations.SafeheronPhase1{})
 
 	if err := migrator.Migrate(); err != nil {
 		log.Fatal("Migration failed:", err)

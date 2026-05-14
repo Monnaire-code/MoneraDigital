@@ -833,4 +833,140 @@ describe('/api/[...route] - Unified API Router', () => {
       expect(res.json).toHaveBeenCalledWith({});
     });
   });
+
+  describe('Safeheron Phase 1 routes', () => {
+    it('routes GET /wallet/deposit-address with auth + query string', async () => {
+      const handler = await import('./[...route].js').then(m => m.default);
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ address: '0xabc', networkFamily: 'EVM' }),
+      });
+
+      const req = {
+        method: 'GET',
+        query: { route: ['wallet', 'deposit-address'] },
+        url: '/api/wallet/deposit-address?network_family=EVM',
+        headers: { authorization: `Bearer ${generateTestToken()}` },
+      } as any;
+
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      } as any;
+
+      await handler(req, res);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:8081/api/wallet/deposit-address?network_family=EVM',
+        expect.any(Object)
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('requires auth for GET /wallet/deposit-address', async () => {
+      const handler = await import('./[...route].js').then(m => m.default);
+
+      const req = {
+        method: 'GET',
+        query: { route: ['wallet', 'deposit-address'] },
+        headers: {},
+      } as any;
+
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      } as any;
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('routes GET /wallet/supported-chains with auth', async () => {
+      const handler = await import('./[...route].js').then(m => m.default);
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ chains: [] }),
+      });
+
+      const req = {
+        method: 'GET',
+        query: { route: ['wallet', 'supported-chains'] },
+        headers: { authorization: `Bearer ${generateTestToken()}` },
+      } as any;
+
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      } as any;
+
+      await handler(req, res);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:8081/api/wallet/supported-chains',
+        expect.any(Object)
+      );
+    });
+
+    it('routes POST /webhooks/safeheron unauthenticated', async () => {
+      const handler = await import('./[...route].js').then(m => m.default);
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ code: '200', message: 'SUCCESS' }),
+      });
+
+      const req = {
+        method: 'POST',
+        query: { route: ['webhooks', 'safeheron'] },
+        headers: {},
+        body: { sig: 'fake', bizContent: 'fake' },
+      } as any;
+
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      } as any;
+
+      await handler(req, res);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:8081/api/webhooks/safeheron',
+        expect.objectContaining({ method: 'POST' })
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('legacy POST /wallet/create still routes (backend returns 410)', async () => {
+      const handler = await import('./[...route].js').then(m => m.default);
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 410,
+        json: vi.fn().mockResolvedValue({ error: 'DEPRECATED' }),
+      });
+
+      const req = {
+        method: 'POST',
+        query: { route: ['wallet', 'create'] },
+        headers: { authorization: `Bearer ${generateTestToken()}` },
+        body: {},
+      } as any;
+
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      } as any;
+
+      await handler(req, res);
+
+      expect(global.fetch).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(410);
+    });
+  });
 });

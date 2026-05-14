@@ -23,7 +23,7 @@ func TestGetMe_ReturnsTwoFactorEnabled(t *testing.T) {
 	defer db.Close()
 
 	// 2. Setup Service and Handler
-	authService := services.NewAuthService(db, "secret")
+	authService := services.NewAuthService(db, "secret", nil)
 	h := &Handler{
 		AuthService: authService,
 	}

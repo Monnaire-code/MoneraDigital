@@ -1,13 +1,14 @@
 package routes
 
 import (
-	"github.com/gin-gonic/gin"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 	"monera-digital/internal/container"
 	"monera-digital/internal/docs"
 	"monera-digital/internal/handlers"
 	"monera-digital/internal/middleware"
+
+	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 // SetupRoutes configures all API routes with middleware
@@ -35,6 +36,12 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 		cont.IdempotencyService,
 		cont.ActivationService,
 	)
+	// Wire Safeheron pool/registry only when both are present — typed nil
+	// pointers would otherwise satisfy the interface and bypass the
+	// 503-fallback guard inside the handler.
+	if cont.PoolManager != nil && cont.WalletRegistry != nil {
+		h.SetSafeheronDeps(cont.PoolManager, cont.WalletRegistry)
+	}
 
 	// Create 2FA handler
 	twofaHandler := handlers.NewTwoFAHandler(cont.TwoFAService)
@@ -83,6 +90,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 		webhooks := public.Group("/webhooks")
 		{
 			webhooks.POST("/core/deposit", h.HandleDepositWebhook)
+			if cont.SafeheronWebhookHandler != nil {
+				webhooks.POST("/safeheron", cont.SafeheronWebhookHandler.Receive)
+			}
 		}
 	}
 
@@ -124,14 +134,21 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			lending.GET("/positions", h.GetUserPositions)
 		}
 
-		// Wallet routes
+		// Wallet routes — Safeheron Phase 1
 		wallet := protected.Group("/wallet")
 		{
+			wallet.GET("/deposit-address", h.GetDepositAddress)
+			wallet.GET("/deposit-coins", h.GetDepositCoins)
+			wallet.GET("/supported-chains", h.GetSupportedChains)
+
+			// Legacy Core-API wallet endpoints — replaced by deposit-address.
+			// Kept routed so the frontend gets a clear 410 + migration message
+			// instead of a generic 404 during the rollout window.
 			wallet.GET("/info", h.GetWalletInfo)
-			wallet.POST("/create", h.CreateWallet)
-			wallet.POST("/addresses", h.AddWalletAddress)
-			wallet.POST("/address/incomeHistory", h.GetAddressIncomeHistory)
-			wallet.POST("/address/get", h.GetWalletAddress)
+			wallet.POST("/create", handlers.DeprecatedWalletEndpoint)
+			wallet.POST("/addresses", handlers.DeprecatedWalletEndpoint)
+			wallet.POST("/address/incomeHistory", handlers.DeprecatedWalletEndpoint)
+			wallet.POST("/address/get", handlers.DeprecatedWalletEndpoint)
 		}
 
 		// Deposit routes

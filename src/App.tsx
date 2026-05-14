@@ -8,10 +8,10 @@ import i18n from "@/i18n";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import Links from "./pages/Links";
 import NotFound from "./pages/NotFound";
 import DashboardLayout from "./components/DashboardLayout";
 import Overview from "./pages/dashboard/Overview";
-import AccountOpening from "./pages/dashboard/AccountOpening";
 import Assets from "./pages/dashboard/Assets";
 import Addresses from "./pages/dashboard/Addresses";
 import Withdraw from "./pages/dashboard/Withdraw";
@@ -37,6 +37,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/link" element={<Links />} />
             <Route path="/activation" element={<Activation />} />
             <Route path="/contact-info" element={<ContactInfo />} />
             <Route path="/pending-approval" element={<PendingApproval />} />
@@ -44,7 +45,6 @@ const App = () => (
             
             <Route path="/dashboard" element={<DashboardLayout />}>
               <Route index element={<Overview />} />
-              <Route path="account-opening" element={<AccountOpening />} />
               <Route path="assets" element={<Assets />} />
               <Route path="deposit" element={<Deposit />} />
               <Route path="lending" element={<ComingSoon moduleName="借贷管理" />} />

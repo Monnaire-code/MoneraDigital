@@ -3,6 +3,8 @@ package cache
 
 import (
 	"context"
+	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -62,6 +64,11 @@ func (tb *TokenBlacklist) IsBlacklisted(token string) bool {
 
 // cleanupExpiredTokens 清理过期的令牌
 func (tb *TokenBlacklist) cleanupExpiredTokens() {
+	defer func() {
+		if rv := recover(); rv != nil {
+			log.Printf("token blacklist cleanup panic recovered: %v\n%s", rv, debug.Stack())
+		}
+	}()
 	for {
 		select {
 		case <-tb.ticker.C:

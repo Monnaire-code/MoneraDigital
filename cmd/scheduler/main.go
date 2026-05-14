@@ -14,16 +14,22 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"monera-digital/internal/binance"
 	"monera-digital/internal/config"
 	"monera-digital/internal/logger"
 	"monera-digital/internal/repository"
 	"monera-digital/internal/repository/postgres"
 	"monera-digital/internal/scheduler"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
+	}
+
 	fmt.Println("==============================================")
 	fmt.Println("   Monera Digital 利息调度器 - 独立启动脚本     ")
 	fmt.Println("==============================================")
