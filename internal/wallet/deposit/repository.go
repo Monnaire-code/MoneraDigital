@@ -288,7 +288,10 @@ func (r *DBRepository) MarkDepositCredited(ctx context.Context, tx Tx, depositID
 	if err != nil {
 		return fmt.Errorf("mark deposit credited: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("mark deposit credited: rows affected: %w", err)
+	}
 	if n == 0 {
 		return fmt.Errorf("mark deposit credited: no rows affected (id=%d, status precondition failed)", depositID)
 	}
@@ -305,7 +308,10 @@ func (r *DBRepository) MarkDepositFailed(ctx context.Context, tx Tx, depositID i
 	if err != nil {
 		return fmt.Errorf("mark deposit failed: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("mark deposit failed: rows affected: %w", err)
+	}
 	if n == 0 {
 		return ErrDepositTerminalState
 	}
@@ -322,7 +328,10 @@ func (r *DBRepository) MarkDepositManualReview(ctx context.Context, tx Tx, depos
 	if err != nil {
 		return fmt.Errorf("mark deposit manual review: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("mark deposit manual review: rows affected: %w", err)
+	}
 	if n == 0 {
 		return ErrDepositTerminalState
 	}
@@ -402,7 +411,10 @@ func (r *DBRepository) MoveToKYTPending(ctx context.Context, tx Tx, depositID in
 	if err != nil {
 		return fmt.Errorf("move to KYT_PENDING: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("move to KYT_PENDING: rows affected: %w", err)
+	}
 	if n == 0 {
 		return ErrDepositNotPending
 	}

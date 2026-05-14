@@ -45,6 +45,24 @@ export interface DepositCoinsResponse {
 
 const networkFamilySchema = z.enum(['EVM', 'TRON']);
 
+// F-3: response schema for the deposit address endpoint. Backend regressions
+// that drop or null `address` would otherwise render an empty address box —
+// users could mis-send funds to a void destination. Hard-fail at the boundary
+// so the UI shows an error state instead of a silent empty input.
+const supportedCoinSchema = z.object({
+  chainCode: z.string(),
+  symbol: z.string(),
+  coinKey: z.string(),
+  minDeposit: z.string(),
+  decimals: z.number(),
+});
+
+const depositAddressResponseSchema = z.object({
+  networkFamily: networkFamilySchema,
+  address: z.string().min(1, 'address must not be empty'),
+  supportedCoins: z.array(supportedCoinSchema),
+});
+
 async function authHeaders(): Promise<HeadersInit> {
   const token = localStorage.getItem('token');
   if (!token) {
@@ -96,7 +114,8 @@ export class WalletService {
       `/api/wallet/deposit-address?networkFamily=${encodeURIComponent(family)}`,
       { headers: await authHeaders() }
     );
-    return parseOrThrow<DepositAddressResponse>(response, 'fetch deposit address');
+    const raw = await parseOrThrow<unknown>(response, 'fetch deposit address');
+    return depositAddressResponseSchema.parse(raw);
   }
 
   static async getRecentDeposits(limit = 5): Promise<DepositRecord[]> {

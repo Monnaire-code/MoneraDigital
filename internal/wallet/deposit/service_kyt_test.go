@@ -2523,3 +2523,105 @@ func TestProcessOne_TGamma_StaleDeposit_CommitFails(t *testing.T) {
 		t.Fatal("expected error from T-γ stale commit failure")
 	}
 }
+
+// S-1: orphan AML alert below retry threshold + IncrementEventAttemptsNoTx fails.
+// Without ErrKYTAPIBackoff wrap the worker would tight-loop on the same event.
+func TestProcessKYTAlert_OrphanIncrementFailureYieldsBackoff(t *testing.T) {
+	repo := newMockRepo()
+	incRepo := &incrementErrMockRepo{mockRepo: repo}
+	svc := newKYTSvc(t, repo, nil, true)
+	svc.repo = incRepo // swap repo so IncrementEventAttemptsNoTx returns error
+
+	payload := `{"eventType":"AML_KYT_ALERT","eventDetail":{"txKey":"tx-orphan-incfail","amlScreeningTriggeredState":"TRIGGERED","amlList":[{"provider":"MistTrack","status":"COMPLETED","riskLevel":"LOW"}]}}`
+	repo.pending = []*Event{{
+		ID:              701,
+		EventID:         "evt-orphan-incfail",
+		EventType:       "AML_KYT_ALERT",
+		RawPayload:      []byte(payload),
+		ProcessAttempts: 0, // below kytOrphanMaxRetry (100)
+	}}
+
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error so worker yields to next tick")
+	}
+	if !errors.Is(err, ErrKYTAPIBackoff) {
+		t.Errorf("expected ErrKYTAPIBackoff sentinel for worker yield, got: %v", err)
+	}
+}
+
+// S-1 variant: FindDepositByTxKey errors AND IncrementEventAttemptsNoTx errors —
+// both failures combined must still surface as ErrKYTAPIBackoff so worker yields.
+func TestProcessKYTAlert_FindErrorPlusIncrementFailureYieldsBackoff(t *testing.T) {
+	repo := newMockRepo()
+	combined := &findAndIncrementErrRepo{mockRepo: repo, findErr: errors.New("db read failed")}
+	svc := newKYTSvc(t, repo, nil, true)
+	svc.repo = combined
+
+	payload := `{"eventType":"AML_KYT_ALERT","eventDetail":{"txKey":"tx-find-incfail","amlScreeningTriggeredState":"TRIGGERED","amlList":[{"provider":"MistTrack","status":"COMPLETED","riskLevel":"LOW"}]}}`
+	repo.pending = []*Event{{
+		ID:         702,
+		EventID:    "evt-find-incfail",
+		EventType:  "AML_KYT_ALERT",
+		RawPayload: []byte(payload),
+	}}
+
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error from combined find+increment failure")
+	}
+	if !errors.Is(err, ErrKYTAPIBackoff) {
+		t.Errorf("expected ErrKYTAPIBackoff (S-1), got: %v", err)
+	}
+}
+
+type findAndIncrementErrRepo struct {
+	*mockRepo
+	findErr error
+}
+
+func (r *findAndIncrementErrRepo) FindDepositByTxKey(_ context.Context, _ Tx, _ string) (*DepositRow, bool, error) {
+	return nil, false, r.findErr
+}
+
+func (r *findAndIncrementErrRepo) IncrementEventAttemptsNoTx(_ context.Context, _ int64) error {
+	return errors.New("increment also failed")
+}
+
+// S-2: handleKYTApiFailure with IncrementEventAttemptsNoTx error must surface an
+// ERROR-level alert so ops can see the deposit is at risk of getting stuck.
+func TestHandleKYTApiFailure_IncrementFailureFiresAlert(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 1
+	incRepo := &incrementErrMockRepo{mockRepo: repo}
+	kyt := &mockKYTClient{reportFn: func(_ context.Context, _ string) (*safeheron.KytReportResponse, error) {
+		return nil, errors.New("safeheron 503")
+	}}
+	alertFn, alerts := newAlertCollector()
+	svc := NewService(incRepo, newTestRegistry("ETH", "ETHEREUM", "ETH_KEY", "0.0001", 1), alertFn)
+	svc.SetSerialFunc(func() string { return "TEST-SERIAL" })
+	svc.SetKYTDeps(kyt, true, 100, 20*time.Minute)
+	enqueueRaw(t, repo, completedConfirmedPayload("tx-s2-alert"))
+
+	if _, err := svc.ProcessOne(context.Background()); err == nil {
+		t.Fatal("expected error from KYT API failure")
+	}
+
+	got := *alerts
+	if len(got) == 0 {
+		t.Fatal("expected ERROR alert when increment counter fails (S-2)")
+	}
+	found := false
+	for _, a := range got {
+		if a.level == "ERROR" && a.title == "KYT attempts counter unwritable" {
+			found = true
+			if a.fields["txKey"] != "tx-s2-alert" {
+				t.Errorf("alert missing txKey field, got %v", a.fields)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'KYT attempts counter unwritable' ERROR alert, got %+v", got)
+	}
+}

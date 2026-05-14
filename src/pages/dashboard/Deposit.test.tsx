@@ -352,16 +352,19 @@ describe('Deposit page — three-step flow', () => {
     expect(screen.queryByTestId('coin-chip-ETH')).toBeNull();
   });
 
-  it('shows error state when deposit-coins endpoint fails', async () => {
+  it('shows error state with retry button when deposit-coins endpoint fails (F-2)', async () => {
+    let coinsCallCount = 0;
+    const coinsResponses: Response[] = [
+      { ok: false, status: 503, json: () => Promise.resolve({ error: 'REGISTRY_UNAVAILABLE' }) } as unknown as Response,
+      { ok: true, status: 200, json: () => Promise.resolve(MOCK_COINS) } as unknown as Response,
+    ];
     global.fetch = vi.fn((url: string | URL | Request) => {
       const u = typeof url === 'string' ? url : url.toString();
       const parsed = new URL(u, 'http://localhost');
       if (parsed.pathname === '/api/wallet/deposit-coins') {
-        return Promise.resolve({
-          ok: false,
-          status: 503,
-          json: () => Promise.resolve({ error: 'REGISTRY_UNAVAILABLE' }),
-        } as unknown as Response);
+        const r = coinsResponses[coinsCallCount] ?? coinsResponses[coinsResponses.length - 1];
+        coinsCallCount += 1;
+        return Promise.resolve(r);
       }
       if (parsed.pathname === '/api/deposits') {
         return Promise.resolve({
@@ -375,9 +378,12 @@ describe('Deposit page — three-step flow', () => {
 
     renderDeposit();
 
-    await waitFor(() => {
-      expect(screen.getByText(/unable to load/i)).toBeInTheDocument();
-    });
+    await waitFor(() => screen.getByText(/unable to load/i));
+    // F-2: retry button should be present alongside the error so users can recover
+    // without navigating away.
+    await userEvent.click(screen.getByTestId('retry-deposit-coins'));
+    await waitFor(() => screen.getByTestId('coin-chip-ETH'));
+    expect(coinsCallCount).toBeGreaterThanOrEqual(2);
   });
 
   it('shows address error state when deposit-address fails', async () => {
@@ -521,7 +527,12 @@ describe('Deposit page — three-step flow', () => {
     expect(screen.queryByTestId('contract-link')).toBeNull();
   });
 
-  it('renders empty deposits gracefully when /api/deposits returns 500', async () => {
+  it('surfaces error UI with retry when /api/deposits fails (F-1)', async () => {
+    let depositsCallCount = 0;
+    const depositsResponses: Response[] = [
+      { ok: false, status: 500, json: () => Promise.resolve({ error: 'INTERNAL' }) } as unknown as Response,
+      { ok: true, status: 200, json: () => Promise.resolve({ deposits: [{ id: 1, amount: '1', asset: 'ETH', status: 'CREDITED' }] }) } as unknown as Response,
+    ];
     global.fetch = vi.fn((url: string | URL | Request) => {
       const u = typeof url === 'string' ? url : url.toString();
       const parsed = new URL(u, 'http://localhost');
@@ -529,7 +540,9 @@ describe('Deposit page — three-step flow', () => {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(MOCK_COINS) } as unknown as Response);
       }
       if (parsed.pathname === '/api/deposits') {
-        return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'INTERNAL' }) } as unknown as Response);
+        const r = depositsResponses[depositsCallCount] ?? depositsResponses[depositsResponses.length - 1];
+        depositsCallCount += 1;
+        return Promise.resolve(r);
       }
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) } as unknown as Response);
     }) as unknown as typeof fetch;
@@ -537,8 +550,15 @@ describe('Deposit page — three-step flow', () => {
     renderDeposit();
     await waitFor(() => screen.getByTestId('coin-chip-ETH'));
 
-    // Should show empty state, not crash
-    expect(screen.getByText(/no recent deposits/i)).toBeInTheDocument();
+    // F-1: must surface the failure (not silently render empty state) so users
+    // don't think their deposit was lost.
+    await waitFor(() => screen.getByTestId('retry-recent-deposits'));
+    expect(screen.queryByText(/no recent deposits/i)).toBeNull();
+
+    // Retry should re-invoke the endpoint and reveal the table.
+    await userEvent.click(screen.getByTestId('retry-recent-deposits'));
+    await waitFor(() => screen.getByTestId('deposits-table'));
+    expect(depositsCallCount).toBeGreaterThanOrEqual(2);
   });
 
   it('hides QR code gracefully when QRCode.toDataURL fails', async () => {

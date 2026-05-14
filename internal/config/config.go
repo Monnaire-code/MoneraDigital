@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,11 @@ type Config struct {
 	EncryptionKey string
 	TimeZone      string
 	CoreAPIURL    string
+	// TrustedProxies controls which client addresses Gin trusts for X-Forwarded-For
+	// inspection (SEC-1). Empty means trust nothing — c.ClientIP() returns the
+	// direct peer address. Configure to LB CIDRs (e.g. "10.0.0.0/8") in production
+	// when running behind a reverse proxy.
+	TrustedProxies []string
 }
 
 // 全局时区配置
@@ -44,16 +50,36 @@ func Load() *Config {
 	viper.AutomaticEnv()
 
 	cfg := &Config{
-		Port:          viper.GetString("PORT"),
-		DatabaseURL:   viper.GetString("DATABASE_URL"),
-		RedisURL:      viper.GetString("REDIS_URL"),
-		JWTSecret:     viper.GetString("JWT_SECRET"),
-		EncryptionKey: viper.GetString("ENCRYPTION_KEY"),
-		TimeZone:      viper.GetString("TIME_ZONE"),
-		CoreAPIURL:    viper.GetString("MONNAIRE_CORE_API_URL"),
+		Port:           viper.GetString("PORT"),
+		DatabaseURL:    viper.GetString("DATABASE_URL"),
+		RedisURL:       viper.GetString("REDIS_URL"),
+		JWTSecret:      viper.GetString("JWT_SECRET"),
+		EncryptionKey:  viper.GetString("ENCRYPTION_KEY"),
+		TimeZone:       viper.GetString("TIME_ZONE"),
+		CoreAPIURL:     viper.GetString("MONNAIRE_CORE_API_URL"),
+		TrustedProxies: splitTrustedProxies(viper.GetString("TRUSTED_PROXIES")),
 	}
 
 	return cfg
+}
+
+// splitTrustedProxies parses a comma-separated TRUSTED_PROXIES env var into a
+// slice. Empty input returns nil — Gin treats nil as "trust no proxies".
+func splitTrustedProxies(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // GetLocation returns the configured timezone location.

@@ -87,6 +87,33 @@ describe('WalletService', () => {
       const { WalletService } = await import('./wallet-service');
       await expect(WalletService.getDepositAddress('EVM')).rejects.toThrow('Not authenticated');
     });
+
+    // F-3: response schema must reject empty address so the UI doesn't render
+    // a blank deposit input that users could mis-send funds to.
+    it('rejects empty address in response (F-3)', async () => {
+      global.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({
+          networkFamily: 'EVM',
+          address: '',
+          supportedCoins: [],
+        })
+      ) as unknown as typeof fetch;
+      const { WalletService } = await import('./wallet-service');
+
+      await expect(WalletService.getDepositAddress('EVM')).rejects.toThrow();
+    });
+
+    it('rejects missing address field in response (F-3)', async () => {
+      global.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({
+          networkFamily: 'EVM',
+          supportedCoins: [],
+        })
+      ) as unknown as typeof fetch;
+      const { WalletService } = await import('./wallet-service');
+
+      await expect(WalletService.getDepositAddress('EVM')).rejects.toThrow();
+    });
   });
 
   describe('getRecentDeposits', () => {

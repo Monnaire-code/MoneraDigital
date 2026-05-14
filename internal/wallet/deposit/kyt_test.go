@@ -143,13 +143,11 @@ func TestMaxLastUpdateTime(t *testing.T) {
 		}
 	})
 
-	t.Run("empty LastUpdateTime fallback", func(t *testing.T) {
+	t.Run("empty LastUpdateTime returns zero (S-3)", func(t *testing.T) {
 		aml := []safeheron.AmlReport{{LastUpdateTime: ""}}
-		before := time.Now()
 		got := maxLastUpdateTime(aml)
-		after := time.Now()
-		if got.Before(before) || got.After(after) {
-			t.Errorf("expected time.Now() fallback, got %v", got)
+		if !got.IsZero() {
+			t.Errorf("expected zero time so timeout scan fires immediately, got %v", got)
 		}
 	})
 
@@ -166,16 +164,21 @@ func TestMaxLastUpdateTime(t *testing.T) {
 		}
 	})
 
-	t.Run("all parse failures fallback", func(t *testing.T) {
+	t.Run("all parse failures return zero (S-3)", func(t *testing.T) {
 		aml := []safeheron.AmlReport{
 			{LastUpdateTime: "not-a-number"},
 			{LastUpdateTime: ""},
 		}
-		before := time.Now()
 		got := maxLastUpdateTime(aml)
-		after := time.Now()
-		if got.Before(before) || got.After(after) {
-			t.Errorf("expected time.Now() fallback, got %v", got)
+		if !got.IsZero() {
+			t.Errorf("expected zero time so timeout scan fires immediately, got %v", got)
+		}
+	})
+
+	t.Run("empty list returns zero (S-3)", func(t *testing.T) {
+		got := maxLastUpdateTime(nil)
+		if !got.IsZero() {
+			t.Errorf("expected zero time for empty list, got %v", got)
 		}
 	})
 }

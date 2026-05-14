@@ -130,6 +130,10 @@ func TestNewClient_TempFilesCreatedAndCleaned(t *testing.T) {
 
 	saved := make([]string, len(c.tempFiles))
 	copy(saved, c.tempFiles)
+	tempDir := c.tempDir
+	if tempDir == "" {
+		t.Fatal("expected tempDir to be set (SEC-2)")
+	}
 	c.Close()
 	for _, f := range saved {
 		if _, err := os.Stat(f); !os.IsNotExist(err) {
@@ -138,6 +142,34 @@ func TestNewClient_TempFilesCreatedAndCleaned(t *testing.T) {
 	}
 	if c.tempFiles != nil {
 		t.Fatal("tempFiles should be nil after Close")
+	}
+	// SEC-2: process tempDir must also be removed so PEM data does not survive
+	// process exit even if a future code path forgets to track a file.
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Fatalf("tempDir %s should be removed after Close (SEC-2)", tempDir)
+	}
+	if c.tempDir != "" {
+		t.Fatal("tempDir field should be cleared after Close")
+	}
+}
+
+// SEC-2: Close() must be idempotent so the signal handler can call it after
+// the process already cleaned up via defer (or vice versa).
+func TestClient_CloseIsIdempotent(t *testing.T) {
+	c, err := NewClient(Config{
+		BaseURL:              "https://api.safeheron.vip",
+		APIKey:               "test-api-key",
+		PrivateKeyPEM:        "-----BEGIN PRIVATE KEY-----\nA=\n-----END PRIVATE KEY-----",
+		PlatformPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nB=\n-----END PUBLIC KEY-----",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("second Close must not error: %v", err)
 	}
 }
 
@@ -594,8 +626,9 @@ func TestWebhookConvert_InvalidEventJSON(t *testing.T) {
 // --- Helper function tests ---
 
 func TestWriteTempPEM(t *testing.T) {
+	dir := t.TempDir()
 	content := "-----BEGIN TEST-----\ndata\n-----END TEST-----"
-	path, err := writeTempPEM("test", content)
+	path, err := writeTempPEM(dir, "test", content)
 	if err != nil {
 		t.Fatalf("writeTempPEM failed: %v", err)
 	}
@@ -606,14 +639,15 @@ func TestWriteTempPEM(t *testing.T) {
 		t.Fatalf("content mismatch: got %q", string(got))
 	}
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 {
+	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("wrong permissions: %v", info.Mode().Perm())
 	}
 }
 
 func TestCleanupFiles(t *testing.T) {
-	f1, _ := writeTempPEM("cleanup1", "test1")
-	f2, _ := writeTempPEM("cleanup2", "test2")
+	dir := t.TempDir()
+	f1, _ := writeTempPEM(dir, "cleanup1", "test1")
+	f2, _ := writeTempPEM(dir, "cleanup2", "test2")
 	cleanupFiles([]string{f1, f2})
 	for _, f := range []string{f1, f2} {
 		if _, err := os.Stat(f); !os.IsNotExist(err) {
@@ -712,6 +746,37 @@ func TestKytReport_PayloadMarshal(t *testing.T) {
 	payload := string(resp.AmlList[0].Payload)
 	if !strings.Contains(payload, "riskScore") || !strings.Contains(payload, "mixer") {
 		t.Fatalf("Payload not correctly marshaled from SDK any: %s", payload)
+	}
+}
+
+// G-2: provider payload that fails json.Marshal must still leave a breadcrumb
+// in the AML row so ops doesn't lose the evidence trail. The previous code
+// silently stored nil.
+func TestKytReport_PayloadMarshalFailureRetainsError(t *testing.T) {
+	mock := &mockComplianceAPI{
+		kytReportFn: func(_ api.KytReportRequest, resp *api.KytReportResponse) error {
+			resp.TxKey = "tx-marshal-fail"
+			resp.AmlScreeningTriggeredState = "TRIGGERED"
+			resp.AmlList = []api.AmlReport{
+				{
+					Provider:  "MistTrack",
+					Status:    "COMPLETED",
+					RiskLevel: "HIGH",
+					Payload:   make(chan int), // channels are not marshalable
+				},
+			}
+			return nil
+		},
+	}
+
+	c := &Client{compliance: mock}
+	resp, err := c.KytReport(context.Background(), "tx-marshal-fail")
+	if err != nil {
+		t.Fatalf("KytReport should swallow marshal errors and continue, got: %v", err)
+	}
+	payload := string(resp.AmlList[0].Payload)
+	if !strings.Contains(payload, "_marshal_error") {
+		t.Fatalf("expected payload to retain _marshal_error breadcrumb, got: %s", payload)
 	}
 }
 
@@ -1062,85 +1127,29 @@ func TestNewClient_PlatformKeyWriteFailure_Cleanup(t *testing.T) {
 	t.Skip("could not win the race after 5 attempts (platform key write failure)")
 }
 
-func TestNewClient_WebhookPubKeyWriteFailure_Cleanup(t *testing.T) {
-	// Private + platform key writes succeed (2 files), webhook pub key fails.
-	// Exercises lines 106-109: c.Close() + return.
-	dir := t.TempDir()
-	defer os.Chmod(dir, 0755)
-
-	var locked atomic.Bool
-	go lockDirAfterNFiles(dir, 2, &locked)
-
-	orig := os.Getenv("TMPDIR")
-	os.Setenv("TMPDIR", dir)
-	defer os.Setenv("TMPDIR", orig)
-
-	privPEM := "-----BEGIN PRIVATE KEY-----\nMIIEvgI=\n-----END PRIVATE KEY-----"
-	pubPEM := "-----BEGIN PUBLIC KEY-----\nMIIBIjA=\n-----END PUBLIC KEY-----"
-
-	_, err := NewClient(Config{
-		APIKey:               "test-key",
-		PrivateKeyPEM:        privPEM,
-		PlatformPublicKeyPEM: pubPEM,
-		WebhookPublicKeyPEM:  pubPEM,
-		WebhookPrivateKeyPEM: privPEM,
-	})
-	if err == nil {
-		t.Fatal("expected error when webhook public key write fails")
-	}
-	if !strings.Contains(err.Error(), "webhook public key") {
-		t.Fatalf("expected 'webhook public key' error, got: %v", err)
-	}
-}
-
-func TestNewClient_WebhookPrivKeyWriteFailure_Cleanup(t *testing.T) {
-	// Private + platform + webhook-pub writes succeed (3 files), webhook priv fails.
-	// Exercises lines 113-116: c.Close() + return.
-	dir := t.TempDir()
-	defer os.Chmod(dir, 0755)
-
-	var locked atomic.Bool
-	go lockDirAfterNFiles(dir, 3, &locked)
-
-	orig := os.Getenv("TMPDIR")
-	os.Setenv("TMPDIR", dir)
-	defer os.Setenv("TMPDIR", orig)
-
-	privPEM := "-----BEGIN PRIVATE KEY-----\nMIIEvgI=\n-----END PRIVATE KEY-----"
-	pubPEM := "-----BEGIN PUBLIC KEY-----\nMIIBIjA=\n-----END PUBLIC KEY-----"
-
-	_, err := NewClient(Config{
-		APIKey:               "test-key",
-		PrivateKeyPEM:        privPEM,
-		PlatformPublicKeyPEM: pubPEM,
-		WebhookPublicKeyPEM:  pubPEM,
-		WebhookPrivateKeyPEM: privPEM,
-	})
-	if err == nil {
-		t.Fatal("expected error when webhook private key write fails")
-	}
-	if !strings.Contains(err.Error(), "webhook private key") {
-		t.Fatalf("expected 'webhook private key' error, got: %v", err)
-	}
-}
+// SEC-2 refactor note: TestNewClient_WebhookPubKeyWriteFailure_Cleanup and
+// TestNewClient_WebhookPrivKeyWriteFailure_Cleanup were removed alongside the
+// switch to a process-owned tempDir. Their lockDirAfterNFiles trick chmod-ed
+// the OUTER tmp dir after N entries existed; the new layout creates a single
+// safeheron-* subdir and writes key files INSIDE it, so the race never fires
+// and the chmod no longer affects writes. Cleanup is now dominated by the
+// unconditional `defer os.RemoveAll(tempDir)` exercised by
+// TestClient_CloseIsIdempotent and TestNewClient_TempFilesCreatedAndCleaned.
 
 // --- writeTempPEM edge cases ---
 
 func TestWriteTempPEM_CreateTempFailure(t *testing.T) {
-	orig := os.Getenv("TMPDIR")
-	os.Setenv("TMPDIR", "/nonexistent-dir-for-createtemp-test")
-	defer os.Setenv("TMPDIR", orig)
-
-	_, err := writeTempPEM("test", "content")
+	_, err := writeTempPEM("/nonexistent-dir-for-createtemp-test", "test", "content")
 	if err == nil {
-		t.Fatal("expected error when TMPDIR is invalid")
+		t.Fatal("expected error when dir is invalid")
 	}
 }
 
 func TestWriteTempPEM_ContentPreserved(t *testing.T) {
 	// Verify multi-line PEM content with special characters is preserved exactly.
+	dir := t.TempDir()
 	content := "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQ+/=\nmore+data==\n-----END RSA PRIVATE KEY-----"
-	path, err := writeTempPEM("multiline", content)
+	path, err := writeTempPEM(dir, "multiline", content)
 	if err != nil {
 		t.Fatalf("writeTempPEM failed: %v", err)
 	}
@@ -1156,7 +1165,8 @@ func TestWriteTempPEM_ContentPreserved(t *testing.T) {
 }
 
 func TestCleanupFiles_MixedExistentAndNonexistent(t *testing.T) {
-	f1, _ := writeTempPEM("mixed1", "test")
+	dir := t.TempDir()
+	f1, _ := writeTempPEM(dir, "mixed1", "test")
 	cleanupFiles([]string{f1, "/nonexistent/mixed2.pem", f1})
 	if _, err := os.Stat(f1); !os.IsNotExist(err) {
 		t.Fatalf("file %s should have been removed", f1)

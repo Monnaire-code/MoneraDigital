@@ -818,6 +818,8 @@
     "recent": {
       "title": "Recent deposits",
       "empty": "No recent deposits",
+      "error": "Failed to load deposit records",
+      "retry": "Retry",
       "viewTx": "View transaction",
       "coin": "Coin",
       "amount": "Amount",

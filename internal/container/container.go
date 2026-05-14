@@ -163,6 +163,13 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 		c.DepositPipeline = deposit.NewService(depRepo, registry, c.AlertService.Send)
 		c.DepositPipeline.SetKYTDeps(client, kytEnabled, kytOrphanMaxRetry, kytTimeout)
 		webhookAllowedIPs := splitNonEmpty(viper.GetString("SAFEHERON_WEBHOOK_ALLOWED_IPS"))
+		// L-1: production must enforce IP allowlist — empty list opens the
+		// webhook handler to anyone who can reach the port (the SDK verify is
+		// the only remaining defence). Mirrors the K-16 KYT_ENABLED check.
+		if viper.GetString("APP_ENV") == "production" && len(webhookAllowedIPs) == 0 {
+			panic("SAFEHERON_WEBHOOK_ALLOWED_IPS must be set in production (L-1): " +
+				"comma-separated allowlist of Safeheron source IPs is required")
+		}
 		c.SafeheronWebhookHandler = handlers.NewSafeheronWebhookHandler(client, depRepo, webhookAllowedIPs)
 
 		workerInterval := viper.GetDuration("DEPOSIT_WORKER_INTERVAL")

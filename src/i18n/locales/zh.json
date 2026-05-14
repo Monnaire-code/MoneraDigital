@@ -897,6 +897,8 @@
     "recent": {
       "title": "近期充币记录",
       "empty": "暂无充值记录",
+      "error": "加载充值记录失败",
+      "retry": "重试",
       "viewTx": "查看交易",
       "coin": "币种",
       "amount": "数量",

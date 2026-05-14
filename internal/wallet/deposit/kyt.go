@@ -230,7 +230,9 @@ func DecideKYT(state string, amlList []safeheron.AmlReport, isAfterTimeout bool)
 }
 
 // maxLastUpdateTime 取 amlList 中 LastUpdateTime（UNIX 毫秒字符串）的最大值。
-// 解析失败回退 time.Now()。
+// 全部解析失败时返回零值 time.Time{} —— S-3：之前回退到 time.Now() 会让
+// LockOneKYTPendingTimeout 永远捞不到这条 deposit（updated_at < NOW()-20m
+// 永远不成立），导致永久卡 KYT_PENDING。返回零值后超时扫描会立即捡到。
 func maxLastUpdateTime(amlList []safeheron.AmlReport) time.Time {
 	var max int64
 	for _, r := range amlList {
@@ -239,7 +241,7 @@ func maxLastUpdateTime(amlList []safeheron.AmlReport) time.Time {
 		}
 	}
 	if max == 0 {
-		return time.Now()
+		return time.Time{}
 	}
 	return time.UnixMilli(max)
 }

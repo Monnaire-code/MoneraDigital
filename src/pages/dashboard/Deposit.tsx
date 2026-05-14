@@ -421,9 +421,9 @@ function RecentDeposits({
 }) {
   const { t } = useTranslation();
 
-  const { data } = useQuery({
+  const { data, error, refetch, isFetching } = useQuery({
     queryKey: ["recent-deposits"],
-    queryFn: () => WalletService.getRecentDeposits(10).catch(() => []),
+    queryFn: () => WalletService.getRecentDeposits(10),
     staleTime: 60_000,
   });
 
@@ -435,7 +435,24 @@ function RecentDeposits({
         <CardTitle className="text-base">{t("deposit.recent.title")}</CardTitle>
       </CardHeader>
       <CardContent>
-        {deposits.length === 0 ? (
+        {error ? (
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <span>{t("deposit.recent.error")}</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isFetching}
+              onClick={() => refetch()}
+              data-testid="retry-recent-deposits"
+            >
+              <RefreshCw className="h-4 w-4 mr-1" />
+              {t("deposit.recent.retry")}
+            </Button>
+          </div>
+        ) : deposits.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {t("deposit.recent.empty")}
           </p>
@@ -522,7 +539,9 @@ export default function Deposit() {
   const {
     data: coinsData,
     isLoading,
+    isFetching: isCoinsFetching,
     error,
+    refetch: refetchCoins,
   } = useQuery({
     queryKey: ["deposit-coins"],
     queryFn: () => WalletService.getDepositCoins(),
@@ -586,6 +605,18 @@ export default function Deposit() {
                   {t("deposit.coinsLoadError")}
                 </CardTitle>
               </CardHeader>
+              <CardContent>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={isCoinsFetching}
+                  onClick={() => refetchCoins()}
+                  data-testid="retry-deposit-coins"
+                >
+                  <RefreshCw className="h-4 w-4 mr-1" />
+                  {t("deposit.recent.retry")}
+                </Button>
+              </CardContent>
             </Card>
           )}
 

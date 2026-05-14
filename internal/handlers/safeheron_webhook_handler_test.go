@@ -424,3 +424,36 @@ func TestWebhookIPWhitelist_EmptyListAllowsAll(t *testing.T) {
 		t.Fatalf("expected 200 when no IP whitelist, got %d", w.Code)
 	}
 }
+
+// SEC-1: when Gin is configured with no trusted proxies (production-safe
+// default), a forged X-Forwarded-For header must not let an off-allowlist
+// client pass the IP whitelist check.
+func TestWebhookIPWhitelist_RejectsForgedXForwardedFor(t *testing.T) {
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			t.Fatal("verifier must not be called when forged XFF is rejected")
+			return nil, nil
+		}},
+		&fakeRecorder{insertFn: nil},
+		[]string{"1.2.3.4"},
+	)
+
+	// Configure a real Gin engine with no trusted proxies — matches the
+	// production main.go default (cfg.TrustedProxies=nil).
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	if err := r.SetTrustedProxies(nil); err != nil {
+		t.Fatalf("SetTrustedProxies: %v", err)
+	}
+	r.POST("/api/webhooks/safeheron", h.Receive)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/safeheron", strings.NewReader(`{"any":"body"}`))
+	req.RemoteAddr = "9.9.9.9:443"               // off-allowlist direct peer
+	req.Header.Set("X-Forwarded-For", "1.2.3.4") // forged spoof of allowlist member
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 (XFF must be ignored when no trusted proxies), got %d", w.Code)
+	}
+}

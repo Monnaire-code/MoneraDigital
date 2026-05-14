@@ -426,13 +426,31 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 // handleKYTApiFailure handles T-β KYT API call failure.
 // Returns (processed=true, err) so worker continues draining.
 func (s *Service) handleKYTApiFailure(ctx context.Context, evt *Event, dep *DepositRow, kytErr error) (bool, error) {
-	log.Printf("KYT API failed: txKey=%s err=%v attempts=%d", dep.SafeheronTxKey, kytErr, evt.ProcessAttempts+1)
+	// localAttempts decouples downstream branching from the DB write; if the
+	// counter write fails the deposit must still progress toward the MR ceiling
+	// rather than retrying forever (S-2).
+	localAttempts := evt.ProcessAttempts + 1
+	log.Printf("KYT API failed: txKey=%s err=%v attempts=%d", dep.SafeheronTxKey, kytErr, localAttempts)
 
 	if err := s.repo.IncrementEventAttemptsNoTx(ctx, evt.ID); err != nil {
 		log.Printf("IncrementEventAttempts failed: %v", err)
+		// S-2: counter unwritable means a permanent Safeheron outage + DB hiccup
+		// would silently keep the deposit in KYT_PENDING. Surface to ops so the
+		// 20-minute scan tier becomes the safety net rather than the only signal.
+		s.fireAlerts([]alertPayload{{
+			level: "ERROR",
+			title: "KYT attempts counter unwritable",
+			fields: map[string]string{
+				"depositId":     fmt.Sprintf("%d", dep.ID),
+				"txKey":         dep.SafeheronTxKey,
+				"localAttempts": fmt.Sprintf("%d", localAttempts),
+				"kytErr":        kytErr.Error(),
+				"incrementErr":  err.Error(),
+			},
+		}})
 	}
 
-	if evt.ProcessAttempts+1 < s.kytOrphanMaxRetry {
+	if localAttempts < s.kytOrphanMaxRetry {
 		// Wrap so the worker can yield to its ticker — prevents a tight retry
 		// loop during a Safeheron outage (T10-I-3).
 		return true, fmt.Errorf("%w: %v", ErrKYTAPIBackoff, kytErr)
@@ -485,8 +503,15 @@ func (s *Service) writeAMLFields(ctx context.Context, tx Tx, depID int64, state 
 	if err != nil {
 		return fmt.Errorf("marshal amlList: %w", err)
 	}
+	evaluatedAt := maxLastUpdateTime(amlList)
+	if evaluatedAt.IsZero() {
+		// S-3: zero value is intentional — provider returned no parseable
+		// LastUpdateTime, so the 20-min KYT scan should re-evaluate immediately
+		// rather than wait. Log so ops can spot a malformed provider feed.
+		log.Printf("AML evaluatedAt is zero (no parseable LastUpdateTime): depID=%d state=%s entries=%d", depID, state, len(amlList))
+	}
 	return s.repo.UpdateAMLFields(ctx, tx, depID,
-		state, SummarizeRiskLevel(amlList), maxLastUpdateTime(amlList), amlListJSON)
+		state, SummarizeRiskLevel(amlList), evaluatedAt, amlListJSON)
 }
 
 // creditDepositFromRow is the shared credit helper for T-γ / ScanKYTTimeouts / processKYTAlert.
@@ -536,7 +561,11 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 		_ = tx.Rollback()
 		txClosed = true
 		if incErr := s.repo.IncrementEventAttemptsNoTx(ctx, evt.ID); incErr != nil {
+			// Wrap as ErrKYTAPIBackoff so worker.drainSafely yields to the next
+			// ticker — otherwise an unwritable counter would let processed=true
+			// re-enter immediately and burn CPU on the same event (S-1).
 			log.Printf("IncrementEventAttempts failed on DB error: %v", incErr)
+			return true, fmt.Errorf("%w: find-deposit=%v increment=%v", ErrKYTAPIBackoff, err, incErr)
 		}
 		return true, fmt.Errorf("find deposit for KYT alert: %w", err)
 	}
@@ -555,7 +584,11 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 		_ = tx.Rollback()
 		txClosed = true
 		if incErr := s.repo.IncrementEventAttemptsNoTx(ctx, evt.ID); incErr != nil {
+			// S-1: counter unwritable means attempts will never reach the orphan
+			// retry ceiling. Wrap as ErrKYTAPIBackoff so worker yields and we
+			// don't tight-loop on the same event.
 			log.Printf("IncrementEventAttempts failed for orphan alert: %v", incErr)
+			return true, fmt.Errorf("%w: orphan increment failed: %v", ErrKYTAPIBackoff, incErr)
 		}
 		return true, nil
 	}
