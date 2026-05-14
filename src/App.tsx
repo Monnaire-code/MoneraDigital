@@ -8,6 +8,7 @@ import i18n from "@/i18n";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import Links from "./pages/Links";
 import NotFound from "./pages/NotFound";
 import DashboardLayout from "./components/DashboardLayout";
 import Overview from "./pages/dashboard/Overview";
@@ -37,6 +38,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/link" element={<Links />} />
             <Route path="/activation" element={<Activation />} />
             <Route path="/contact-info" element={<ContactInfo />} />
             <Route path="/pending-approval" element={<PendingApproval />} />

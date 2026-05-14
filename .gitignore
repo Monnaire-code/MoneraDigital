@@ -48,3 +48,4 @@ nohup.out
 test-artifacts/
 openspec/
 main
+.gstack/
