@@ -846,6 +846,19 @@
       "addAddressErrorTitle": "Failed to Add Address"
     }
   },
+  "links": {
+    "socialMedia": "Social Media",
+    "website": "Website",
+    "twitter": "Twitter",
+    "twitterAnalyst": "Twitter Analyst",
+    "telegram": "Telegram",
+    "linkedin": "LinkedIn",
+    "telegramChannels": "Telegram Channels",
+    "officialAnnouncements": "Official Announcements",
+    "marketNews": "Market News",
+    "china": "China",
+    "us": "US"
+  },
   "biz": {
     "wealth_subscribe": "Wealth Product Subscription",
     "wealth_redeem": "Wealth Product Redemption",
