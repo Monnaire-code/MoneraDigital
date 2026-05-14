@@ -1,4 +1,4 @@
-import { Github, Twitter, Linkedin, Mail } from "lucide-react";
+import { Twitter, Linkedin, Mail } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 const Footer = () => {
@@ -32,10 +32,9 @@ const Footer = () => {
   };
 
   const socialLinks = [
-    { icon: Twitter, href: "#", label: "Twitter" },
-    { icon: Linkedin, href: "#", label: "LinkedIn" },
-    { icon: Github, href: "#", label: "GitHub" },
-    { icon: Mail, href: "#", label: "Email" },
+    { icon: Twitter, href: "https://x.com/Monera_Digital", label: "Twitter" },
+    { icon: Linkedin, href: "https://www.linkedin.com/company/monera-digital/posts/?feedView=all", label: "LinkedIn" },
+    { icon: Mail, href: "mailto:contact@moneradigital.com", label: "Email" },
   ];
 
   return (
@@ -55,12 +54,14 @@ const Footer = () => {
             <p className="text-muted-foreground text-sm leading-relaxed mb-6 max-w-xs">
               {t("footer.tagline")}
             </p>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
               {socialLinks.map((social) => (
                 <a
                   key={social.label}
                   href={social.href}
-                  className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-secondary/80 transition-colors"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-10 h-10 rounded-lg bg-secondary hover:bg-primary hover:text-primary-foreground flex items-center justify-center text-foreground transition-all duration-200 shadow-sm hover:shadow-md hover:scale-105"
                   aria-label={social.label}
                 >
                   <social.icon className="w-5 h-5" />

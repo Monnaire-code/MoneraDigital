@@ -1,52 +1,85 @@
-import { X as Twitter, Send } from "lucide-react";
+import { X as Twitter, Send, Globe, Linkedin as LinkedinIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-interface SocialLink {
+interface LinkItem {
   icon: typeof Twitter;
-  label: string;
+  labelKey: string;
   href: string;
   gradient: string;
+}
+
+interface LinkSection {
+  titleKey: string;
+  items: LinkItem[];
 }
 
 const Links = () => {
   const { t } = useTranslation();
 
-  const socialLinks: SocialLink[] = [
+  const sections: LinkSection[] = [
     {
-      icon: Twitter,
-      label: "Twitter",
-      href: "https://x.com/Monera_Digital",
-      gradient: "bg-gradient-to-r from-blue-500 to-sky-400 hover:from-blue-600 hover:to-sky-500",
+      titleKey: "links.socialMedia",
+      items: [
+        {
+          icon: Globe,
+          labelKey: "links.website",
+          href: "https://www.moneradigital.com/",
+          gradient: "bg-gradient-to-r from-slate-600 to-slate-500 hover:from-slate-700 hover:to-slate-600",
+        },
+        {
+          icon: Twitter,
+          labelKey: "links.twitter",
+          href: "https://x.com/Monera_Digital",
+          gradient: "bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700",
+        },
+        {
+          icon: Twitter,
+          labelKey: "links.twitterAnalyst",
+          href: "https://x.com/MoneraAnalyst",
+          gradient: "bg-gradient-to-r from-cyan-600 to-blue-500 hover:from-cyan-700 hover:to-blue-600",
+        },
+        {
+          icon: Send,
+          labelKey: "links.telegram",
+          href: "https://t.me/MoneraDigital_Official",
+          gradient: "bg-gradient-to-r from-blue-600 to-telegram-blue hover:from-blue-700 hover:to-blue-500",
+        },
+        {
+          icon: LinkedinIcon,
+          labelKey: "links.linkedin",
+          href: "https://www.linkedin.com/company/monera-digital/posts/?feedView=all",
+          gradient: "bg-gradient-to-r from-blue-700 to-blue-500 hover:from-blue-800 hover:to-blue-600",
+        },
+      ],
     },
     {
-      icon: Send,
-      label: "Telegram",
-      href: "https://t.me/MoneraDigital_Official",
-      gradient: "bg-gradient-to-r from-blue-600 to-telegram-blue hover:from-blue-700 hover:to-blue-500",
-    },
-    {
-      icon: Send,
-      label: "Official Announcements",
-      href: "https://t.me/MoneraDigital_Ann",
-      gradient: "bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-400",
-    },
-    {
-      icon: Send,
-      label: "Market News",
-      href: "https://t.me/MoneraDigitalMarket",
-      gradient: "bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-400",
-    },
-    {
-      icon: Send,
-      label: "China Community",
-      href: "https://t.me/MoneraDigitalChina",
-      gradient: "bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-400",
-    },
-    {
-      icon: Send,
-      label: "US Community",
-      href: "https://t.me/MoneraDigitalUS",
-      gradient: "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-400",
+      titleKey: "links.telegramChannels",
+      items: [
+        {
+          icon: Send,
+          labelKey: "links.officialAnnouncements",
+          href: "https://t.me/MoneraDigitalhe/16144",
+          gradient: "bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-400",
+        },
+        {
+          icon: Send,
+          labelKey: "links.marketNews",
+          href: "https://t.me/MoneraDigitalhe/16149",
+          gradient: "bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-400",
+        },
+        {
+          icon: Send,
+          labelKey: "links.china",
+          href: "https://t.me/MoneraDigitalhe/11034",
+          gradient: "bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-400",
+        },
+        {
+          icon: Send,
+          labelKey: "links.us",
+          href: "https://t.me/MoneraDigitalhe/1",
+          gradient: "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-400",
+        },
+      ],
     },
   ];
 
@@ -84,19 +117,28 @@ const Links = () => {
             </div>
           </div>
 
-          {/* Links */}
-          <div className="space-y-4">
-            {socialLinks.map((link) => (
-          <a
-            href="https://t.me/MoneraDigitalhe/16149"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:underline"
-          >
-            Market News
-          </a>
-            ))}
-          </div>
+          {/* Link Sections */}
+          {sections.map((section) => (
+            <div key={section.titleKey} className="space-y-4">
+              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider px-1">
+                {t(section.titleKey)}
+              </h2>
+              <div className="space-y-3">
+                {section.items.map((item) => (
+                  <a
+                    key={item.labelKey}
+                    href={item.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`flex items-center gap-4 p-4 rounded-xl text-primary-foreground font-semibold transition-all duration-200 ${item.gradient} shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98]`}
+                  >
+                    <item.icon className="w-5 h-5 flex-shrink-0" />
+                    <span className="flex-1">{t(item.labelKey)}</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          ))}
 
           {/* Footer Note */}
           <p className="text-center text-sm text-muted-foreground">

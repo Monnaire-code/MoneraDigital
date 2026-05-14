@@ -948,6 +948,19 @@
       "addAddressErrorTitle": "添加地址失败"
     }
   },
+  "links": {
+    "socialMedia": "社交媒体",
+    "website": "官网",
+    "twitter": "Twitter",
+    "twitterAnalyst": "Twitter 分析师",
+    "telegram": "Telegram",
+    "linkedin": "LinkedIn",
+    "telegramChannels": "Telegram 频道",
+    "officialAnnouncements": "官方公告",
+    "marketNews": "市场资讯",
+    "china": "中国",
+    "us": "美国"
+  },
   "biz": {
     "wealth_subscribe": "理财产品申购",
     "wealth_redeem": "理财产品赎回",
