@@ -202,7 +202,8 @@ func TestFindOrCreateAccountForUpdate(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
 	mock.ExpectBegin()
-	mock.ExpectQuery("INSERT INTO account").
+	// Require frozen_balance in the INSERT column list — regression guard for the NOT NULL bug.
+	mock.ExpectQuery(`INSERT INTO account \(user_id, type, currency, balance, frozen_balance\)`).
 		WithArgs(42, "ETH").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "balance"}).AddRow(101, "0"))
 	mock.ExpectCommit()
@@ -211,6 +212,24 @@ func TestFindOrCreateAccountForUpdate(t *testing.T) {
 	tx, _ := r.BeginTx(context.Background())
 	id, bal, err := r.FindOrCreateAccountForUpdate(context.Background(), tx, 42, "ETH")
 	if err != nil || id != 101 || bal != "0" {
+		t.Fatalf("unexpected: %d %s %v", id, bal, err)
+	}
+	_ = tx.Commit()
+}
+
+func TestFindOrCreateAccountForUpdate_ExistingAccount(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO account \(user_id, type, currency, balance, frozen_balance\)`).
+		WithArgs(42, "ETH").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "balance"}).AddRow(101, "5.5"))
+	mock.ExpectCommit()
+
+	r := NewRepository(db)
+	tx, _ := r.BeginTx(context.Background())
+	id, bal, err := r.FindOrCreateAccountForUpdate(context.Background(), tx, 42, "ETH")
+	if err != nil || id != 101 || bal != "5.5" {
 		t.Fatalf("unexpected: %d %s %v", id, bal, err)
 	}
 	_ = tx.Commit()
