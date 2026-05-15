@@ -295,12 +295,15 @@ func TestExtendDepositsForSafeheron_Up(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec("ALTER TABLE deposits").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("DO .* BEGIN").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("ALTER TABLE deposits").WillReturnResult(sqlmock.NewResult(0, 0)) // addColumns
+	mock.ExpectExec("ALTER TABLE deposits").WillReturnResult(sqlmock.NewResult(0, 0)) // amlColumns
+	mock.ExpectExec("DO .* BEGIN").WillReturnResult(sqlmock.NewResult(0, 0))          // addFKs
 	mock.ExpectExec("CREATE UNIQUE INDEX IF NOT EXISTS idx_deposits_safeheron_tx_key").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DO .* BEGIN").WillReturnResult(sqlmock.NewResult(0, 0)) // enumToVarchar
 	mock.ExpectExec("UPDATE deposits SET status").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("DO .* BEGIN").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("ALTER TABLE deposits").WillReturnResult(sqlmock.NewResult(0, 0)) // checkConstraint
 	mock.ExpectExec("CREATE UNIQUE INDEX IF NOT EXISTS idx_account_user_currency").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_deposits_kyt_pending").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	m := &ExtendDepositsForSafeheron{}
 	if err := m.Up(db); err != nil {
@@ -318,11 +321,14 @@ func TestExtendDepositsForSafeheron_Up_Errors(t *testing.T) {
 		wantError string
 	}{
 		{"AddColumnsError", 0, "failed to add safeheron columns to deposits"},
-		{"AddFKsError", 1, "failed to add foreign keys to deposits"},
-		{"PartialUniqueIdxError", 2, "failed to create partial unique index"},
-		{"NormalizeStatusError", 3, "failed to normalize existing deposits status"},
-		{"CheckConstraintError", 4, "failed to add status check constraint"},
-		{"AccountUniqueIdxError", 5, "failed to create unique index on account"},
+		{"AmlColumnsError", 1, "failed to add AML columns to deposits"},
+		{"AddFKsError", 2, "failed to add foreign keys to deposits"},
+		{"PartialUniqueIdxError", 3, "failed to create partial unique index"},
+		{"EnumToVarcharError", 4, "failed to convert deposits.status from enum to varchar"},
+		{"NormalizeStatusError", 5, "failed to normalize existing deposits status"},
+		{"CheckConstraintError", 6, "failed to add status check constraint"},
+		{"AccountUniqueIdxError", 7, "failed to create unique index on account"},
+		{"KytPendingIdxError", 8, "failed to create KYT_PENDING partial index"},
 	}
 
 	for _, tt := range tests {
@@ -439,6 +445,7 @@ func TestExtendDepositsForSafeheron_Down(t *testing.T) {
 	}
 	defer db.Close()
 
+	mock.ExpectExec("DROP INDEX IF EXISTS idx_deposits_kyt_pending").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP INDEX IF EXISTS idx_account_user_currency").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("ALTER TABLE deposits DROP CONSTRAINT IF EXISTS ck_deposits_status").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP INDEX IF EXISTS idx_deposits_safeheron_tx_key").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -654,12 +661,13 @@ func TestExtendDepositsForSafeheron_Down_Errors(t *testing.T) {
 		failAt    int
 		wantError string
 	}{
-		{"DropAccountIdxError", 0, "failed to drop account unique index"},
-		{"DropCheckConstraintError", 1, "failed to drop deposits status constraint"},
-		{"DropTxKeyIdxError", 2, "failed to drop deposits safeheron_tx_key index"},
-		{"DropCoinChainFKError", 3, "failed to drop deposits_coin_chain_id_fkey"},
-		{"DropChainCodeFKError", 4, "failed to drop deposits_chain_code_fkey"},
-		{"DropColumnsError", 5, "failed to drop safeheron columns from deposits"},
+		{"DropKytIdxError", 0, "failed to drop KYT_PENDING index"},
+		{"DropAccountIdxError", 1, "failed to drop account unique index"},
+		{"DropCheckConstraintError", 2, "failed to drop deposits status constraint"},
+		{"DropTxKeyIdxError", 3, "failed to drop deposits safeheron_tx_key index"},
+		{"DropCoinChainFKError", 4, "failed to drop deposits_coin_chain_id_fkey"},
+		{"DropChainCodeFKError", 5, "failed to drop deposits_chain_code_fkey"},
+		{"DropColumnsError", 6, "failed to drop safeheron columns from deposits"},
 	}
 
 	for _, tt := range tests {

@@ -74,7 +74,7 @@ func TestAlertService_Nil_Safe(t *testing.T) {
 }
 
 func TestAlertService_FormatAlert_Deterministic(t *testing.T) {
-	out := formatAlert("ERROR", "Deposit manual review", map[string]string{
+	out := formatAlert("【充值告警】", "ERROR", "Deposit manual review", map[string]string{
 		"userId":             "42",
 		"reason":             "ADDRESS_UNASSIGNED",
 		"destinationAddress": "0xabc",

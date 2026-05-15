@@ -47,13 +47,12 @@ func (a *AlertService) Send(level, title string, fields map[string]string) {
 	if a == nil {
 		return
 	}
-	msg := formatAlert(level, title, fields)
-	// 5s deadline covers both the Feishu request and the email fan-out so an
-	// unhealthy sink can't pin the caller.
+	prefix := classifyAlertPrefix(title)
+	msg := formatAlert(prefix, level, title, fields)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	a.sendFeishu(ctx, msg)
-	a.sendEmail(ctx, title, msg)
+	a.sendEmail(ctx, prefix, title, msg)
 }
 
 func (a *AlertService) sendFeishu(ctx context.Context, msg string) {
@@ -85,11 +84,11 @@ func (a *AlertService) sendFeishu(ctx context.Context, msg string) {
 	}
 }
 
-func (a *AlertService) sendEmail(ctx context.Context, title, body string) {
+func (a *AlertService) sendEmail(ctx context.Context, prefix, title, body string) {
 	if a.emailSvc == nil || len(a.recipients) == 0 {
 		return
 	}
-	subject := classifyAlertPrefix(title) + title
+	subject := prefix + title
 	for _, addr := range a.recipients {
 		if err := a.emailSvc.SendAlertEmail(ctx, addr, subject, body); err != nil {
 			log.Printf("alert: email send to %s failed: %v", addr, err)
@@ -113,9 +112,9 @@ func classifyAlertPrefix(title string) string {
 	}
 }
 
-func formatAlert(level, title string, fields map[string]string) string {
+func formatAlert(prefix, level, title string, fields map[string]string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%slevel=%s\n", classifyAlertPrefix(title), level)
+	fmt.Fprintf(&b, "%slevel=%s\n", prefix, level)
 	fmt.Fprintf(&b, "title=%s\n", title)
 	keys := make([]string, 0, len(fields))
 	for k := range fields {

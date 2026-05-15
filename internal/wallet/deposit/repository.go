@@ -213,7 +213,8 @@ func (r *DBRepository) fetchDepositByTxKey(ctx context.Context, tx *sql.Tx, txKe
 		        COALESCE(chain_code, ''), COALESCE(coin_chain_id, 0),
 		        COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
 		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
-		        status
+		        status,
+		        COALESCE(from_address, ''), COALESCE(to_address, ''), COALESCE(tx_hash, '')
 		 FROM deposits WHERE safeheron_tx_key = $1
 		 FOR UPDATE`,
 		txKey,
@@ -225,6 +226,7 @@ func (r *DBRepository) fetchDepositByTxKey(ctx context.Context, tx *sql.Tx, txKe
 		&out.ChainCode, &out.CoinChainID,
 		&out.SafeheronStatus, &out.SafeheronSubStatus,
 		&out.StatusRank, &out.BlockHeight, &out.BlockHash, &out.Status,
+		&out.FromAddress, &out.ToAddress, &out.TxHash,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("fetch deposit by tx_key: %w", err)
@@ -432,7 +434,8 @@ func (r *DBRepository) LockOneKYTPendingTimeout(ctx context.Context, tx Tx, thre
 		        COALESCE(chain_code, ''), COALESCE(coin_chain_id, 0),
 		        COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
 		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
-		        status
+		        status,
+		        COALESCE(from_address, ''), COALESCE(to_address, ''), COALESCE(tx_hash, '')
 		 FROM deposits
 		 WHERE status = 'KYT_PENDING' AND updated_at < NOW() - $1::interval
 		 ORDER BY updated_at ASC
@@ -447,6 +450,7 @@ func (r *DBRepository) LockOneKYTPendingTimeout(ctx context.Context, tx Tx, thre
 		&out.ChainCode, &out.CoinChainID,
 		&out.SafeheronStatus, &out.SafeheronSubStatus,
 		&out.StatusRank, &out.BlockHeight, &out.BlockHash, &out.Status,
+		&out.FromAddress, &out.ToAddress, &out.TxHash,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNoPending
@@ -468,7 +472,8 @@ func (r *DBRepository) LockOneAmlPending(ctx context.Context, tx Tx, minAge time
 		        COALESCE(chain_code, ''), COALESCE(coin_chain_id, 0),
 		        COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
 		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
-		        status
+		        status,
+		        COALESCE(from_address, ''), COALESCE(to_address, ''), COALESCE(tx_hash, '')
 		 FROM deposits
 		 WHERE status = 'KYT_PENDING'
 		   AND aml_risk_level = 'PENDING'
@@ -485,6 +490,7 @@ func (r *DBRepository) LockOneAmlPending(ctx context.Context, tx Tx, minAge time
 		&out.ChainCode, &out.CoinChainID,
 		&out.SafeheronStatus, &out.SafeheronSubStatus,
 		&out.StatusRank, &out.BlockHeight, &out.BlockHash, &out.Status,
+		&out.FromAddress, &out.ToAddress, &out.TxHash,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNoPending
@@ -501,7 +507,8 @@ func (r *DBRepository) FindDepositByTxKey(ctx context.Context, tx Tx, txKey stri
 		        COALESCE(chain_code, ''), COALESCE(coin_chain_id, 0),
 		        COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
 		        status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
-		        status
+		        status,
+		        COALESCE(from_address, ''), COALESCE(to_address, ''), COALESCE(tx_hash, '')
 		 FROM deposits WHERE safeheron_tx_key = $1
 		 FOR UPDATE`,
 		txKey,
@@ -513,6 +520,7 @@ func (r *DBRepository) FindDepositByTxKey(ctx context.Context, tx Tx, txKey stri
 		&out.ChainCode, &out.CoinChainID,
 		&out.SafeheronStatus, &out.SafeheronSubStatus,
 		&out.StatusRank, &out.BlockHeight, &out.BlockHash, &out.Status,
+		&out.FromAddress, &out.ToAddress, &out.TxHash,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil

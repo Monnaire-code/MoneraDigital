@@ -861,8 +861,13 @@ func (s *Service) scanOneAmlPending(ctx context.Context) error {
 	}()
 
 	freshDep, found, err := s.repo.FindDepositByTxKey(ctx, tx2, txKey)
-	if err != nil || !found {
-		return fmt.Errorf("re-read deposit AML scan: found=%v err=%w", found, err)
+	if err != nil {
+		return fmt.Errorf("re-read deposit AML scan: %w", err)
+	}
+	if !found {
+		_ = tx2.Commit()
+		committed2 = true
+		return nil
 	}
 	if freshDep.Status != DepositStatusKYTPending {
 		_ = tx2.Commit()

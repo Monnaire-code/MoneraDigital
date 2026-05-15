@@ -483,7 +483,7 @@ func (m *ExtendDepositsForSafeheron) Up(db *sql.DB) error {
 
 func (m *ExtendDepositsForSafeheron) Down(db *sql.DB) error {
 	if os.Getenv("APP_ENV") == "production" {
-		return fmt.Errorf("BLOCKED: rollback of migration 020 in production would destroy deposit data; use a manual migration instead")
+		return fmt.Errorf("BLOCKED: rollback of migration 015 in production would destroy deposit data; use a manual migration instead")
 	}
 
 	dropKytIdx := `DROP INDEX IF EXISTS idx_deposits_kyt_pending;`
