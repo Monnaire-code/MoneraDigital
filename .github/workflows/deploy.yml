@@ -1,117 +1,37 @@
-name: CI/CD Pipeline
+name: Deploy to Production
 
 on:
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: '部署 main 分支到生产环境（输入 yes 确认）'
+        required: true
+        default: 'no'
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  TAG: ${{ github.sha }}
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run linter
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test -- --run
-
-      - name: Build frontend
-        run: npm run build
-
-  build:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      attestations: write
-      id-token: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha
-            type=ref,event=branch
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
   deploy:
-    needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 25
+    environment: production
+    if: ${{ github.event.inputs.confirm == 'yes' }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy to Server
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Deploy to production server
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
         with:
-          host: ${{ secrets.REPLIT_HOST }}
-          username: ${{ secrets.REPLIT_USER }}
-          key: ${{ secrets.REPLIT_SSH_KEY }}
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          command_timeout: 20m
           script: |
-            cd /home/user/monera-digital
-
-            docker pull ghcr.io/${{ env.IMAGE_NAME }}:${{ env.TAG }}
-
-            sed -i "s|image: ghcr.io/${{ env.IMAGE_NAME }}:.*|image: ghcr.io/${{ env.IMAGE_NAME }}:${{ env.TAG }}|" docker-compose.yml
-
-            docker compose down || true
-            docker compose up -d
-
-            sleep 10
-
-            if curl -sf http://localhost:5000/health > /dev/null 2>&1; then
-              echo "Deployment successful!"
-            else
-              echo "Deployment may have issues. Check logs with: docker compose logs"
-              docker compose logs --tail=50
-            fi
-
-            docker compose ps
-
-            docker rmi $(docker images -q -f "reference=ghcr.io/${{ env.IMAGE_NAME }}:*" --filter "before=ghcr.io/${{ env.IMAGE_NAME }}:${{ env.TAG }}" 2>/dev/null) || true
+            set -e
+            cd /home/ec2-user/MoneraDigital
+            git pull origin main
+            bash scripts/deploy.sh
