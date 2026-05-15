@@ -89,7 +89,7 @@ func (a *AlertService) sendEmail(ctx context.Context, title, body string) {
 	if a.emailSvc == nil || len(a.recipients) == 0 {
 		return
 	}
-	subject := "【Phase1告警】" + title
+	subject := classifyAlertPrefix(title) + title
 	for _, addr := range a.recipients {
 		if err := a.emailSvc.SendAlertEmail(ctx, addr, subject, body); err != nil {
 			log.Printf("alert: email send to %s failed: %v", addr, err)
@@ -97,11 +97,25 @@ func (a *AlertService) sendEmail(ctx context.Context, title, body string) {
 	}
 }
 
-// formatAlert renders a deterministic plain-text body. fields are sorted so
-// snapshot tests stay stable.
+// classifyAlertPrefix maps title keywords to a Chinese category prefix.
+// KYT/AML takes priority over deposit/withdraw.
+func classifyAlertPrefix(title string) string {
+	t := strings.ToLower(title)
+	switch {
+	case strings.Contains(t, "kyt") || strings.Contains(t, "aml"):
+		return "【AML告警】"
+	case strings.Contains(t, "deposit"):
+		return "【充值告警】"
+	case strings.Contains(t, "withdraw"):
+		return "【提现告警】"
+	default:
+		return "【系统告警】"
+	}
+}
+
 func formatAlert(level, title string, fields map[string]string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "【Phase1告警】level=%s\n", level)
+	fmt.Fprintf(&b, "%slevel=%s\n", classifyAlertPrefix(title), level)
 	fmt.Fprintf(&b, "title=%s\n", title)
 	keys := make([]string, 0, len(fields))
 	for k := range fields {
