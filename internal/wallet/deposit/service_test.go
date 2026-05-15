@@ -3,6 +3,7 @@ package deposit
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,7 +45,8 @@ type mockRepo struct {
 		id  int64
 		msg string
 	}
-	markErrorErr error // forces MarkEventError to fail (T7-I-5)
+	markErrorErr       error // forces MarkEventError to fail (T7-I-5)
+	findDepositByTxErr error // forces FindDepositByTxKey to fail
 
 	commitCalls           int
 	rollbackCalls         int
@@ -293,6 +295,9 @@ func (m *mockRepo) LockOneAmlPending(_ context.Context, _ Tx, _ time.Duration) (
 func (m *mockRepo) FindDepositByTxKey(_ context.Context, _ Tx, txKey string) (*DepositRow, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.findDepositByTxErr != nil {
+		return nil, false, m.findDepositByTxErr
+	}
 	if d, ok := m.deposits[txKey]; ok {
 		return d, true, nil
 	}
@@ -1345,4 +1350,78 @@ func (r *creditBeforeMRRepo) MarkDepositManualReview(_ context.Context, _ Tx, id
 	}
 	r.mockRepo.mu.Unlock()
 	return r.mockRepo.MarkDepositManualReview(context.Background(), &fakeTx{mu: &r.mockRepo.mu}, id, reason)
+}
+
+// TestProcessOne_BelowMinAmount_TwoEvents_SingleAlert verifies that when two
+// events arrive for the same below-min deposit (e.g. CONFIRMING then
+// COMPLETED), only one MANUAL_REVIEW alert is fired — not two.
+// Regression guard for the duplicate-alert bug fixed in flagManualReview.
+func TestProcessOne_BelowMinAmount_TwoEvents_SingleAlert(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	// min_deposit_amount = 1, incoming amount = 0.001 → always below min
+	reg := newTestRegistry("USDT", "BSC", "USDT_BEP20", "1", 18)
+	alertFn, alerts := newAlertCollector()
+	svc := newSvc(t, repo, reg, alertFn)
+
+	detail := PayloadEventDetail{
+		TxKey:                "tx-dust",
+		CoinKey:              "USDT_BEP20",
+		TxAmount:             "0.001",
+		TransactionDirection: "INFLOW",
+		DestinationAddress:   "0xdest",
+	}
+
+	// Event 1: CONFIRMING
+	detail.TransactionStatus = "CONFIRMING"
+	detail.TransactionSubStatus = ""
+	enqueueRaw(t, repo, PayloadEnvelope{EventType: "TRANSACTION_CREATED", EventDetail: detail})
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatalf("event 1: %v", err)
+	}
+
+	// Event 2: COMPLETED (same tx, deposit already MANUAL_REVIEW)
+	detail.TransactionStatus = "COMPLETED"
+	detail.TransactionSubStatus = "CONFIRMED"
+	enqueueRaw(t, repo, PayloadEnvelope{EventType: "TRANSACTION_STATUS_CHANGED", EventDetail: detail})
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatalf("event 2: %v", err)
+	}
+
+	if len(*alerts) != 1 {
+		t.Errorf("expected exactly 1 alert, got %d: %+v", len(*alerts), *alerts)
+	}
+	if len(*alerts) > 0 && (*alerts)[0].fields["reason"] != ReasonBelowMinAmount {
+		t.Errorf("expected BELOW_MIN_AMOUNT, got %q", (*alerts)[0].fields["reason"])
+	}
+}
+
+// TestProcessOne_BelowMinAmount_FindDepositError verifies that a DB error from
+// FindDepositByTxKey inside flagManualReview is surfaced to the caller.
+func TestProcessOne_BelowMinAmount_FindDepositError(t *testing.T) {
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	repo.findDepositByTxErr = errors.New("db unavailable")
+	reg := newTestRegistry("USDT", "BSC", "USDT_BEP20", "1", 18)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-dust-err",
+			CoinKey:              "USDT_BEP20",
+			TxAmount:             "0.001",
+			TransactionStatus:    "CONFIRMING",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error from FindDepositByTxKey, got nil")
+	}
+	if !strings.Contains(err.Error(), "check existing deposit") {
+		t.Errorf("expected error to contain 'check existing deposit', got: %v", err)
+	}
 }
