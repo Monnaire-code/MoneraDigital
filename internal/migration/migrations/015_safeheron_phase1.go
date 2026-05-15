@@ -26,6 +26,7 @@ func (m *SafeheronPhase1) Up(db *sql.DB) error {
 		name string
 		fn   func(*sql.DB) error
 	}{
+		{"AddPendingUserStatus", (&AddPendingUserStatus{}).Up},
 		{"CreateChainsTable", (&CreateChainsTable{}).Up},
 		{"CreateCoinsTable", (&CreateCoinsTable{}).Up},
 		{"CreateCoinChainsTable", (&CreateCoinChainsTable{}).Up},
@@ -60,6 +61,7 @@ func (m *SafeheronPhase1) Down(db *sql.DB) error {
 		{"CreateCoinChainsTable", (&CreateCoinChainsTable{}).Down},
 		{"CreateCoinsTable", (&CreateCoinsTable{}).Down},
 		{"CreateChainsTable", (&CreateChainsTable{}).Down},
+		{"AddPendingUserStatus", (&AddPendingUserStatus{}).Down},
 	}
 	for _, s := range steps {
 		if err := s.fn(db); err != nil {
@@ -70,6 +72,24 @@ func (m *SafeheronPhase1) Down(db *sql.DB) error {
 }
 
 var _ migration.Migration = (*SafeheronPhase1)(nil)
+
+// ---------------------------------------------------------------------------
+// Step 0: ensure PENDING exists in user_status enum
+// ---------------------------------------------------------------------------
+
+type AddPendingUserStatus struct{}
+
+func (m *AddPendingUserStatus) Up(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TYPE user_status ADD VALUE IF NOT EXISTS 'PENDING';`)
+	if err != nil {
+		return fmt.Errorf("failed to add PENDING to user_status enum: %w", err)
+	}
+	return nil
+}
+
+func (m *AddPendingUserStatus) Down(_ *sql.DB) error {
+	return nil // PostgreSQL does not support removing enum values
+}
 
 // ---------------------------------------------------------------------------
 // Step 1: chains
@@ -577,21 +597,21 @@ func (m *SeedSafeheronPhase1Data) Up(db *sql.DB) error {
 func (m *SeedSafeheronPhase1Data) seedProductionCoinChains(db *sql.DB) error {
 	query := `
 	INSERT INTO coin_chains (chain_code, coin_id, symbol, is_native, token_contract, decimals, safeheron_coin_key, min_deposit_amount, token_standard, estimated_arrival_minutes, display_order)
-	    SELECT 'ETHEREUM', id, 'ETH',  true,  NULL,                                          18, 'ETH',        '0.001', 'Native', 2, 10 FROM coins WHERE symbol='ETH'
+	    SELECT 'ETHEREUM', id, 'ETH',  true,  NULL,                                          18, 'ETH',        '0.0001', 'Native', 2, 10 FROM coins WHERE symbol='ETH'
 	UNION ALL
-	    SELECT 'ETHEREUM', id, 'USDT', false, '0xdAC17F958D2ee523a2206206994597C13D831ec7', 6,  'USDT_ERC20', '1',     'ERC20',  2, 20 FROM coins WHERE symbol='USDT'
+	    SELECT 'ETHEREUM', id, 'USDT', false, '0xdAC17F958D2ee523a2206206994597C13D831ec7', 6,  'USDT_ERC20', '0.01',   'ERC20',  2, 20 FROM coins WHERE symbol='USDT'
 	UNION ALL
-	    SELECT 'ETHEREUM', id, 'USDC', false, '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', 6,  'USDC_ERC20', '1',     'ERC20',  2, 30 FROM coins WHERE symbol='USDC'
+	    SELECT 'ETHEREUM', id, 'USDC', false, '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', 6,  'USDC_ERC20', '0.01',   'ERC20',  2, 30 FROM coins WHERE symbol='USDC'
 	UNION ALL
-	    SELECT 'BSC',      id, 'BNB',  true,  NULL,                                          18, 'BNB_BSC',    '0.005', 'Native', 1, 40 FROM coins WHERE symbol='BNB'
+	    SELECT 'BSC',      id, 'BNB',  true,  NULL,                                          18, 'BNB_BSC',    '0.0001', 'Native', 1, 40 FROM coins WHERE symbol='BNB'
 	UNION ALL
-	    SELECT 'BSC',      id, 'USDT', false, '0x55d398326f99059fF775485246999027B3197955',  18, 'USDT_BEP20', '1',     'BEP20',  1, 50 FROM coins WHERE symbol='USDT'
+	    SELECT 'BSC',      id, 'USDT', false, '0x55d398326f99059fF775485246999027B3197955',  18, 'USDT_BEP20', '0.01',   'BEP20',  1, 50 FROM coins WHERE symbol='USDT'
 	UNION ALL
-	    SELECT 'BSC',      id, 'USDC', false, '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',  18, 'USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET', '1', 'BEP20', 1, 60 FROM coins WHERE symbol='USDC'
+	    SELECT 'BSC',      id, 'USDC', false, '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',  18, 'USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET', '0.01', 'BEP20', 1, 60 FROM coins WHERE symbol='USDC'
 	UNION ALL
-	    SELECT 'TRON',     id, 'TRX',  true,  NULL,                                          6,  'TRX',        '1',     'Native', 1, 70 FROM coins WHERE symbol='TRX'
+	    SELECT 'TRON',     id, 'TRX',  true,  NULL,                                          6,  'TRX',        '0.01',   'Native', 1, 70 FROM coins WHERE symbol='TRX'
 	UNION ALL
-	    SELECT 'TRON',     id, 'USDT', false, 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',          6,  'USDT_TRC20', '1',     'TRC20',  1, 80 FROM coins WHERE symbol='USDT'
+	    SELECT 'TRON',     id, 'USDT', false, 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',          6,  'USDT_TRC20', '0.01',   'TRC20',  1, 80 FROM coins WHERE symbol='USDT'
 	ON CONFLICT (safeheron_coin_key) DO NOTHING;
 	`
 	_, err := db.Exec(query)

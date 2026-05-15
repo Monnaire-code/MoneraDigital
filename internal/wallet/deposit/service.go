@@ -575,6 +575,14 @@ func (s *Service) flagManualReview(
 	reason string,
 	alerts *[]alertPayload,
 ) error {
+	// If the deposit is already MANUAL_REVIEW a duplicate event arrived for the
+	// same tx — upsert to keep tracking data current, but skip the alert.
+	prior, found, err := s.repo.FindDepositByTxKey(ctx, tx, d.TxKey)
+	if err != nil {
+		return fmt.Errorf("check existing deposit: %w", err)
+	}
+	alreadyFlagged := found && prior.Status == DepositStatusManualReview
+
 	row := &DepositRow{
 		UserID:             userID,
 		SafeheronTxKey:     d.TxKey,
@@ -602,19 +610,21 @@ func (s *Service) flagManualReview(
 			return fmt.Errorf("mark manual_review: %w", err)
 		}
 	}
-	*alerts = append(*alerts, alertPayload{
-		level: "ERROR",
-		title: "Deposit manual review",
-		fields: map[string]string{
-			"reason":             reason,
-			"eventId":            evt.EventID,
-			"userId":             fmt.Sprintf("%d", userID),
-			"destinationAddress": d.DestinationAddress,
-			"amount":             d.TxAmount,
-			"coinKey":            d.CoinKey,
-			"txKey":              d.TxKey,
-		},
-	})
+	if !alreadyFlagged {
+		*alerts = append(*alerts, alertPayload{
+			level: "ERROR",
+			title: "Deposit manual review",
+			fields: map[string]string{
+				"reason":             reason,
+				"eventId":            evt.EventID,
+				"userId":             fmt.Sprintf("%d", userID),
+				"destinationAddress": d.DestinationAddress,
+				"amount":             d.TxAmount,
+				"coinKey":            d.CoinKey,
+				"txKey":              d.TxKey,
+			},
+		})
+	}
 	return nil
 }
 
