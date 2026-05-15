@@ -3,6 +3,8 @@ package deposit
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -215,6 +217,23 @@ func TestFindOrCreateAccountForUpdate(t *testing.T) {
 		t.Fatalf("unexpected: %d %s %v", id, bal, err)
 	}
 	_ = tx.Commit()
+}
+
+func TestFindOrCreateAccountForUpdate_DBError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO account \(user_id, type, currency, balance, frozen_balance\)`).
+		WithArgs(42, "ETH").
+		WillReturnError(fmt.Errorf("connection reset"))
+	mock.ExpectRollback()
+
+	r := NewRepository(db)
+	tx, _ := r.BeginTx(context.Background())
+	_, _, err := r.FindOrCreateAccountForUpdate(context.Background(), tx, 42, "ETH")
+	if err == nil || !strings.Contains(err.Error(), "find or create account") {
+		t.Fatalf("expected wrapped error, got %v", err)
+	}
 }
 
 func TestFindOrCreateAccountForUpdate_ExistingAccount(t *testing.T) {

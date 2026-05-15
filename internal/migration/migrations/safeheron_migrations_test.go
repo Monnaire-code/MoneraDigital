@@ -798,3 +798,88 @@ func escapeRegex(s string) string {
 	}
 	return result
 }
+
+// --- Migration 016: AccountFrozenBalanceDefault ---
+
+func TestAccountFrozenBalanceDefault_Metadata(t *testing.T) {
+	m := &AccountFrozenBalanceDefault{}
+	if v := m.Version(); v != "016" {
+		t.Errorf("Version() = %q, want %q", v, "016")
+	}
+	if n := m.Name(); n != "account_frozen_balance_default" {
+		t.Errorf("Name() = %q, want %q", n, "account_frozen_balance_default")
+	}
+	if d := m.Description(); d == "" {
+		t.Error("Description() should not be empty")
+	}
+}
+
+func TestAccountFrozenBalanceDefault_Up(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("ALTER TABLE account ALTER COLUMN frozen_balance SET DEFAULT 0").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	m := &AccountFrozenBalanceDefault{}
+	if err := m.Up(db); err != nil {
+		t.Fatalf("Up() unexpected error: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountFrozenBalanceDefault_Up_Error(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("ALTER TABLE account ALTER COLUMN frozen_balance SET DEFAULT 0").
+		WillReturnError(fmt.Errorf("db error"))
+
+	m := &AccountFrozenBalanceDefault{}
+	if err := m.Up(db); err == nil {
+		t.Fatal("Up() expected error, got nil")
+	}
+}
+
+func TestAccountFrozenBalanceDefault_Down(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("ALTER TABLE account ALTER COLUMN frozen_balance DROP DEFAULT").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	m := &AccountFrozenBalanceDefault{}
+	if err := m.Down(db); err != nil {
+		t.Fatalf("Down() unexpected error: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAccountFrozenBalanceDefault_Down_Error(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("ALTER TABLE account ALTER COLUMN frozen_balance DROP DEFAULT").
+		WillReturnError(fmt.Errorf("db error"))
+
+	m := &AccountFrozenBalanceDefault{}
+	if err := m.Down(db); err == nil {
+		t.Fatal("Down() expected error, got nil")
+	}
+}
