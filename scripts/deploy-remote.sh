@@ -78,7 +78,7 @@ JWT_SECRET=change-me
 ENCRYPTION_KEY=change-me-64-hex-chars
 # Safeheron
 SAFEHERON_API_KEY=
-SAFEHERON_API_BASE_URL=https://api.safeheron.com
+SAFEHERON_API_BASE_URL=https://api.safeheron.vip
 SAFEHERON_PRIVATE_KEY_PATH=./secrets/safeheron-private.pem
 SAFEHERON_PLATFORM_PUBLIC_KEY_PATH=./secrets/safeheron-platform-pub.pem
 SAFEHERON_WEBHOOK_PUBLIC_KEY_PATH=./secrets/safeheron-webhook-pub.pem

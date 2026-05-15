@@ -299,12 +299,15 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 				level: "WARN",
 				title: "Deposit failed",
 				fields: map[string]string{
-					"userId":            fmt.Sprintf("%d", userID),
-					"txKey":             d.TxKey,
-					"amount":            d.TxAmount,
-					"symbol":            symbol,
-					"transactionStatus": d.TransactionStatus,
-					"reason":            d.TransactionSubStatus,
+					"userId":             fmt.Sprintf("%d", userID),
+					"txKey":              d.TxKey,
+					"amount":             d.TxAmount,
+					"symbol":             symbol,
+					"transactionStatus":  d.TransactionStatus,
+					"reason":             d.TransactionSubStatus,
+					"coinKey":            d.CoinKey,
+					"destinationAddress": d.DestinationAddress,
+					"txHash":             d.TxHash,
 				},
 			})
 		}
@@ -509,10 +512,14 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 			level: decision.AlertLevel,
 			title: "KYT alert manual review",
 			fields: map[string]string{
-				"depositId": fmt.Sprintf("%d", dep.ID),
-				"txKey":     dep.SafeheronTxKey,
-				"riskLevel": decision.RiskLevel,
-				"reason":    decision.Reason,
+				"depositId":          fmt.Sprintf("%d", dep.ID),
+				"txKey":              dep.SafeheronTxKey,
+				"riskLevel":          decision.RiskLevel,
+				"reason":             decision.Reason,
+				"coinKey":            dep.SafeheronCoinKey,
+				"destinationAddress": dep.ToAddress,
+				"txHash":             dep.TxHash,
+				"amount":             dep.Amount,
 			},
 		})
 	}
@@ -540,9 +547,10 @@ func (s *Service) markOrphanAlertDone(ctx context.Context, tx Tx, evt *Event) (b
 		level: "ERROR",
 		title: "KYT orphan alert exceeded retries",
 		fields: map[string]string{
-			"eventId":  evt.EventID,
-			"txKey":    evt.SafeheronTxKey,
-			"attempts": fmt.Sprintf("%d", evt.ProcessAttempts+1),
+			"eventId":       evt.EventID,
+			"txKey":         evt.SafeheronTxKey,
+			"attempts":      fmt.Sprintf("%d", evt.ProcessAttempts+1),
+			"customerRefId": evt.CustomerRefID,
 		},
 	}})
 	return true, nil
@@ -622,6 +630,7 @@ func (s *Service) flagManualReview(
 				"amount":             d.TxAmount,
 				"coinKey":            d.CoinKey,
 				"txKey":              d.TxKey,
+				"txHash":             d.TxHash,
 			},
 		})
 	}
@@ -708,9 +717,13 @@ func (s *Service) scanOneKYTTimeout(ctx context.Context) error {
 			level: "ERROR",
 			title: "KYT timeout API failure",
 			fields: map[string]string{
-				"depositId": fmt.Sprintf("%d", depID),
-				"txKey":     txKey,
-				"error":     kytErr.Error(),
+				"depositId":          fmt.Sprintf("%d", depID),
+				"txKey":              txKey,
+				"error":              kytErr.Error(),
+				"coinKey":            dep.SafeheronCoinKey,
+				"destinationAddress": dep.ToAddress,
+				"txHash":             dep.TxHash,
+				"amount":             dep.Amount,
 			},
 		}})
 		return nil
@@ -777,10 +790,14 @@ func (s *Service) scanOneKYTTimeout(ctx context.Context) error {
 			level: decision.AlertLevel,
 			title: "KYT timeout manual review",
 			fields: map[string]string{
-				"depositId": fmt.Sprintf("%d", freshDep.ID),
-				"txKey":     freshDep.SafeheronTxKey,
-				"riskLevel": decision.RiskLevel,
-				"reason":    decision.Reason,
+				"depositId":          fmt.Sprintf("%d", freshDep.ID),
+				"txKey":              freshDep.SafeheronTxKey,
+				"riskLevel":          decision.RiskLevel,
+				"reason":             decision.Reason,
+				"coinKey":            freshDep.SafeheronCoinKey,
+				"destinationAddress": freshDep.ToAddress,
+				"txHash":             freshDep.TxHash,
+				"amount":             freshDep.Amount,
 			},
 		})
 	}
@@ -844,8 +861,13 @@ func (s *Service) scanOneAmlPending(ctx context.Context) error {
 	}()
 
 	freshDep, found, err := s.repo.FindDepositByTxKey(ctx, tx2, txKey)
-	if err != nil || !found {
-		return fmt.Errorf("re-read deposit AML scan: found=%v err=%w", found, err)
+	if err != nil {
+		return fmt.Errorf("re-read deposit AML scan: %w", err)
+	}
+	if !found {
+		_ = tx2.Commit()
+		committed2 = true
+		return nil
 	}
 	if freshDep.Status != DepositStatusKYTPending {
 		_ = tx2.Commit()
@@ -875,10 +897,14 @@ func (s *Service) scanOneAmlPending(ctx context.Context) error {
 				level: decision.AlertLevel,
 				title: "KYT manual review",
 				fields: map[string]string{
-					"depositId": fmt.Sprintf("%d", depID),
-					"txKey":     txKey,
-					"riskLevel": decision.RiskLevel,
-					"reason":    decision.Reason,
+					"depositId":          fmt.Sprintf("%d", depID),
+					"txKey":              txKey,
+					"riskLevel":          decision.RiskLevel,
+					"reason":             decision.Reason,
+					"coinKey":            freshDep.SafeheronCoinKey,
+					"destinationAddress": freshDep.ToAddress,
+					"txHash":             freshDep.TxHash,
+					"amount":             freshDep.Amount,
 				},
 			})
 		}

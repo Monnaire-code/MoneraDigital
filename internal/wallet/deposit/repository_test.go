@@ -3,6 +3,8 @@ package deposit
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -202,7 +204,8 @@ func TestFindOrCreateAccountForUpdate(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
 	mock.ExpectBegin()
-	mock.ExpectQuery("INSERT INTO account").
+	// Require frozen_balance in the INSERT column list — regression guard for the NOT NULL bug.
+	mock.ExpectQuery(`INSERT INTO account \(user_id, type, currency, balance, frozen_balance\)`).
 		WithArgs(42, "ETH").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "balance"}).AddRow(101, "0"))
 	mock.ExpectCommit()
@@ -211,6 +214,41 @@ func TestFindOrCreateAccountForUpdate(t *testing.T) {
 	tx, _ := r.BeginTx(context.Background())
 	id, bal, err := r.FindOrCreateAccountForUpdate(context.Background(), tx, 42, "ETH")
 	if err != nil || id != 101 || bal != "0" {
+		t.Fatalf("unexpected: %d %s %v", id, bal, err)
+	}
+	_ = tx.Commit()
+}
+
+func TestFindOrCreateAccountForUpdate_DBError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO account \(user_id, type, currency, balance, frozen_balance\)`).
+		WithArgs(42, "ETH").
+		WillReturnError(fmt.Errorf("connection reset"))
+	mock.ExpectRollback()
+
+	r := NewRepository(db)
+	tx, _ := r.BeginTx(context.Background())
+	_, _, err := r.FindOrCreateAccountForUpdate(context.Background(), tx, 42, "ETH")
+	if err == nil || !strings.Contains(err.Error(), "find or create account") {
+		t.Fatalf("expected wrapped error, got %v", err)
+	}
+}
+
+func TestFindOrCreateAccountForUpdate_ExistingAccount(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO account \(user_id, type, currency, balance, frozen_balance\)`).
+		WithArgs(42, "ETH").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "balance"}).AddRow(101, "5.5"))
+	mock.ExpectCommit()
+
+	r := NewRepository(db)
+	tx, _ := r.BeginTx(context.Background())
+	id, bal, err := r.FindOrCreateAccountForUpdate(context.Background(), tx, 42, "ETH")
+	if err != nil || id != 101 || bal != "5.5" {
 		t.Fatalf("unexpected: %d %s %v", id, bal, err)
 	}
 	_ = tx.Commit()
@@ -318,14 +356,15 @@ func TestLockOneAmlPending_Found(t *testing.T) {
 	cols := []string{"id", "user_id", "safeheron_tx_key", "safeheron_coin_key",
 		"amount", "asset", "chain_code", "coin_chain_id",
 		"safeheron_status", "safeheron_sub_status", "status_rank",
-		"block_height", "block_hash", "status"}
+		"block_height", "block_hash", "status",
+		"from_address", "to_address", "tx_hash"}
 
 	mock.ExpectBegin()
-	// Query must filter on aml_risk_level='PENDING'
 	mock.ExpectQuery(`aml_risk_level`).
 		WillReturnRows(sqlmock.NewRows(cols).
 			AddRow(50, 1, "tx-aml-pending", "ETH_KEY", "0.011", "USDT",
-				"BSC", 1, "COMPLETED", "CONFIRMED", 5, 99999, "0xhash", "KYT_PENDING"))
+				"BSC", 1, "COMPLETED", "CONFIRMED", 5, 99999, "0xhash", "KYT_PENDING",
+				"0xfrom", "0xto", "0xtxhash"))
 	mock.ExpectCommit()
 
 	r := NewRepository(db)
@@ -337,6 +376,9 @@ func TestLockOneAmlPending_Found(t *testing.T) {
 	if dep.ID != 50 {
 		t.Errorf("expected id=50, got %d", dep.ID)
 	}
+	if dep.ToAddress != "0xto" || dep.TxHash != "0xtxhash" {
+		t.Errorf("expected ToAddress=0xto TxHash=0xtxhash, got %q %q", dep.ToAddress, dep.TxHash)
+	}
 	_ = tx.Commit()
 }
 
@@ -347,7 +389,8 @@ func TestLockOneAmlPending_NoRows(t *testing.T) {
 	cols := []string{"id", "user_id", "safeheron_tx_key", "safeheron_coin_key",
 		"amount", "asset", "chain_code", "coin_chain_id",
 		"safeheron_status", "safeheron_sub_status", "status_rank",
-		"block_height", "block_hash", "status"}
+		"block_height", "block_hash", "status",
+		"from_address", "to_address", "tx_hash"}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`aml_risk_level`).WillReturnRows(sqlmock.NewRows(cols))
