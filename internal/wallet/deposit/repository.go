@@ -238,8 +238,8 @@ func (r *DBRepository) fetchDepositByTxKey(ctx context.Context, tx *sql.Tx, txKe
 // row lock identical to SELECT FOR UPDATE, serialising concurrent credits.
 func (r *DBRepository) FindOrCreateAccountForUpdate(ctx context.Context, tx Tx, userID int, currency string) (int64, string, error) {
 	row := asSQLTx(tx).QueryRowContext(ctx,
-		`INSERT INTO account (user_id, type, currency, balance)
-		 VALUES ($1, 'FUND', $2, 0)
+		`INSERT INTO account (user_id, type, currency, balance, frozen_balance)
+		 VALUES ($1, 'FUND', $2, 0, 0)
 		 ON CONFLICT (user_id, currency) DO UPDATE
 		   SET updated_at = account.updated_at
 		 RETURNING id, balance::text`,
