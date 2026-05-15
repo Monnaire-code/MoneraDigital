@@ -60,7 +60,7 @@ func TestTwoFAHandler_Skip2FALogin_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
 			AddRow(1, "test@example.com", false))
 
-	authService := services.NewAuthService(db, "test-secret")
+	authService := services.NewAuthService(db, "test-secret", nil)
 	handler := &Handler{
 		AuthService: authService,
 	}
@@ -106,7 +106,7 @@ func TestTwoFAHandler_Skip2FALogin_UserNotFound(t *testing.T) {
 		WithArgs(999).
 		WillReturnError(sql.ErrNoRows)
 
-	authService := services.NewAuthService(db, "test-secret")
+	authService := services.NewAuthService(db, "test-secret", nil)
 	handler := &Handler{
 		AuthService: authService,
 	}
@@ -147,7 +147,7 @@ func TestTwoFAHandler_Skip2FALogin_2FAEnabled(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
 			AddRow(1, "test@example.com", true))
 
-	authService := services.NewAuthService(db, "test-secret")
+	authService := services.NewAuthService(db, "test-secret", nil)
 	handler := &Handler{
 		AuthService: authService,
 	}
@@ -192,7 +192,7 @@ func TestTwoFAHandler_Skip2FALogin_DBError(t *testing.T) {
 		WithArgs(1).
 		WillReturnError(errors.New("database connection failed"))
 
-	authService := services.NewAuthService(db, "test-secret")
+	authService := services.NewAuthService(db, "test-secret", nil)
 	handler := &Handler{
 		AuthService: authService,
 	}
@@ -270,7 +270,7 @@ func TestTwoFAHandler_Skip2FALogin_ResponseFormat(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
 			AddRow(1, "test@example.com", false))
 
-	authService := services.NewAuthService(db, "test-secret")
+	authService := services.NewAuthService(db, "test-secret", nil)
 	handler := &Handler{
 		AuthService: authService,
 	}

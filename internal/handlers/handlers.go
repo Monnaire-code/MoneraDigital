@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +46,12 @@ type Handler struct {
 	WealthService      *services.WealthService
 	IdempotencyService *services.IdempotencyService
 	ActivationService  *services.ActivationService
-	Validator          validator.Validator
+	// Safeheron Phase 1: unexported so external packages can't bypass the
+	// SetSafeheronDeps typed-nil guard. Same-package handlers and tests
+	// access them directly. T6-S-4.
+	poolManager    DepositPoolManager
+	walletRegistry ChainsRegistry
+	Validator      validator.Validator
 }
 
 func NewHandler(auth *services.AuthService, lending *services.LendingService, address *services.AddressService, withdrawal *services.WithdrawalService, deposit *services.DepositService, wallet *services.WalletService, wealth *services.WealthService, idempotency *services.IdempotencyService, activation *services.ActivationService) *Handler {
@@ -61,6 +67,38 @@ func NewHandler(auth *services.AuthService, lending *services.LendingService, ad
 		ActivationService:  activation,
 		Validator:          validator.NewValidator(),
 	}
+}
+
+// SetSafeheronDeps wires the optional Safeheron-backed deposit pool + chain
+// registry dependencies. Passing nil — or a typed-nil concrete pointer wrapped
+// in the interface — leaves the handler in the 503-fallback state used by
+// environments that haven't provisioned Safeheron yet.
+//
+// The typed-nil check is critical: `var pm *pool.Manager` assigned into a
+// DepositPoolManager interface variable is non-nil at the interface level but
+// nil at the concrete pointer level, and would silently bypass the
+// `if h.poolManager == nil` 503 guard inside GetDepositAddress.
+func (h *Handler) SetSafeheronDeps(pm DepositPoolManager, reg ChainsRegistry) {
+	if !isNilInterface(pm) {
+		h.poolManager = pm
+	}
+	if !isNilInterface(reg) {
+		h.walletRegistry = reg
+	}
+}
+
+// isNilInterface returns true for both nil interfaces and typed-nil interfaces
+// (interface holding a nil concrete pointer/map/slice/chan/func).
+func isNilInterface(i any) bool {
+	if i == nil {
+		return true
+	}
+	v := reflect.ValueOf(i)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return v.IsNil()
+	}
+	return false
 }
 
 // Auth handlers
@@ -157,13 +195,13 @@ func (h *Handler) Register(c *gin.Context) {
 }
 
 func (h *Handler) GetMe(c *gin.Context) {
-	userID, exists := c.Get("userID")
-	if !exists {
+	userID, err := h.getUserID(c)
+	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
-	user, err := h.AuthService.GetUserByID(userID.(int))
+	user, err := h.AuthService.GetUserByID(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch user profile"})
 		return
@@ -672,11 +710,15 @@ func (h *Handler) GetDocs(c *gin.Context) {
 // Helper functions
 
 func (h *Handler) getUserID(c *gin.Context) (int, error) {
-	userID, exists := c.Get("userID")
+	v, exists := c.Get("userID")
 	if !exists {
 		return 0, errors.New("Unauthorized")
 	}
-	return userID.(int), nil
+	id, ok := v.(int)
+	if !ok {
+		return 0, errors.New("Unauthorized")
+	}
+	return id, nil
 }
 
 func toLendingPositionResponse(position *models.LendingPosition) dto.LendingPositionResponse {

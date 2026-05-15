@@ -13,7 +13,7 @@ import (
 func TestWealthService_GetProducts(t *testing.T) {
 	mockRepo := new(MockWealthRepository)
 	mockJournalRepo := new(MockJournalRepository)
-	service := NewWealthService(mockRepo, nil, mockJournalRepo)
+	service := NewWealthService(mockRepo, nil, mockJournalRepo, nil)
 
 	now := time.Now().Format(time.RFC3339)
 	mockRepo.On("GetActiveProducts", mock.Anything).Return([]*repository.WealthProductModel{
@@ -48,7 +48,7 @@ func TestWealthService_Subscribe_InsufficientBalance(t *testing.T) {
 	mockRepo := new(MockWealthRepository)
 	mockAccountRepo := new(MockAccountRepository)
 	mockJournalRepo := new(MockJournalRepository)
-	service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo)
+	service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo, nil)
 
 	now := time.Now().Format(time.RFC3339)
 	mockRepo.On("GetProductByID", mock.Anything, int64(1)).Return(&repository.WealthProductModel{
@@ -83,7 +83,7 @@ func TestWealthService_Subscribe_InsufficientBalance(t *testing.T) {
 func TestWealthService_Subscribe_ProductNotFound(t *testing.T) {
 	mockRepo := new(MockWealthRepository)
 	mockJournalRepo := new(MockJournalRepository)
-	service := NewWealthService(mockRepo, nil, mockJournalRepo)
+	service := NewWealthService(mockRepo, nil, mockJournalRepo, nil)
 
 	mockRepo.On("GetProductByID", mock.Anything, int64(999)).Return(nil, repository.ErrNotFound)
 
@@ -96,7 +96,7 @@ func TestWealthService_Subscribe_ProductNotFound(t *testing.T) {
 func TestWealthService_GetOrders(t *testing.T) {
 	mockRepo := new(MockWealthRepository)
 	mockJournalRepo := new(MockJournalRepository)
-	service := NewWealthService(mockRepo, nil, mockJournalRepo)
+	service := NewWealthService(mockRepo, nil, mockJournalRepo, nil)
 
 	now := time.Now().Format(time.RFC3339)
 	mockRepo.On("GetOrdersByUserID", mock.Anything, int64(1)).Return([]*repository.WealthOrderModel{
@@ -130,7 +130,7 @@ func TestWealthService_GetOrders(t *testing.T) {
 func TestWealthService_Redeem_OrderNotFound(t *testing.T) {
 	mockRepo := new(MockWealthRepository)
 	mockJournalRepo := new(MockJournalRepository)
-	service := NewWealthService(mockRepo, nil, mockJournalRepo)
+	service := NewWealthService(mockRepo, nil, mockJournalRepo, nil)
 
 	mockRepo.On("GetOrderByID", mock.Anything, int64(999)).Return(nil, repository.ErrNotFound)
 
@@ -143,7 +143,7 @@ func TestWealthService_Redeem_OrderNotFound(t *testing.T) {
 func TestWealthService_Redeem_AlreadyRedeemed(t *testing.T) {
 	mockRepo := new(MockWealthRepository)
 	mockJournalRepo := new(MockJournalRepository)
-	service := NewWealthService(mockRepo, nil, mockJournalRepo)
+	service := NewWealthService(mockRepo, nil, mockJournalRepo, nil)
 
 	now := time.Now().Format(time.RFC3339)
 	mockRepo.On("GetOrderByID", mock.Anything, int64(1)).Return(&repository.WealthOrderModel{
@@ -173,7 +173,7 @@ func TestWealthService_Redeem_Success(t *testing.T) {
 	mockRepo := new(MockWealthRepository)
 	mockAccountRepo := new(MockAccountRepository)
 	mockJournalRepo := new(MockJournalRepository)
-	service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo)
+	service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo, nil)
 
 	now := time.Now().Format(time.RFC3339)
 	pastDate := time.Now().AddDate(0, 0, -10).Format("2006-01-02")
@@ -226,7 +226,7 @@ func TestWealthService_Redeem_SetsCorrectStatus(t *testing.T) {
 		mockRepo := new(MockWealthRepository)
 		mockAccountRepo := new(MockAccountRepository)
 		mockJournalRepo := new(MockJournalRepository)
-		service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo)
+		service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo, nil)
 
 		expiredDate := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
 
@@ -269,7 +269,7 @@ func TestWealthService_Redeem_SetsCorrectStatus(t *testing.T) {
 		mockRepo := new(MockWealthRepository)
 		mockAccountRepo := new(MockAccountRepository)
 		mockJournalRepo := new(MockJournalRepository)
-		service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo)
+		service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo, nil)
 
 		futureDate := time.Now().AddDate(0, 0, 20).Format("2006-01-02")
 
@@ -312,7 +312,7 @@ func TestWealthService_Redeem_EarlyRedemption(t *testing.T) {
 	mockRepo := new(MockWealthRepository)
 	mockAccountRepo := new(MockAccountRepository)
 	mockJournalRepo := new(MockJournalRepository)
-	service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo)
+	service := NewWealthService(mockRepo, mockAccountRepo, mockJournalRepo, nil)
 
 	now := time.Now().Format(time.RFC3339)
 	today := time.Now().Format("2006-01-02")

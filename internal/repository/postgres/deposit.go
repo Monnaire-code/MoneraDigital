@@ -32,7 +32,8 @@ func (r *DepositRepository) Create(ctx context.Context, deposit *models.Deposit)
 
 func (r *DepositRepository) GetByTxHash(ctx context.Context, txHash string) (*models.Deposit, error) {
 	query := `
-		SELECT id, user_id, tx_hash, amount, asset, chain, status, from_address, to_address, created_at, confirmed_at
+		SELECT id, user_id, tx_hash, amount, asset, chain, status, from_address, to_address, created_at,
+		       COALESCE(credited_at, confirmed_at) AS credited_at
 		FROM deposits WHERE tx_hash = $1`
 
 	var d models.Deposit
@@ -59,7 +60,8 @@ func (r *DepositRepository) GetByUserID(ctx context.Context, userID int, limit, 
 	}
 
 	query := `
-		SELECT id, user_id, tx_hash, amount, asset, chain, status, from_address, to_address, created_at, confirmed_at
+		SELECT id, user_id, tx_hash, amount, asset, chain, status, from_address, to_address, created_at,
+		       COALESCE(credited_at, confirmed_at) AS credited_at
 		FROM deposits WHERE user_id = $1
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3`
