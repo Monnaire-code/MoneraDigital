@@ -3,7 +3,6 @@ package migrations
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"testing"
 
 	"monera-digital/internal/migration"
@@ -477,31 +476,7 @@ func TestExtendDepositsForSafeheron_Down_BlockedInProduction(t *testing.T) {
 
 // --- Seed Migration 021 Tests ---
 
-func TestSeedSafeheronPhase1_Up_TestnetDefault(t *testing.T) {
-	t.Setenv("APP_ENV", "")
-
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	mock.ExpectExec("INSERT INTO chains").WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec("INSERT INTO coin_chains.*ETH\\(SEPOLIA\\)_ETHEREUM_SEPOLIA").WillReturnResult(sqlmock.NewResult(0, 3))
-
-	m := &SeedSafeheronPhase1Data{}
-	if err := m.Up(db); err != nil {
-		t.Fatalf("Up() error = %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unfulfilled expectations: %s", err)
-	}
-}
-
 func TestSeedSafeheronPhase1_Up_Production(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
-
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -521,53 +496,7 @@ func TestSeedSafeheronPhase1_Up_Production(t *testing.T) {
 	}
 }
 
-func TestSeedSafeheronPhase1_Up_LocalEnv(t *testing.T) {
-	t.Setenv("APP_ENV", "local")
-
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	mock.ExpectExec("INSERT INTO chains").WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec("INSERT INTO coin_chains.*TRX\\(SHASTA\\)_TRON_TESTNET").WillReturnResult(sqlmock.NewResult(0, 3))
-
-	m := &SeedSafeheronPhase1Data{}
-	if err := m.Up(db); err != nil {
-		t.Fatalf("Up() error = %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unfulfilled expectations: %s", err)
-	}
-}
-
-func TestSeedSafeheronPhase1_Up_UnknownEnv(t *testing.T) {
-	t.Setenv("APP_ENV", "staging")
-
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	mock.ExpectExec("INSERT INTO chains").WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
-
-	m := &SeedSafeheronPhase1Data{}
-	err = m.Up(db)
-	if err == nil {
-		t.Fatal("expected error for unknown APP_ENV")
-	}
-	if !contains(err.Error(), "unknown APP_ENV") {
-		t.Errorf("error should contain 'unknown APP_ENV', got: %s", err)
-	}
-}
-
 func TestSeedSafeheronPhase1_Up_SeedChainsError(t *testing.T) {
-	t.Setenv("APP_ENV", "local")
-
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -587,8 +516,6 @@ func TestSeedSafeheronPhase1_Up_SeedChainsError(t *testing.T) {
 }
 
 func TestSeedSafeheronPhase1_Up_SeedCoinsError(t *testing.T) {
-	t.Setenv("APP_ENV", "local")
-
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -609,31 +536,6 @@ func TestSeedSafeheronPhase1_Up_SeedCoinsError(t *testing.T) {
 }
 
 func TestSeedSafeheronPhase1_Up_CoinChainsError(t *testing.T) {
-	t.Setenv("APP_ENV", "local")
-
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	mock.ExpectExec("INSERT INTO chains").WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec("INSERT INTO coin_chains").WillReturnError(fmt.Errorf("db error"))
-
-	m := &SeedSafeheronPhase1Data{}
-	err = m.Up(db)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !contains(err.Error(), "failed to seed testnet coin_chains") {
-		t.Errorf("unexpected error: %s", err)
-	}
-}
-
-func TestSeedSafeheronPhase1_Up_ProductionCoinChainsError(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
-
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -661,7 +563,7 @@ func TestSeedSafeheronPhase1_Down(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec("DELETE FROM coin_chains WHERE safeheron_coin_key IN").WillReturnResult(sqlmock.NewResult(0, 11))
+	mock.ExpectExec("DELETE FROM coin_chains WHERE safeheron_coin_key IN").WillReturnResult(sqlmock.NewResult(0, 8))
 	mock.ExpectExec("DELETE FROM coins WHERE symbol IN").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectExec("DELETE FROM chains WHERE code IN").WillReturnResult(sqlmock.NewResult(0, 3))
 
@@ -790,8 +692,6 @@ func TestExtendDepositsForSafeheron_Down_Errors(t *testing.T) {
 // --- Seed Data Verification ---
 
 func TestSeedSafeheronPhase1_ProductionCoinKeys(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
-
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -814,29 +714,61 @@ func TestSeedSafeheronPhase1_ProductionCoinKeys(t *testing.T) {
 	_ = m.Up(db)
 }
 
-func TestSeedSafeheronPhase1_TestnetCoinKeys(t *testing.T) {
-	t.Setenv("APP_ENV", "test")
+// --- AddAccountBalanceConstraints Tests ---
 
+func TestAddAccountBalanceConstraints_Up(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
-	mock.ExpectExec("INSERT INTO chains").WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectExec("INSERT INTO coins").WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec("DO \\$\\$ BEGIN").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	expectedKeys := []string{
-		"ETH\\(SEPOLIA\\)_ETHEREUM_SEPOLIA",
-		"USDCOIN_ERC20_ETHEREUM_SEPOLIA",
-		"TRX\\(SHASTA\\)_TRON_TESTNET",
+	m := &AddAccountBalanceConstraints{}
+	if err := m.Up(db); err != nil {
+		t.Fatalf("Up() error = %v", err)
 	}
-	for _, key := range expectedKeys {
-		mock.ExpectExec(".*" + key + ".*").WillReturnResult(sqlmock.NewResult(0, 3))
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %s", err)
 	}
+}
 
-	m := &SeedSafeheronPhase1Data{}
-	_ = m.Up(db)
+func TestAddAccountBalanceConstraints_Up_Error(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("DO \\$\\$ BEGIN").WillReturnError(fmt.Errorf("db error"))
+
+	m := &AddAccountBalanceConstraints{}
+	err = m.Up(db)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !contains(err.Error(), "failed to add account balance constraints") {
+		t.Errorf("unexpected error: %s", err)
+	}
+}
+
+func TestAddAccountBalanceConstraints_Down(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("ALTER TABLE account DROP CONSTRAINT IF EXISTS ck_balance_non_negative").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	m := &AddAccountBalanceConstraints{}
+	if err := m.Down(db); err != nil {
+		t.Fatalf("Down() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %s", err)
+	}
 }
 
 // --- Helpers ---
@@ -866,6 +798,3 @@ func escapeRegex(s string) string {
 	}
 	return result
 }
-
-// Ensure os import is used in test context
-var _ = os.Getenv
