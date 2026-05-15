@@ -483,7 +483,7 @@ func (m *ExtendDepositsForSafeheron) Up(db *sql.DB) error {
 
 func (m *ExtendDepositsForSafeheron) Down(db *sql.DB) error {
 	if os.Getenv("APP_ENV") == "production" {
-		return fmt.Errorf("BLOCKED: rollback of migration 020 in production would destroy deposit data; use a manual migration instead")
+		return fmt.Errorf("BLOCKED: rollback of migration 015 in production would destroy deposit data; use a manual migration instead")
 	}
 
 	dropKytIdx := `DROP INDEX IF EXISTS idx_deposits_kyt_pending;`
@@ -583,15 +583,7 @@ func (m *SeedSafeheronPhase1Data) Up(db *sql.DB) error {
 		return fmt.Errorf("failed to seed coins: %w", err)
 	}
 
-	appEnv := os.Getenv("APP_ENV")
-	switch appEnv {
-	case "production":
-		return m.seedProductionCoinChains(db)
-	case "local", "development", "test", "":
-		return m.seedTestnetCoinChains(db)
-	default:
-		return fmt.Errorf("unknown APP_ENV %q: expected 'production', 'local', 'development', or 'test'", appEnv)
-	}
+	return m.seedProductionCoinChains(db)
 }
 
 func (m *SeedSafeheronPhase1Data) seedProductionCoinChains(db *sql.DB) error {
@@ -621,29 +613,11 @@ func (m *SeedSafeheronPhase1Data) seedProductionCoinChains(db *sql.DB) error {
 	return nil
 }
 
-func (m *SeedSafeheronPhase1Data) seedTestnetCoinChains(db *sql.DB) error {
-	query := `
-	INSERT INTO coin_chains (chain_code, coin_id, symbol, is_native, token_contract, decimals, safeheron_coin_key, min_deposit_amount, token_standard, estimated_arrival_minutes, display_order)
-	    SELECT 'ETHEREUM', id, 'ETH',  true,  NULL,                                          18, 'ETH(SEPOLIA)_ETHEREUM_SEPOLIA',  '0.0001', 'Native', 2, 10 FROM coins WHERE symbol='ETH'
-	UNION ALL
-	    SELECT 'ETHEREUM', id, 'USDC', false, '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', 6,  'USDCOIN_ERC20_ETHEREUM_SEPOLIA', '0.1',    'ERC20',  2, 30 FROM coins WHERE symbol='USDC'
-	UNION ALL
-	    SELECT 'TRON',     id, 'TRX',  true,  NULL,                                          6,  'TRX(SHASTA)_TRON_TESTNET',       '0.1',    'Native', 1, 70 FROM coins WHERE symbol='TRX'
-	ON CONFLICT (safeheron_coin_key) DO NOTHING;
-	`
-	_, err := db.Exec(query)
-	if err != nil {
-		return fmt.Errorf("failed to seed testnet coin_chains: %w", err)
-	}
-	return nil
-}
-
 func (m *SeedSafeheronPhase1Data) Down(db *sql.DB) error {
 	_, err := db.Exec(`
 		DELETE FROM coin_chains WHERE safeheron_coin_key IN (
 			'ETH', 'USDT_ERC20', 'USDC_ERC20', 'BNB_BSC', 'USDT_BEP20',
-			'USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET', 'TRX', 'USDT_TRC20',
-			'ETH(SEPOLIA)_ETHEREUM_SEPOLIA', 'USDCOIN_ERC20_ETHEREUM_SEPOLIA', 'TRX(SHASTA)_TRON_TESTNET'
+			'USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET', 'TRX', 'USDT_TRC20'
 		);
 	`)
 	if err != nil {
@@ -676,17 +650,13 @@ func (m *SeedSafeheronPhase1Data) Down(db *sql.DB) error {
 type AddAccountBalanceConstraints struct{}
 
 func (m *AddAccountBalanceConstraints) Up(db *sql.DB) error {
+	// frozen_balance 允许负值（业务设计），不添加 ck_frozen_non_negative 约束。
 	query := `
 	DO $$ BEGIN
 		IF NOT EXISTS (
 			SELECT 1 FROM pg_constraint WHERE conname = 'ck_balance_non_negative'
 		) THEN
 			ALTER TABLE account ADD CONSTRAINT ck_balance_non_negative CHECK (balance >= 0);
-		END IF;
-		IF NOT EXISTS (
-			SELECT 1 FROM pg_constraint WHERE conname = 'ck_frozen_non_negative'
-		) THEN
-			ALTER TABLE account ADD CONSTRAINT ck_frozen_non_negative CHECK (frozen_balance >= 0);
 		END IF;
 	END $$;`
 	if _, err := db.Exec(query); err != nil {
@@ -697,7 +667,6 @@ func (m *AddAccountBalanceConstraints) Up(db *sql.DB) error {
 
 func (m *AddAccountBalanceConstraints) Down(db *sql.DB) error {
 	_, err := db.Exec(`
-		ALTER TABLE account DROP CONSTRAINT IF EXISTS ck_balance_non_negative;
-		ALTER TABLE account DROP CONSTRAINT IF EXISTS ck_frozen_non_negative;`)
+		ALTER TABLE account DROP CONSTRAINT IF EXISTS ck_balance_non_negative;`)
 	return err
 }

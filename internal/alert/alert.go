@@ -47,13 +47,12 @@ func (a *AlertService) Send(level, title string, fields map[string]string) {
 	if a == nil {
 		return
 	}
-	msg := formatAlert(level, title, fields)
-	// 5s deadline covers both the Feishu request and the email fan-out so an
-	// unhealthy sink can't pin the caller.
+	prefix := classifyAlertPrefix(title)
+	msg := formatAlert(prefix, level, title, fields)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	a.sendFeishu(ctx, msg)
-	a.sendEmail(ctx, title, msg)
+	a.sendEmail(ctx, prefix, title, msg)
 }
 
 func (a *AlertService) sendFeishu(ctx context.Context, msg string) {
@@ -85,11 +84,11 @@ func (a *AlertService) sendFeishu(ctx context.Context, msg string) {
 	}
 }
 
-func (a *AlertService) sendEmail(ctx context.Context, title, body string) {
+func (a *AlertService) sendEmail(ctx context.Context, prefix, title, body string) {
 	if a.emailSvc == nil || len(a.recipients) == 0 {
 		return
 	}
-	subject := "【Phase1告警】" + title
+	subject := prefix + title
 	for _, addr := range a.recipients {
 		if err := a.emailSvc.SendAlertEmail(ctx, addr, subject, body); err != nil {
 			log.Printf("alert: email send to %s failed: %v", addr, err)
@@ -97,11 +96,25 @@ func (a *AlertService) sendEmail(ctx context.Context, title, body string) {
 	}
 }
 
-// formatAlert renders a deterministic plain-text body. fields are sorted so
-// snapshot tests stay stable.
-func formatAlert(level, title string, fields map[string]string) string {
+// classifyAlertPrefix maps title keywords to a Chinese category prefix.
+// KYT/AML takes priority over deposit/withdraw.
+func classifyAlertPrefix(title string) string {
+	t := strings.ToLower(title)
+	switch {
+	case strings.Contains(t, "kyt") || strings.Contains(t, "aml"):
+		return "【AML告警】"
+	case strings.Contains(t, "deposit"):
+		return "【充值告警】"
+	case strings.Contains(t, "withdraw"):
+		return "【提现告警】"
+	default:
+		return "【系统告警】"
+	}
+}
+
+func formatAlert(prefix, level, title string, fields map[string]string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "【Phase1告警】level=%s\n", level)
+	fmt.Fprintf(&b, "%slevel=%s\n", prefix, level)
 	fmt.Fprintf(&b, "title=%s\n", title)
 	keys := make([]string, 0, len(fields))
 	for k := range fields {

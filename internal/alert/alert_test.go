@@ -41,19 +41,46 @@ type emailFailErr struct{}
 
 func (e *emailFailErr) Error() string { return "email failed" }
 
+func TestClassifyAlertPrefix(t *testing.T) {
+	tests := []struct {
+		title string
+		want  string
+	}{
+		{"KYT alert manual review", "【AML告警】"},
+		{"KYT timeout API failure", "【AML告警】"},
+		{"KYT timeout manual review", "【AML告警】"},
+		{"KYT orphan alert exceeded retries", "【AML告警】"},
+		{"KYT manual review", "【AML告警】"},
+		{"Deposit KYT overlap", "【AML告警】"},
+		{"Deposit failed", "【充值告警】"},
+		{"Deposit manual review", "【充值告警】"},
+		{"Withdraw timeout", "【提现告警】"},
+		{"Registry refresh failed", "【系统告警】"},
+		{"Unknown error", "【系统告警】"},
+		{"", "【系统告警】"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			if got := classifyAlertPrefix(tt.title); got != tt.want {
+				t.Errorf("classifyAlertPrefix(%q) = %q, want %q", tt.title, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAlertService_Nil_Safe(t *testing.T) {
 	var a *AlertService
 	a.Send("INFO", "title", nil) // should be no-op, not panic
 }
 
 func TestAlertService_FormatAlert_Deterministic(t *testing.T) {
-	out := formatAlert("ERROR", "Deposit manual review", map[string]string{
+	out := formatAlert("【充值告警】", "ERROR", "Deposit manual review", map[string]string{
 		"userId":             "42",
 		"reason":             "ADDRESS_UNASSIGNED",
 		"destinationAddress": "0xabc",
 	})
 	want := strings.Join([]string{
-		"【Phase1告警】level=ERROR",
+		"【充值告警】level=ERROR",
 		"title=Deposit manual review",
 		"destinationAddress=0xabc",
 		"reason=ADDRESS_UNASSIGNED",

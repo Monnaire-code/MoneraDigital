@@ -41,6 +41,9 @@ func main() {
 	// Safeheron Phase 1
 	migrator.Register(&migrations.SafeheronPhase1{})
 
+	// Hotfix: frozen_balance NOT NULL without DEFAULT caused first-deposit failures
+	migrator.Register(&migrations.AccountFrozenBalanceDefault{})
+
 	if err := migrator.Migrate(); err != nil {
 		log.Fatal("Migration failed:", err)
 	}

@@ -60,6 +60,8 @@ func TestMigrationOrder(t *testing.T) {
 		{"AddTwoFactorColumnsMigration", "004"},
 		{"AddTwoFactorTimestampMigration", "005"},
 		{"UpdateWalletRequestsTable", "007"},
+		{"SafeheronPhase1", "015"},
+		{"AccountFrozenBalanceDefault", "016"},
 	}
 
 	for i, m := range migrations {
