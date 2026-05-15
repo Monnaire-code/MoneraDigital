@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"github.com/stretchr/testify/mock"
 	"monera-digital/internal/coreapi"
 	"monera-digital/internal/models"
@@ -346,6 +347,16 @@ func (m *MockAddressRepository) GetByAddressAndChain(ctx context.Context, addres
 
 func (m *MockAddressRepository) SetPrimary(ctx context.Context, userID int, addressID int) error {
 	args := m.Called(ctx, userID, addressID)
+	return args.Error(0)
+}
+
+func (m *MockAddressRepository) UnfreezeExpiredAddresses(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return int64(args.Int(0)), args.Error(1)
+}
+
+func (m *MockAddressRepository) UpdateFrozenUntil(ctx context.Context, id int, frozenUntil sql.NullTime) error {
+	args := m.Called(ctx, id, frozenUntil)
 	return args.Error(0)
 }
 

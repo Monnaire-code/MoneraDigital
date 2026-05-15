@@ -7,15 +7,24 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"time"
 
-	"github.com/spf13/viper"
+	"monera-digital/internal/alert"
 	"monera-digital/internal/cache"
 	"monera-digital/internal/config"
 	"monera-digital/internal/coreapi"
+	"monera-digital/internal/handlers"
 	"monera-digital/internal/middleware"
 	"monera-digital/internal/repository"
 	"monera-digital/internal/repository/postgres"
+	"monera-digital/internal/safeheron"
 	"monera-digital/internal/services"
+	walletconfig "monera-digital/internal/wallet/config"
+	"monera-digital/internal/wallet/deposit"
+	"monera-digital/internal/wallet/pool"
+
+	"github.com/spf13/viper"
 )
 
 // ContainerOption 配置选项函数
@@ -38,6 +47,176 @@ func WithEncryption(key string) ContainerOption {
 		}
 		c.EncryptionService = encryptionService
 		c.TwoFAService = services.NewTwoFactorService(c.DB, encryptionService)
+	}
+}
+
+// WithSafeheronPool wires the Safeheron SDK client, chain registry, address
+// pool manager, and replenisher background goroutine. Missing env config logs a
+// warning and leaves the deposit-address endpoint returning 503 — useful in
+// environments where Safeheron credentials aren't provisioned yet.
+//
+// Callers must pass a long-lived ctx (typically the server lifecycle ctx); the
+// replenisher goroutine exits when ctx is cancelled. v1.6: PEM files now live
+// at SAFEHERON_*_KEY_PATH locations under secrets/ — operators are responsible
+// for placing them with correct permissions before startup.
+func WithSafeheronPool(ctx context.Context) ContainerOption {
+	return func(c *Container) {
+		baseURL := viper.GetString("SAFEHERON_API_BASE_URL")
+		apiKey := viper.GetString("SAFEHERON_API_KEY")
+		privPath := viper.GetString("SAFEHERON_PRIVATE_KEY_PATH")
+		platPath := viper.GetString("SAFEHERON_PLATFORM_PUBLIC_KEY_PATH")
+		whPubPath := viper.GetString("SAFEHERON_WEBHOOK_PUBLIC_KEY_PATH")
+		whPrivPath := viper.GetString("SAFEHERON_WEBHOOK_PRIVATE_KEY_PATH")
+
+		if apiKey == "" || privPath == "" || platPath == "" {
+			log.Printf("Safeheron pool disabled: SAFEHERON_API_KEY/PRIVATE_KEY_PATH/PLATFORM_PUBLIC_KEY_PATH not configured")
+			return
+		}
+
+		registry := walletconfig.NewRegistry(walletconfig.NewDBRepository(c.DB), 0)
+		if err := registry.Load(ctx); err != nil {
+			log.Printf("Safeheron pool disabled: registry load failed: %v", err)
+			return
+		}
+		registry.StartBackgroundRefresh(ctx)
+		c.WalletRegistry = registry
+
+		client, err := safeheron.NewClient(safeheron.Config{
+			BaseURL:               baseURL,
+			APIKey:                apiKey,
+			PrivateKeyPath:        privPath,
+			PlatformPublicKeyPath: platPath,
+			WebhookPublicKeyPath:  whPubPath,
+			WebhookPrivateKeyPath: whPrivPath,
+			RequestTimeoutMS:      30000,
+		})
+		if err != nil {
+			log.Printf("Safeheron pool disabled: client init failed: %v", err)
+			return
+		}
+		c.SafeheronClient = client
+
+		poolRepo := pool.NewRepository(c.DB)
+		c.PoolManager = pool.NewManager(poolRepo, client, registry)
+
+		interval := viper.GetDuration("POOL_REPLENISH_INTERVAL")
+		if interval <= 0 {
+			interval = 10 * time.Minute
+		}
+		low := map[string]int{
+			"EVM":  viper.GetInt("POOL_REPLENISH_LOW_EVM"),
+			"TRON": viper.GetInt("POOL_REPLENISH_LOW_TRON"),
+		}
+		target := map[string]int{
+			"EVM":  viper.GetInt("POOL_REPLENISH_TARGET_EVM"),
+			"TRON": viper.GetInt("POOL_REPLENISH_TARGET_TRON"),
+		}
+		// Sensible defaults if env not configured.
+		applyDefault(low, "EVM", 50)
+		applyDefault(low, "TRON", 50)
+		applyDefault(target, "EVM", 100)
+		applyDefault(target, "TRON", 100)
+
+		c.PoolReplenisher = pool.NewReplenisher(c.PoolManager, pool.ReplenisherConfig{
+			Interval: interval,
+			Low:      low,
+			Target:   target,
+		})
+		go c.PoolReplenisher.Run(ctx)
+
+		log.Printf("Safeheron pool enabled: replenisher interval=%s low=%v target=%v",
+			interval, low, target)
+
+		// Alert sink (Feishu webhook + email recipients).
+		feishuURL := viper.GetString("ALERT_WEBHOOK_URL")
+		recipients := splitNonEmpty(viper.GetString("ALERT_EMAIL_RECIPIENTS"))
+		c.AlertService = alert.NewAlertService(feishuURL, recipients, c.EmailService)
+		c.PoolManager.SetAlertFunc(func(level, title, message string) {
+			c.AlertService.Send(level, title, map[string]string{"message": message})
+		})
+
+		// KYT configuration + production startup validation (K-16)
+		kytEnabled := true
+		if viper.IsSet("KYT_ENABLED") {
+			kytEnabled = viper.GetBool("KYT_ENABLED")
+		}
+		if viper.GetString("APP_ENV") == "production" && !kytEnabled {
+			panic("KYT_ENABLED=false is not allowed in production (K-16): " +
+				"set KYT_ENABLED=true or unset for production deployment")
+		}
+
+		kytOrphanMaxRetry := viper.GetInt("KYT_ORPHAN_ALERT_MAX_RETRY")
+		if kytOrphanMaxRetry <= 0 {
+			kytOrphanMaxRetry = 100
+		}
+		kytTimeout := viper.GetDuration("KYT_TIMEOUT")
+		if kytTimeout <= 0 {
+			kytTimeout = 20 * time.Minute
+		}
+		kytScanInterval := viper.GetDuration("KYT_SCAN_INTERVAL")
+		if kytScanInterval <= 0 {
+			kytScanInterval = time.Minute
+		}
+
+		// Deposit pipeline: webhook handler (sync) + worker (async).
+		depRepo := deposit.NewRepository(c.DB)
+		c.DepositEventRepo = depRepo
+		c.DepositPipeline = deposit.NewService(depRepo, registry, c.AlertService.Send)
+		c.DepositPipeline.SetKYTDeps(client, kytEnabled, kytOrphanMaxRetry, kytTimeout)
+		amlFirstPollDelay := viper.GetDuration("AML_FIRST_POLL_DELAY")
+		if amlFirstPollDelay <= 0 || amlFirstPollDelay >= kytTimeout {
+			amlFirstPollDelay = 5 * time.Minute
+		}
+		c.DepositPipeline.SetAMLFirstPollDelay(amlFirstPollDelay)
+		webhookAllowedIPs := splitNonEmpty(viper.GetString("SAFEHERON_WEBHOOK_ALLOWED_IPS"))
+		// L-1: production must enforce IP allowlist — empty list opens the
+		// webhook handler to anyone who can reach the port (the SDK verify is
+		// the only remaining defence). Mirrors the K-16 KYT_ENABLED check.
+		if viper.GetString("APP_ENV") == "production" && len(webhookAllowedIPs) == 0 {
+			panic("SAFEHERON_WEBHOOK_ALLOWED_IPS must be set in production (L-1): " +
+				"comma-separated allowlist of Safeheron source IPs is required")
+		}
+		c.SafeheronWebhookHandler = handlers.NewSafeheronWebhookHandler(client, depRepo, webhookAllowedIPs)
+
+		workerInterval := viper.GetDuration("DEPOSIT_WORKER_INTERVAL")
+		if workerInterval <= 0 {
+			workerInterval = time.Second
+		}
+		amlPollInterval := viper.GetDuration("AML_POLL_INTERVAL")
+		if amlPollInterval <= 0 {
+			amlPollInterval = 60 * time.Second
+		}
+		c.DepositWorker = deposit.NewWorker(c.DepositPipeline, deposit.WorkerConfig{
+			Interval:        workerInterval,
+			KYTScanInterval: kytScanInterval,
+			AMLPollInterval: amlPollInterval,
+			PanicBackoff:    5 * time.Second,
+		})
+		go c.DepositWorker.Run(ctx)
+
+		log.Printf("Safeheron deposit pipeline enabled: worker interval=%s", workerInterval)
+		log.Printf("[KYT] enabled=%v scan_interval=%s timeout=%s orphan_max_retry=%d",
+			kytEnabled, kytScanInterval, kytTimeout, kytOrphanMaxRetry)
+	}
+}
+
+func splitNonEmpty(csv string) []string {
+	if csv == "" {
+		return nil
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func applyDefault(m map[string]int, key string, def int) {
+	if v, ok := m[key]; !ok || v <= 0 {
+		m[key] = def
 	}
 }
 
@@ -75,10 +254,21 @@ type Container struct {
 	IdempotencyRepository *postgres.IdempotencyRepository
 
 	// 外部 API 客户端
-	CoreAPIClient *coreapi.Client
+	CoreAPIClient   *coreapi.Client
+	SafeheronClient safeheron.SafeheronClient
 
 	// 仓储
 	Repository *repository.Repository
+
+	// Safeheron Phase 1 模块
+	WalletRegistry          *walletconfig.Registry
+	PoolManager             *pool.Manager
+	PoolReplenisher         *pool.Replenisher
+	DepositEventRepo        deposit.Repository
+	DepositPipeline         *deposit.Service
+	DepositWorker           *deposit.Worker
+	SafeheronWebhookHandler *handlers.SafeheronWebhookHandler
+	AlertService            *alert.AlertService
 
 	// 服务
 	AuthService       *services.AuthService
@@ -141,6 +331,19 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	c.WalletService = services.NewWalletService(c.Repository.Wallet, c.CoreAPIClient)
 	c.WealthService = services.NewWealthService(c.Repository.Wealth, c.Repository.AccountV2, c.Repository.Journal, c.Repository.DailyInterest)
 
+	// EmailService must be wired BEFORE the opts loop: WithSafeheronPool reads
+	// c.EmailService to build AlertService, and a nil *services.EmailService
+	// becomes a typed-nil alertEmailer interface — `emailSvc == nil` would
+	// evaluate false and the first alert would panic on nil-receiver method
+	// access. Pre-ship code-review Critical.
+	c.EmailService = services.NewEmailService(
+		viper.GetString("RESEND_API_KEY"),
+		viper.GetString("SENDER_EMAIL"),
+	)
+	// R2-I-3: never log the API key. enabled+fromEmail is enough operational signal.
+	log.Printf("[EmailService] Initialized enabled=%v fromEmail=%q",
+		c.EmailService.IsEnabled(), os.Getenv("SENDER_EMAIL"))
+
 	// 应用配置选项 (按顺序执行)
 	for _, opt := range opts {
 		opt(c)
@@ -157,34 +360,37 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	c.RateLimitMiddleware.AddEndpoint("/api/auth/login", 5, 60)
 	c.RateLimitMiddleware.AddEndpoint("/api/auth/refresh", 10, 60)
 
-	// 初始化邮件和激活服务 (使用 viper 读取环境变量以支持 .env 文件)
-	emailService := services.NewEmailService(
-		viper.GetString("RESEND_API_KEY"),
-		viper.GetString("SENDER_EMAIL"),
-	)
-	c.EmailService = emailService
-	
-	fmt.Printf("[EmailService] Initialized - enabled: %v, apiKey: '%s', fromEmail: '%s'\n", 
-		emailService.IsEnabled(), 
-		os.Getenv("RESEND_API_KEY"), 
-		os.Getenv("SENDER_EMAIL"))
-
 	dbRateLimiter := services.NewRateLimiter(db)
-	c.ActivationService = services.NewActivationService(db, dbRateLimiter, emailService, jwtSecret)
+	c.ActivationService = services.NewActivationService(db, dbRateLimiter, c.EmailService, jwtSecret)
 	c.ContactService = services.NewContactService(db)
 
 	return c
 }
 
 // Close 关闭容器中的资源
+//
+// 顺序：TokenBlacklist → SafeheronClient → DB。任一资源 Close 失败仅记录首个
+// 错误，后续资源仍会尝试关闭。v1.6 起 SafeheronClient.Close 是 no-op（PEM
+// 改读 secrets/ 真实文件，不再有进程托管的临时文件），保留调用是为了向后兼容
+// 接口契约。
 func (c *Container) Close() error {
+	var firstErr error
+
 	if c.TokenBlacklist != nil {
 		c.TokenBlacklist.Close()
 	}
-	if c.DB != nil {
-		return c.DB.Close()
+	if c.SafeheronClient != nil {
+		if err := c.SafeheronClient.Close(); err != nil {
+			firstErr = fmt.Errorf("safeheron client close: %w", err)
+		}
 	}
-	return nil
+	if c.DB != nil {
+		if err := c.DB.Close(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("db close: %w", err)
+		}
+	}
+
+	return firstErr
 }
 
 // Verify 验证容器中的所有依赖

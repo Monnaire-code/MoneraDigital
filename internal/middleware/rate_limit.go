@@ -4,7 +4,9 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -68,6 +70,11 @@ func (rl *RateLimiter) IsAllowed(key string) bool {
 
 // cleanupExpiredTimestamps 清理过期的时间戳
 func (rl *RateLimiter) cleanupExpiredTimestamps() {
+	defer func() {
+		if rv := recover(); rv != nil {
+			log.Printf("rate limiter cleanup panic recovered: %v\n%s", rv, debug.Stack())
+		}
+	}()
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 

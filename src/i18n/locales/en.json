@@ -337,7 +337,8 @@
     "add": "Add",
     "submit": "Submit",
     "copied": "Copied",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "error": "Unexpected error"
   },
   "addresses": {
     "title": "Address Management",
@@ -770,42 +771,64 @@
   "deposit": {
     "title": "Deposit",
     "description": "Deposit digital assets to your secure wallet.",
-    "selectAsset": "Select Asset",
-    "selectNetwork": "Select Network",
-    "address": "Deposit Address",
-    "copy": "Copy Address",
-    "copied": "Copied!",
-    "minDeposit": "Minimum deposit: 10 USDT",
-    "warning": "Ensure you are sending via {{network}} network. Sending to the wrong network may result in loss of funds.",
-    "testnetWarning": "This is a TESTNET address. DO NOT send real funds - this is for testing only. Real funds sent to testnet addresses will be lost.",
-    "history": "Deposit History",
     "status": {
       "PENDING": "Pending",
       "CONFIRMED": "Success",
-      "FAILED": "Failed"
+      "FAILED": "Failed",
+      "CHAIN_VERIFYING": "Verifying",
+      "CHAIN_VERIFIED": "Verified",
+      "CREDITED": "Completed",
+      "MANUAL_REVIEW": "Under review",
+      "KYT_PENDING": "Under compliance review"
     },
-    "noHistory": "No deposit history found.",
+    "coinsLoadError": "Unable to load available coins",
     "activate": "Activate Account",
     "activateDesc": "Please activate your wallet account first to get a deposit address.",
-    "comingSoon": {
-      "title": "Deposit Service Coming Soon",
-      "description": "Our deposit service is currently being prepared. Please contact us for deposit arrangements.",
-      "howToDeposit": "How to Deposit",
-      "step1": {
-        "title": "Contact Our Team",
-        "desc": "Reach out to us via email with your deposit requirements"
-      },
-      "step2": {
-        "title": "Receive Instructions",
-        "desc": "We will provide you with detailed deposit instructions"
-      },
-      "step3": {
-        "title": "Complete Deposit",
-        "desc": "Transfer funds to the designated address and confirm with us"
-      },
-      "contactUs": "Contact Us",
-      "contactDesc": "For deposit inquiries, please contact our operations team:",
-      "supportedCoins": "Supported Currencies"
+    "steps": {
+      "selectCoin": "Select coin",
+      "selectNetwork": "Select network",
+      "depositAddress": "Deposit address"
+    },
+    "coinSelector": {
+      "title": "Select a coin to deposit",
+      "empty": "No coins available for deposit."
+    },
+    "networkSelector": {
+      "title": "Select network",
+      "placeholder": "Choose a network",
+      "warning": "Ensure you send only {{symbol}} via the {{network}} network. Sending to the wrong network may result in loss of funds."
+    },
+    "addressCard": {
+      "copy": "Copy address",
+      "copied": "Address copied",
+      "copyFailed": "Copy failed",
+      "errorTitle": "Unable to load deposit address",
+      "retry": "Retry",
+      "qrAlt": "QR code for deposit address"
+    },
+    "details": {
+      "minDeposit": "Minimum deposit",
+      "confirmations": "Credited after",
+      "confirmationsValue": "{{count}} network confirmations",
+      "arrivalTime": "Estimated arrival",
+      "arrivalTimeValue": "≈ {{minutes}} min",
+      "contractAddress": "Contract ends in",
+      "viewContract": "View contract"
+    },
+    "recent": {
+      "title": "Recent deposits",
+      "empty": "No recent deposits",
+      "error": "Failed to load deposit records",
+      "retry": "Retry",
+      "viewTx": "View transaction",
+      "coin": "Coin",
+      "amount": "Amount",
+      "time": "Time",
+      "network": "Network",
+      "address": "Address",
+      "txid": "TxID",
+      "status": "Status",
+      "viewMore": "View more"
     }
   },
   "wallet": {

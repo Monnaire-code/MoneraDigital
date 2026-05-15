@@ -3,7 +3,9 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	"monera-digital/internal/binance"
@@ -57,59 +59,67 @@ func (s *InterestScheduler) Start() {
 	logger.Info("[InterestScheduler] Started - running daily at 00:00:05 UTC")
 
 	for {
-		ctx := context.Background()
-		now := time.Now().In(loc)
-		logger.Info("[InterestScheduler] Execution started", "timestamp", now.Format("2006-01-02 15:04:05"))
-
-		// Step 0: Activate pending orders (status 0 -> 1)
-		activatedCount, activateErr := s.ActivatePendingOrders(ctx)
-
-		// Step 1: Calculate daily interest
-		ordersProcessed, interestAccrued, err := s.CalculateDailyInterest(ctx, nil)
-
-		// Step 2: Settle expired orders
-		settledCount, settleErr := s.SettleExpiredOrders(ctx)
-
-		success := err == nil && settleErr == nil && activateErr == nil
-		errorMsg := ""
-		if err != nil {
-			errorMsg = err.Error()
-		}
-		if settleErr != nil {
-			if errorMsg != "" {
-				errorMsg += "; "
-			}
-			errorMsg += fmt.Sprintf("settle error: %v", settleErr)
-		}
-		if activateErr != nil {
-			if errorMsg != "" {
-				errorMsg += "; "
-			}
-			errorMsg += fmt.Sprintf("activate error: %v", activateErr)
-		}
-
-		totalInterestFloat, _ := strconv.ParseFloat(interestAccrued, 64)
-		s.metrics.RecordInterestRun(success, ordersProcessed, totalInterestFloat, errorMsg)
-
-		if !success {
-			logger.Error("[InterestScheduler] Execution failed", "error", errorMsg)
-		} else {
-			logger.Info("[InterestScheduler] Execution completed",
-				"orders_activated", activatedCount,
-				"orders_processed", ordersProcessed,
-				"interest_accrued", interestAccrued,
-				"orders_settled", settledCount)
-		}
-
-		// Calculate wait time until next run at UTC 00:00:05
-		nextRun := time.Now().In(loc)
-		nextRun = time.Date(nextRun.Year(), nextRun.Month(), nextRun.Day(), 0, 0, 5, 0, loc)
-		nextRun = nextRun.AddDate(0, 0, 1)
-		waitDuration := nextRun.Sub(time.Now().In(loc))
-
-		logger.Debug("[InterestScheduler] Waiting until next run", "next_run", nextRun.Format("2006-01-02 15:04:05"))
-		time.Sleep(waitDuration)
+		s.runOnce(loc)
 	}
+}
+
+// runOnce 执行一次利息计算周期，recover 兜底确保 panic 不会终止调度器循环。
+func (s *InterestScheduler) runOnce(loc *time.Location) {
+	defer func() {
+		if rv := recover(); rv != nil {
+			logger.Error("[InterestScheduler] panic recovered — will retry next cycle",
+				"panic", fmt.Sprintf("%v", rv),
+				"stack", string(debug.Stack()))
+		}
+	}()
+
+	ctx := context.Background()
+	now := time.Now().In(loc)
+	logger.Info("[InterestScheduler] Execution started", "timestamp", now.Format("2006-01-02 15:04:05"))
+
+	// Step 0: Activate pending orders (status 0 -> 1)
+	activatedCount, activateErr := s.ActivatePendingOrders(ctx)
+
+	// Step 1: Calculate daily interest
+	ordersProcessed, interestAccrued, err := s.CalculateDailyInterest(ctx, nil)
+
+	// Step 2: Settle expired orders
+	settledCount, settleErr := s.SettleExpiredOrders(ctx)
+
+	var errs []string
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	if settleErr != nil {
+		errs = append(errs, fmt.Sprintf("settle error: %v", settleErr))
+	}
+	if activateErr != nil {
+		errs = append(errs, fmt.Sprintf("activate error: %v", activateErr))
+	}
+	success := len(errs) == 0
+	errorMsg := strings.Join(errs, "; ")
+
+	totalInterestFloat, _ := strconv.ParseFloat(interestAccrued, 64)
+	s.metrics.RecordInterestRun(success, ordersProcessed, totalInterestFloat, errorMsg)
+
+	if !success {
+		logger.Error("[InterestScheduler] Execution failed", "error", errorMsg)
+	} else {
+		logger.Info("[InterestScheduler] Execution completed",
+			"orders_activated", activatedCount,
+			"orders_processed", ordersProcessed,
+			"interest_accrued", interestAccrued,
+			"orders_settled", settledCount)
+	}
+
+	// Calculate wait time until next run at UTC 00:00:05
+	nextRun := time.Now().In(loc)
+	nextRun = time.Date(nextRun.Year(), nextRun.Month(), nextRun.Day(), 0, 0, 5, 0, loc)
+	nextRun = nextRun.AddDate(0, 0, 1)
+	waitDuration := nextRun.Sub(time.Now().In(loc))
+
+	logger.Debug("[InterestScheduler] Waiting until next run", "next_run", nextRun.Format("2006-01-02 15:04:05"))
+	time.Sleep(waitDuration)
 }
 
 func (s *InterestScheduler) CalculateDailyInterest(ctx context.Context, dateOverride *time.Time) (int, string, error) {

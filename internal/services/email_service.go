@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"monera-digital/internal/services/alertrender"
 )
 
 type EmailService struct {
@@ -30,12 +32,29 @@ func (s *EmailService) IsEnabled() bool {
 	return s.enabled
 }
 
+// SendAlertEmail sends a Safeheron Phase 1 alert with an independent template
+// (subject + plain-text body). Distinct from SendActivationEmail so the alert
+// title isn't dropped (T7-I-6).
+func (s *EmailService) SendAlertEmail(ctx context.Context, toEmail, subject, body string) error {
+	if !s.enabled {
+		fmt.Printf("[EmailService] Email disabled, would send alert subject=%q to %s\n", subject, toEmail)
+		return nil
+	}
+	if subject == "" {
+		subject = "【Monera Digital】系统告警"
+	}
+	htmlBody := alertrender.BuildAlertHTML(subject, body) +
+		fmt.Sprintf(`<p style="color:#888;font-size:12px">发送时间：%s</p>`,
+			time.Now().Format("2006-01-02 15:04:05"))
+	return s.sendEmail(ctx, toEmail, subject, body, htmlBody)
+}
+
 func (s *EmailService) SendActivationEmail(ctx context.Context, toEmail, code string) error {
 	if !s.enabled {
 		fmt.Printf("[EmailService] Email disabled, would send activation code %s to %s\n", code, toEmail)
 		return nil
 	}
-	
+
 	fmt.Printf("[EmailService] Sending activation code %s to %s via Resend API\n", code, toEmail)
 
 	subject := "【Monera Digital】账号激活验证码"

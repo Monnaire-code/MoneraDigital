@@ -11,14 +11,20 @@ import (
 	"os"
 	"strconv"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"monera-digital/internal/config"
 	"monera-digital/internal/logger"
 	"monera-digital/internal/repository"
 	"monera-digital/internal/repository/postgres"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
+	}
+
 	fmt.Println("==============================================")
 	fmt.Println("   Monera Digital 利息调度器 - 一次性执行      ")
 	fmt.Println("==============================================")
