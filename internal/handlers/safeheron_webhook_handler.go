@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"io"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -34,16 +36,27 @@ type WebhookEventRecorder interface {
 	InsertEventOrSkip(ctx context.Context, evt *deposit.Event) (inserted bool, err error)
 }
 
+// SweepUpdater updates sweep_transactions status from outgoing webhook events.
+type SweepUpdater interface {
+	UpdateSweepStatus(ctx context.Context, txKey, status, subStatus, txHash string, completedAt *time.Time) error
+}
+
 // SafeheronWebhookHandler is the sync side of the deposit pipeline.
 type SafeheronWebhookHandler struct {
-	Verifier   WebhookVerifier
-	Recorder   WebhookEventRecorder
-	AllowedIPs []string
+	Verifier     WebhookVerifier
+	Recorder     WebhookEventRecorder
+	SweepUpdater SweepUpdater
+	AllowedIPs   []string
 }
 
 // NewSafeheronWebhookHandler wires the public webhook receiver.
 func NewSafeheronWebhookHandler(v WebhookVerifier, r WebhookEventRecorder, allowedIPs []string) *SafeheronWebhookHandler {
 	return &SafeheronWebhookHandler{Verifier: v, Recorder: r, AllowedIPs: allowedIPs}
+}
+
+// SetSweepUpdater injects the sweep_transactions updater (optional, added by WithCosignerCallback).
+func (h *SafeheronWebhookHandler) SetSweepUpdater(u SweepUpdater) {
+	h.SweepUpdater = u
 }
 
 // Receive handles POST /api/webhooks/safeheron. It:
@@ -165,6 +178,32 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 	} else {
 		log.Printf("[webhook] STORED ip=%s eventType=%s txKey=%s eventId=%s",
 			clientIP, evt.EventType, evt.EventDetail.TxKey, eventID)
+	}
+
+	// 出向交易（归集）状态更新 — 竞态待验证 spec §5.2
+	if h.SweepUpdater != nil && evt.EventDetail.TransactionDirection == "SEND" {
+		var completedAt *time.Time
+		if evt.EventDetail.TransactionStatus == "COMPLETED" || evt.EventDetail.TransactionStatus == "FAILED" {
+			now := time.Now()
+			completedAt = &now
+		}
+		err := h.SweepUpdater.UpdateSweepStatus(
+			c.Request.Context(),
+			evt.EventDetail.TxKey,
+			evt.EventDetail.TransactionStatus,
+			evt.EventDetail.TransactionSubStatus,
+			evt.EventDetail.TxHash,
+			completedAt,
+		)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				log.Printf("[webhook] sweep txKey=%s not updated (not found or already terminal), ignoring", evt.EventDetail.TxKey)
+			} else {
+				log.Printf("[webhook] ERROR updating sweep txKey=%s: %v", evt.EventDetail.TxKey, err)
+			}
+		} else {
+			log.Printf("[webhook] sweep updated txKey=%s status=%s", evt.EventDetail.TxKey, evt.EventDetail.TransactionStatus)
+		}
 	}
 
 	c.Header("Content-Type", "application/json")

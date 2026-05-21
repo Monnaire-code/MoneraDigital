@@ -98,7 +98,8 @@ func main() {
 	cont := container.NewContainer(database, cfg.JWTSecret,
 		container.WithEncryption(cfg.EncryptionKey),
 		container.WithRedisCache(redisCache),
-		container.WithSafeheronPool(bgCtx))
+		container.WithSafeheronPool(bgCtx),
+		container.WithCosignerCallback())
 
 	// Verify container
 	if err := cont.Verify(); err != nil {

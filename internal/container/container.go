@@ -255,6 +255,11 @@ func WithCosignerCallback() ContainerOption {
 		}
 
 		c.CosignerCallbackHandler = handlers.NewCosignerCallbackHandler(cosignerClient, svc, cosignerIPs, alertFn)
+
+		if c.SafeheronWebhookHandler != nil {
+			c.SafeheronWebhookHandler.SetSweepUpdater(repo)
+		}
+
 		log.Printf("Cosigner callback enabled: allowedTxTypes=%v sweepTargets=%d ips=%d",
 			allowedTxTypes, len(sweepTargets), len(cosignerIPs))
 	}
