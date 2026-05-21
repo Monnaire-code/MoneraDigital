@@ -94,6 +94,11 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 				webhooks.POST("/safeheron", cont.SafeheronWebhookHandler.Receive)
 			}
 		}
+
+		// Cosigner callback (public, no JWT)
+		if cont.CosignerCallbackHandler != nil {
+			public.POST("/cosigner/callback", cont.CosignerCallbackHandler.Handle)
+		}
 	}
 
 	// ==================== PROTECTED ROUTES (JWT Auth Required) ====================
