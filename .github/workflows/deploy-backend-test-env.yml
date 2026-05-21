@@ -2,7 +2,7 @@ name: Deploy Backend (Test Env)
 
 on:
   push:
-    branches: [test]
+    branches: [main]
 
 permissions:
   contents: read
@@ -30,14 +30,11 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -ldflags="-s -w" -o monera-server ./cmd/server/main.go
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -ldflags="-s -w" -o monera-migrate ./cmd/migrate/main.go
 
       - name: Prepare Deployment Package
         run: |
           mkdir -p deploy
           cp monera-server deploy/
-          cp monera-migrate deploy/
           cp scripts/deploy-remote.sh deploy/
           tar -czf monera-digital.tar.gz -C deploy .
 
