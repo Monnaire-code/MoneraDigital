@@ -317,16 +317,20 @@ func TestUpdateSweepStatus_Success(t *testing.T) {
 	}
 }
 
-func TestUpdateSweepStatus_NotFound(t *testing.T) {
+func TestUpdateSweepStatus_AlreadyTerminal(t *testing.T) {
 	repo, mock := newMock(t)
 
 	mock.ExpectExec(`UPDATE sweep_transactions`).
-		WithArgs("unknown-tx", "COMPLETED", nil, "0xhash", (*time.Time)(nil)).
+		WithArgs("terminal-tx", "COMPLETED", nil, "0xhash", (*time.Time)(nil)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	err := repo.UpdateSweepStatus(context.Background(), "unknown-tx", "COMPLETED", "", "0xhash", nil)
+	mock.ExpectQuery(`SELECT EXISTS`).
+		WithArgs("terminal-tx").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	err := repo.UpdateSweepStatus(context.Background(), "terminal-tx", "COMPLETED", "", "0xhash", nil)
 	if err != sql.ErrNoRows {
-		t.Fatalf("expected sql.ErrNoRows, got %v", err)
+		t.Fatalf("expected sql.ErrNoRows for already-terminal tx, got %v", err)
 	}
 }
 
@@ -340,6 +344,24 @@ func TestUpdateSweepStatus_WithSubStatus(t *testing.T) {
 	err := repo.UpdateSweepStatus(context.Background(), "tx-1", "FAILED", "INSUFFICIENT_BALANCE", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// M-4: tx_key not in sweep_transactions at all → ErrSweepNotFound (not sql.ErrNoRows)
+func TestUpdateSweepStatus_TxKeyNotFound_Distinct(t *testing.T) {
+	repo, mock := newMock(t)
+
+	mock.ExpectExec(`UPDATE sweep_transactions`).
+		WithArgs("nonexistent-tx", "COMPLETED", nil, "0xhash", (*time.Time)(nil)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectQuery(`SELECT EXISTS`).
+		WithArgs("nonexistent-tx").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	err := repo.UpdateSweepStatus(context.Background(), "nonexistent-tx", "COMPLETED", "", "0xhash", nil)
+	if !errors.Is(err, ErrSweepNotFound) {
+		t.Fatalf("expected ErrSweepNotFound for nonexistent tx_key, got %v", err)
 	}
 }
 

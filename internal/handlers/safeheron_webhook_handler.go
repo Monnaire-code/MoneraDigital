@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"monera-digital/internal/approval"
 	"monera-digital/internal/safeheron"
 	"monera-digital/internal/wallet/deposit"
 )
@@ -41,12 +42,16 @@ type SweepUpdater interface {
 	UpdateSweepStatus(ctx context.Context, txKey, status, subStatus, txHash string, completedAt *time.Time) error
 }
 
+// WebhookAlertFn is called to send operational alerts from the webhook handler.
+type WebhookAlertFn func(level, title string, fields map[string]string)
+
 // SafeheronWebhookHandler is the sync side of the deposit pipeline.
 type SafeheronWebhookHandler struct {
 	Verifier     WebhookVerifier
 	Recorder     WebhookEventRecorder
 	SweepUpdater SweepUpdater
 	AllowedIPs   []string
+	AlertFn      WebhookAlertFn
 }
 
 // NewSafeheronWebhookHandler wires the public webhook receiver.
@@ -57,6 +62,11 @@ func NewSafeheronWebhookHandler(v WebhookVerifier, r WebhookEventRecorder, allow
 // SetSweepUpdater injects the sweep_transactions updater (optional, added by WithCosignerCallback).
 func (h *SafeheronWebhookHandler) SetSweepUpdater(u SweepUpdater) {
 	h.SweepUpdater = u
+}
+
+// SetAlertFn injects the operational alert function (optional).
+func (h *SafeheronWebhookHandler) SetAlertFn(fn WebhookAlertFn) {
+	h.AlertFn = fn
 }
 
 // Receive handles POST /api/webhooks/safeheron. It:
@@ -196,10 +206,19 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 			completedAt,
 		)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				log.Printf("[webhook] sweep txKey=%s not updated (not found or already terminal), ignoring", evt.EventDetail.TxKey)
+			if errors.Is(err, approval.ErrSweepNotFound) {
+				log.Printf("[webhook] WARN: sweep txKey=%s not in sweep_transactions (unexpected — cosigner callback may not have arrived yet)", evt.EventDetail.TxKey)
+			} else if errors.Is(err, sql.ErrNoRows) {
+				log.Printf("[webhook] sweep txKey=%s already terminal, ignoring", evt.EventDetail.TxKey)
 			} else {
 				log.Printf("[webhook] ERROR updating sweep txKey=%s: %v", evt.EventDetail.TxKey, err)
+				if h.AlertFn != nil {
+					h.AlertFn("ERROR", "归集状态更新失败", map[string]string{
+						"txKey":  evt.EventDetail.TxKey,
+						"status": evt.EventDetail.TransactionStatus,
+						"error":  err.Error(),
+					})
+				}
 			}
 		} else {
 			log.Printf("[webhook] sweep updated txKey=%s status=%s", evt.EventDetail.TxKey, evt.EventDetail.TransactionStatus)

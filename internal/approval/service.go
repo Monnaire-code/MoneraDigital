@@ -35,13 +35,23 @@ func (s *ApprovalService) Evaluate(ctx context.Context, biz *safeheron.CoSignerB
 
 	chainSymbol := "UNKNOWN"
 	var detail safeheron.TransactionApproval
-	hasDetail := biz.Type == "TRANSACTION" && json.Unmarshal(biz.Detail, &detail) == nil
+	hasDetail := false
+	if biz.Type == "TRANSACTION" {
+		if err := json.Unmarshal(biz.Detail, &detail); err != nil {
+			log.Printf("[approval] WARN: failed to parse TRANSACTION detail approvalId=%s: %v", biz.ApprovalId, err)
+		} else {
+			hasDetail = true
+		}
+	}
 
 	if hasDetail {
 		chainSymbol = s.txApprover.ResolveChainSymbol(detail.CoinKey)
 	}
 
-	rawBytes, _ := json.Marshal(biz)
+	rawBytes, err := json.Marshal(biz)
+	if err != nil {
+		log.Printf("[approval] ERROR: failed to marshal biz for audit approvalId=%s: %v", biz.ApprovalId, err)
+	}
 	rec := &ApprovalRecord{
 		ApprovalID:   biz.ApprovalId,
 		CallbackType: biz.Type,
@@ -140,6 +150,7 @@ func (s *ApprovalService) handleIdempotent(ctx context.Context, approvalID strin
 
 func (s *ApprovalService) sendRejectAlert(biz *safeheron.CoSignerBizContentV3, decision *ApprovalDecision, rec *ApprovalRecord, sourceAddress string) {
 	if s.alertFn == nil {
+		log.Printf("[approval] WARN: alertFn is nil, REJECT alert suppressed approvalId=%s reason=%s", biz.ApprovalId, decision.Reason)
 		return
 	}
 	fields := map[string]string{

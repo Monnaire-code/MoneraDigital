@@ -624,6 +624,45 @@ func TestWebhookSweep_SendDBError_StillAcks(t *testing.T) {
 	}
 }
 
+// M-1: Sweep update DB error should trigger an alert
+func TestWebhookSweep_SendDBError_SendsAlert(t *testing.T) {
+	var alertCalled bool
+	var alertTitle string
+	var alertFields map[string]string
+
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, _ *time.Time) error {
+		return errors.New("connection refused")
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-alert", "COMPLETED", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+	h.SetAlertFn(func(level, title string, fields map[string]string) {
+		alertCalled = true
+		alertTitle = title
+		alertFields = fields
+	})
+
+	w := runWebhook(h, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 even on sweep DB error, got %d", w.Code)
+	}
+	if !alertCalled {
+		t.Fatal("AlertFn should be called when sweep update fails with DB error")
+	}
+	if alertFields["txKey"] != "tx-alert" {
+		t.Errorf("alert txKey = %q, want tx-alert", alertFields["txKey"])
+	}
+	if alertFields["error"] != "connection refused" {
+		t.Errorf("alert error = %q, want 'connection refused'", alertFields["error"])
+	}
+	_ = alertTitle
+}
+
 func TestWebhookSweep_ReceiveDirection_SkipsSweep(t *testing.T) {
 	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, _ *time.Time) error {
 		t.Fatal("SweepUpdater must NOT be called for RECEIVE direction")

@@ -83,6 +83,12 @@ func (a *TransactionApprover) evaluateAutoFuel(detail *safeheron.TransactionAppr
 			Reason: fmt.Sprintf("AUTO_FUEL destination must be VAULT_ACCOUNT, got %q", detail.DestinationAccountType),
 		}, nil
 	}
+	if !a.isTargetAccountAllowed(detail.DestinationAccountKey) {
+		return &ApprovalDecision{
+			Action: "REJECT",
+			Reason: fmt.Sprintf("AUTO_FUEL destination account %q not in whitelist", detail.DestinationAccountKey),
+		}, nil
+	}
 	// TODO: 金额校验待测试环境验证真实数据后补充 — spec §4.3
 	return &ApprovalDecision{Action: "APPROVE", Reason: "AUTO_FUEL approved"}, nil
 }
@@ -92,6 +98,12 @@ func (a *TransactionApprover) evaluateUTXOCollection(detail *safeheron.Transacti
 		return &ApprovalDecision{
 			Action: "REJECT",
 			Reason: fmt.Sprintf("UTXO_COLLECTION destination must be VAULT_ACCOUNT, got %q", detail.DestinationAccountType),
+		}, nil
+	}
+	if !a.isTargetAccountAllowed(detail.DestinationAccountKey) {
+		return &ApprovalDecision{
+			Action: "REJECT",
+			Reason: fmt.Sprintf("UTXO_COLLECTION destination account %q not in whitelist", detail.DestinationAccountKey),
 		}, nil
 	}
 	return &ApprovalDecision{Action: "APPROVE", Reason: "UTXO_COLLECTION approved"}, nil

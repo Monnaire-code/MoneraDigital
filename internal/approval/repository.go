@@ -12,6 +12,7 @@ var (
 	ErrDuplicateApproval = errors.New("approval: duplicate approval_id")
 	ErrApprovalNotFound  = errors.New("approval: record not found")
 	ErrDuplicateSweepTx  = errors.New("approval: duplicate sweep tx_key")
+	ErrSweepNotFound     = errors.New("approval: sweep tx_key not found")
 )
 
 type Repository interface {
@@ -132,6 +133,16 @@ func (r *DBRepository) UpdateSweepStatus(ctx context.Context, txKey, status, sub
 		return fmt.Errorf("update sweep status rows affected: %w", err)
 	}
 	if n == 0 {
+		var exists bool
+		if qErr := r.db.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM sweep_transactions WHERE tx_key=$1)`,
+			txKey,
+		).Scan(&exists); qErr != nil {
+			return fmt.Errorf("check sweep existence: %w", qErr)
+		}
+		if !exists {
+			return ErrSweepNotFound
+		}
 		return sql.ErrNoRows
 	}
 	return nil

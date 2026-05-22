@@ -262,6 +262,11 @@ func WithCosignerCallback() ContainerOption {
 
 		if c.SafeheronWebhookHandler != nil {
 			c.SafeheronWebhookHandler.SetSweepUpdater(repo)
+			if alertFn != nil {
+				c.SafeheronWebhookHandler.SetAlertFn(func(level, title string, fields map[string]string) {
+					alertFn(level, title, fields)
+				})
+			}
 		}
 
 		log.Printf("Cosigner callback enabled: allowedTxTypes=%v sweepTargets=%d ips=%d",
@@ -318,6 +323,9 @@ type Container struct {
 	RateLimiter    *middleware.RateLimiter
 	RedisCache     *cache.RedisCache
 
+	// Safeheron 端点独立限速（webhook + cosigner callback）
+	SafeheronRateLimiter *middleware.RateLimiter
+
 	// 幂等服务
 	IdempotencyService    *services.IdempotencyService
 	IdempotencyRepository *postgres.IdempotencyRepository
@@ -364,7 +372,8 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 
 	// 初始化缓存
 	c.TokenBlacklist = cache.NewTokenBlacklist()
-	c.RateLimiter = middleware.NewRateLimiter(5, 60)
+	c.RateLimiter = middleware.NewRateLimiter(10, time.Minute)
+	c.SafeheronRateLimiter = middleware.NewRateLimiter(60, time.Minute)
 
 	// 初始化 Core API 客户端
 	coreAPIURL := os.Getenv("MONNAIRE_CORE_API_URL")
@@ -426,9 +435,9 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 
 	// 初始化中间件
 	c.RateLimitMiddleware = middleware.NewPerEndpointRateLimiter()
-	c.RateLimitMiddleware.AddEndpoint("/api/auth/register", 5, 60)
-	c.RateLimitMiddleware.AddEndpoint("/api/auth/login", 5, 60)
-	c.RateLimitMiddleware.AddEndpoint("/api/auth/refresh", 10, 60)
+	c.RateLimitMiddleware.AddEndpoint("/api/auth/register", 5, time.Minute)
+	c.RateLimitMiddleware.AddEndpoint("/api/auth/login", 5, time.Minute)
+	c.RateLimitMiddleware.AddEndpoint("/api/auth/refresh", 10, time.Minute)
 
 	dbRateLimiter := services.NewRateLimiter(db)
 	c.ActivationService = services.NewActivationService(db, dbRateLimiter, c.EmailService, jwtSecret)

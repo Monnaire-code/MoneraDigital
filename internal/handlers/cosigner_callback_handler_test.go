@@ -294,6 +294,39 @@ func TestCosignerCallback_ServiceError(t *testing.T) {
 	}
 }
 
+// M-2: Evaluate error should trigger an alert
+func TestCosignerCallback_EvaluateError_SendsAlert(t *testing.T) {
+	var capturedLevel, capturedTitle string
+	var capturedFields map[string]string
+	h := &CosignerCallbackHandler{
+		Parser: &stubParser{parseResult: &safeheron.CoSignerBizContentV3{
+			ApprovalId: "ap-err", Type: "TRANSACTION",
+		}},
+		Evaluator: &stubEvaluator{err: errors.New("db down")},
+		AlertFn: func(level, title string, fields map[string]string) {
+			capturedLevel = level
+			capturedTitle = title
+			capturedFields = fields
+		},
+	}
+	r := cosignerRoute(h)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, cosignerReq(validBody()))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", w.Code)
+	}
+	if capturedLevel != "ERROR" {
+		t.Errorf("alert level = %q, want ERROR", capturedLevel)
+	}
+	if capturedFields["approvalId"] != "ap-err" {
+		t.Errorf("alert approvalId = %q, want ap-err", capturedFields["approvalId"])
+	}
+	if capturedFields["error"] != "db down" {
+		t.Errorf("alert error = %q, want 'db down'", capturedFields["error"])
+	}
+	_ = capturedTitle
+}
+
 // ---------------------------------------------------------------------------
 // 500 — build response error
 // ---------------------------------------------------------------------------

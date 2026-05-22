@@ -110,7 +110,7 @@ func TestAutoSweep_RejectEmptyWhitelist(t *testing.T) {
 
 func TestAutoFuel_Approve(t *testing.T) {
 	a := NewTransactionApprover(newTestConfig(), newTestRegistry())
-	biz := makeBiz("AUTO_FUEL", "VAULT_ACCOUNT", "any-acct")
+	biz := makeBiz("AUTO_FUEL", "VAULT_ACCOUNT", "acct-main")
 
 	dec, err := a.Evaluate(context.Background(), biz)
 	if err != nil {
@@ -118,6 +118,28 @@ func TestAutoFuel_Approve(t *testing.T) {
 	}
 	if dec.Action != "APPROVE" {
 		t.Errorf("action = %q, want APPROVE", dec.Action)
+	}
+}
+
+func TestAutoFuel_RejectNotInWhitelist(t *testing.T) {
+	a := NewTransactionApprover(newTestConfig(), newTestRegistry())
+	biz := makeBiz("AUTO_FUEL", "VAULT_ACCOUNT", "unknown-acct")
+
+	dec, _ := a.Evaluate(context.Background(), biz)
+	if dec.Action != "REJECT" {
+		t.Errorf("action = %q, want REJECT for non-whitelisted account", dec.Action)
+	}
+}
+
+func TestAutoFuel_RejectEmptyWhitelist(t *testing.T) {
+	cfg := newTestConfig()
+	cfg.SweepTargetAccounts = nil
+	a := NewTransactionApprover(cfg, newTestRegistry())
+	biz := makeBiz("AUTO_FUEL", "VAULT_ACCOUNT", "acct-main")
+
+	dec, _ := a.Evaluate(context.Background(), biz)
+	if dec.Action != "REJECT" {
+		t.Errorf("action = %q, want REJECT for empty whitelist", dec.Action)
 	}
 }
 
@@ -137,7 +159,7 @@ func TestAutoFuel_RejectNotVault(t *testing.T) {
 
 func TestUTXOCollection_Approve(t *testing.T) {
 	a := NewTransactionApprover(newTestConfig(), newTestRegistry())
-	biz := makeBiz("UTXO_COLLECTION", "VAULT_ACCOUNT", "any-acct")
+	biz := makeBiz("UTXO_COLLECTION", "VAULT_ACCOUNT", "acct-main")
 
 	dec, err := a.Evaluate(context.Background(), biz)
 	if err != nil {
@@ -145,6 +167,28 @@ func TestUTXOCollection_Approve(t *testing.T) {
 	}
 	if dec.Action != "APPROVE" {
 		t.Errorf("action = %q, want APPROVE", dec.Action)
+	}
+}
+
+func TestUTXOCollection_RejectNotInWhitelist(t *testing.T) {
+	a := NewTransactionApprover(newTestConfig(), newTestRegistry())
+	biz := makeBiz("UTXO_COLLECTION", "VAULT_ACCOUNT", "unknown-acct")
+
+	dec, _ := a.Evaluate(context.Background(), biz)
+	if dec.Action != "REJECT" {
+		t.Errorf("action = %q, want REJECT for non-whitelisted account", dec.Action)
+	}
+}
+
+func TestUTXOCollection_RejectEmptyWhitelist(t *testing.T) {
+	cfg := newTestConfig()
+	cfg.SweepTargetAccounts = nil
+	a := NewTransactionApprover(cfg, newTestRegistry())
+	biz := makeBiz("UTXO_COLLECTION", "VAULT_ACCOUNT", "acct-main")
+
+	dec, _ := a.Evaluate(context.Background(), biz)
+	if dec.Action != "REJECT" {
+		t.Errorf("action = %q, want REJECT for empty whitelist", dec.Action)
 	}
 }
 

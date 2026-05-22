@@ -104,6 +104,13 @@ func (h *CosignerCallbackHandler) Handle(c *gin.Context) {
 	decision, err := h.Evaluator.Evaluate(ctx, biz)
 	if err != nil {
 		log.Printf("[cosigner] ERROR: evaluate failed approvalId=%s: %v", biz.ApprovalId, err)
+		if h.AlertFn != nil {
+			h.AlertFn("ERROR", "审批回调评估失败", map[string]string{
+				"approvalId": biz.ApprovalId,
+				"type":       biz.Type,
+				"error":      err.Error(),
+			})
+		}
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}

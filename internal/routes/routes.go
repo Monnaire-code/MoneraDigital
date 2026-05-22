@@ -13,10 +13,9 @@ import (
 
 // SetupRoutes configures all API routes with middleware
 func SetupRoutes(router *gin.Engine, cont *container.Container) {
-	// Add global middleware
+	// Add global middleware (rate limiting is per-group, not global)
 	router.Use(middleware.RecoveryHandler())
 	router.Use(middleware.ErrorHandler())
-	router.Use(middleware.RateLimitMiddleware(cont.RateLimiter))
 
 	// Initialize Swagger documentation
 	docs.NewSwagger()
@@ -68,8 +67,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			c.JSON(200, gin.H{"status": "ok"})
 		})
 
-		// Authentication routes
+		// Authentication routes (10/min per IP)
 		auth := public.Group("/auth")
+		auth.Use(middleware.RateLimitMiddleware(cont.RateLimiter))
 		{
 			auth.POST("/register", h.Register)
 			auth.POST("/login", h.Login)
@@ -86,8 +86,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			auth.POST("/verify-activation", activationHandler.VerifyActivation)
 		}
 
-		// Webhook routes (public)
+		// Webhook routes (public, 60/min per IP)
 		webhooks := public.Group("/webhooks")
+		webhooks.Use(middleware.RateLimitMiddleware(cont.SafeheronRateLimiter))
 		{
 			webhooks.POST("/core/deposit", h.HandleDepositWebhook)
 			if cont.SafeheronWebhookHandler != nil {
@@ -95,15 +96,18 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			}
 		}
 
-		// Cosigner callback (public, no JWT)
+		// Cosigner callback (public, no JWT, 60/min per IP)
 		if cont.CosignerCallbackHandler != nil {
-			public.POST("/cosigner/callback", cont.CosignerCallbackHandler.Handle)
+			cosigner := public.Group("/cosigner")
+			cosigner.Use(middleware.RateLimitMiddleware(cont.SafeheronRateLimiter))
+			cosigner.POST("/callback", cont.CosignerCallbackHandler.Handle)
 		}
 	}
 
-	// ==================== PROTECTED ROUTES (JWT Auth Required) ====================
+	// ==================== PROTECTED ROUTES (JWT Auth Required, 10/min per IP) ====================
 	protected := api.Group("")
 	protected.Use(middleware.AuthMiddleware(cont.JWTSecret, cont.Repository.User))
+	protected.Use(middleware.RateLimitMiddleware(cont.RateLimiter))
 	{
 		// Auth routes
 		protectedAuth := protected.Group("/auth")
