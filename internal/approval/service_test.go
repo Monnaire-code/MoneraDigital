@@ -354,6 +354,160 @@ func TestServiceEvaluate_CallbackTest_NilDetail(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TRANSACTION APPROVE with non-empty TransactionStatus in detail
+// ---------------------------------------------------------------------------
+
+func TestServiceEvaluate_TransactionApprove_PreservesDetailStatus(t *testing.T) {
+	repo := &mockRepo{}
+	txA := NewTransactionApprover(newTestConfig(), newTestRegistry())
+	svc := NewApprovalService(repo, txA, nil)
+
+	detail := safeheron.TransactionApproval{
+		TxKey:                  "tx-status",
+		CoinKey:                "ETH",
+		TxAmount:               "1.5",
+		TransactionType:        "AUTO_SWEEP",
+		TransactionStatus:      "SIGNING",
+		DestinationAccountKey:  "acct-main",
+		DestinationAccountType: "VAULT_ACCOUNT",
+		SourceAddress:          "0xsrc",
+	}
+	data, _ := json.Marshal(detail)
+	biz := &safeheron.CoSignerBizContentV3{
+		ApprovalId: "ap-status",
+		Type:       "TRANSACTION",
+		Detail:     data,
+	}
+
+	dec, err := svc.Evaluate(context.Background(), biz)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != "APPROVE" {
+		t.Errorf("action = %q, want APPROVE", dec.Action)
+	}
+	if repo.insertedSweep == nil {
+		t.Fatal("sweep should be inserted")
+	}
+	if repo.insertedSweep.TxStatus != "SIGNING" {
+		t.Errorf("sweep TxStatus = %q, want SIGNING (preserved from detail)", repo.insertedSweep.TxStatus)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Non-TRANSACTION REJECT should have empty sourceAddress in alert
+// ---------------------------------------------------------------------------
+
+func TestServiceEvaluate_NonTransactionReject_NoSourceAddress(t *testing.T) {
+	repo := &mockRepo{}
+	alerts := &alertCapture{}
+	txA := NewTransactionApprover(newTestConfig(), newTestRegistry())
+	svc := NewApprovalService(repo, txA, alerts.fn())
+
+	biz := &safeheron.CoSignerBizContentV3{
+		ApprovalId: "web3-1",
+		Type:       "WEB3_SIGN",
+		Detail:     json.RawMessage(`{}`),
+	}
+	dec, err := svc.Evaluate(context.Background(), biz)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != "REJECT" {
+		t.Errorf("action = %q, want REJECT", dec.Action)
+	}
+	if len(alerts.calls) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(alerts.calls))
+	}
+	if _, has := alerts.calls[0]["sourceAddress"]; has {
+		t.Error("non-TRANSACTION reject should NOT have sourceAddress in alert")
+	}
+	if _, has := alerts.calls[0]["txKey"]; has {
+		t.Error("non-TRANSACTION reject should NOT have txKey in alert")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Sweep with all detail fields populated
+// ---------------------------------------------------------------------------
+
+func TestServiceEvaluate_SweepFieldsComplete(t *testing.T) {
+	repo := &mockRepo{}
+	txA := NewTransactionApprover(newTestConfig(), newTestRegistry())
+	svc := NewApprovalService(repo, txA, nil)
+
+	detail := safeheron.TransactionApproval{
+		TxKey:                  "tx-full",
+		TxHash:                 "0xhash123",
+		CustomerRefId:          "cust-ref-1",
+		CoinKey:                "USDT_ERC20",
+		FeeCoinKey:             "ETH",
+		TxAmount:               "500",
+		EstimateFee:            "0.005",
+		TransactionType:        "AUTO_SWEEP",
+		SourceAccountKey:       "src-acct",
+		SourceAddress:          "0xsrc",
+		DestinationAccountKey:  "acct-main",
+		DestinationAccountType: "VAULT_ACCOUNT",
+		DestinationAddress:     "0xdst",
+	}
+	data, _ := json.Marshal(detail)
+	biz := &safeheron.CoSignerBizContentV3{
+		ApprovalId: "ap-full",
+		Type:       "TRANSACTION",
+		Detail:     data,
+	}
+
+	dec, err := svc.Evaluate(context.Background(), biz)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != "APPROVE" {
+		t.Fatalf("action = %q, want APPROVE", dec.Action)
+	}
+
+	st := repo.insertedSweep
+	if st == nil {
+		t.Fatal("sweep not inserted")
+	}
+	if st.TxHash != "0xhash123" {
+		t.Errorf("TxHash = %q", st.TxHash)
+	}
+	if st.CustomerRefID != "cust-ref-1" {
+		t.Errorf("CustomerRefID = %q", st.CustomerRefID)
+	}
+	if st.FeeCoinKey != "ETH" {
+		t.Errorf("FeeCoinKey = %q", st.FeeCoinKey)
+	}
+	if st.EstimateFee != "0.005" {
+		t.Errorf("EstimateFee = %q", st.EstimateFee)
+	}
+	if st.SourceAccountKey != "src-acct" {
+		t.Errorf("SourceAccountKey = %q", st.SourceAccountKey)
+	}
+	if st.SourceAddress != "0xsrc" {
+		t.Errorf("SourceAddress = %q", st.SourceAddress)
+	}
+	if st.ApprovalID != "ap-full" {
+		t.Errorf("ApprovalID = %q", st.ApprovalID)
+	}
+	if st.ApprovalAction != "APPROVE" {
+		t.Errorf("ApprovalAction = %q", st.ApprovalAction)
+	}
+	if st.TxStatus != "PENDING" {
+		t.Errorf("TxStatus = %q, want PENDING (default)", st.TxStatus)
+	}
+
+	rec := repo.insertedApproval
+	if rec.CustomerRefID != "cust-ref-1" {
+		t.Errorf("approval CustomerRefID = %q", rec.CustomerRefID)
+	}
+	if rec.SourceAccountKey != "src-acct" {
+		t.Errorf("approval SourceAccountKey = %q", rec.SourceAccountKey)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Alert fields verification
 // ---------------------------------------------------------------------------
 

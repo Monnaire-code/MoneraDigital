@@ -93,10 +93,9 @@ func TestWebhook_RawPayloadPreservesOriginalBody(t *testing.T) {
 	originalBody := `{"timestamp":"1734567890123","sig":"abc","bizContent":"ciphertext","unknown_field":"forensic-data","destinationAddressList":[{"addr":"0xabc"}]}`
 	var capturedRaw []byte
 	h := NewSafeheronWebhookHandler(
-		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
-			return &safeheron.WebhookEvent{
-				EventDetail: safeheron.EventDetail{TxKey: "tx-1", TransactionStatus: "COMPLETED"},
-			}, nil
+		&rawVerifier{evt: &safeheron.WebhookEvent{
+			EventDetail: safeheron.EventDetail{TxKey: "tx-1", TransactionStatus: "COMPLETED"},
+			RawBody:     []byte(originalBody),
 		}},
 		&fakeRecorder{insertFn: func(_ context.Context, evt *deposit.Event) (bool, error) {
 			capturedRaw = evt.RawPayload
@@ -372,6 +371,57 @@ func TestWebhook_AMLAlertEventIDIsContentHash(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Empty RawBody after verify → 500
+// ---------------------------------------------------------------------------
+
+type rawVerifier struct {
+	evt *safeheron.WebhookEvent
+	err error
+}
+
+func (r *rawVerifier) WebhookConvert(_ []byte) (*safeheron.WebhookEvent, error) {
+	return r.evt, r.err
+}
+
+func TestWebhook_EmptyRawBodyReturns500(t *testing.T) {
+	h := NewSafeheronWebhookHandler(
+		&rawVerifier{evt: &safeheron.WebhookEvent{
+			EventType:   "TRANSACTION_STATUS_CHANGED",
+			EventDetail: safeheron.EventDetail{TxKey: "tx-empty", TransactionStatus: "COMPLETED"},
+			RawBody:     nil,
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
+			t.Fatal("recorder must not be called when RawBody is empty")
+			return false, nil
+		}},
+		nil,
+	)
+	w := runWebhook(h, `{"sig":"ok"}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for empty RawBody, got %d", w.Code)
+	}
+}
+
+func TestWebhook_EmptyRawBodySliceReturns500(t *testing.T) {
+	h := NewSafeheronWebhookHandler(
+		&rawVerifier{evt: &safeheron.WebhookEvent{
+			EventType:   "TRANSACTION_STATUS_CHANGED",
+			EventDetail: safeheron.EventDetail{TxKey: "tx-zero", TransactionStatus: "COMPLETED"},
+			RawBody:     []byte{},
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
+			t.Fatal("recorder must not be called when RawBody is empty slice")
+			return false, nil
+		}},
+		nil,
+	)
+	w := runWebhook(h, `{"sig":"ok"}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for empty RawBody slice, got %d", w.Code)
+	}
+}
+
 // === T11.2 D-42: Webhook IP whitelist ===
 
 func runWebhookWithIP(h *SafeheronWebhookHandler, body, clientIP string) *httptest.ResponseRecorder {
@@ -473,14 +523,20 @@ func TestWebhookIPWhitelist_RejectsForgedXForwardedFor(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type fakeSweepUpdater struct {
-	updateFn func(ctx context.Context, txKey, status, subStatus, txHash string, completedAt *time.Time) error
-	called   bool
-	lastKey  string
+	updateFn   func(ctx context.Context, txKey, status, subStatus, txHash string, completedAt *time.Time) error
+	called     bool
+	lastKey    string
+	lastStatus string
+	lastSub    string
+	lastHash   string
 }
 
 func (f *fakeSweepUpdater) UpdateSweepStatus(ctx context.Context, txKey, status, subStatus, txHash string, completedAt *time.Time) error {
 	f.called = true
 	f.lastKey = txKey
+	f.lastStatus = status
+	f.lastSub = subStatus
+	f.lastHash = txHash
 	return f.updateFn(ctx, txKey, status, subStatus, txHash, completedAt)
 }
 
@@ -521,6 +577,12 @@ func TestWebhookSweep_SendUpdatesStatus(t *testing.T) {
 	}
 	if updater.lastKey != "tx-sweep-1" {
 		t.Errorf("txKey = %q, want tx-sweep-1", updater.lastKey)
+	}
+	if updater.lastStatus != "COMPLETED" {
+		t.Errorf("status = %q, want COMPLETED", updater.lastStatus)
+	}
+	if updater.lastHash != "0xhash123" {
+		t.Errorf("txHash = %q, want 0xhash123", updater.lastHash)
 	}
 }
 

@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"monera-digital/internal/safeheron"
@@ -188,6 +189,28 @@ func TestTxTypeNotAllowed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// tx_type in allowed list but not a named case → default branch
+// ---------------------------------------------------------------------------
+
+func TestUnknownTypeInAllowedList_HitsDefault(t *testing.T) {
+	cfg := newTestConfig()
+	cfg.AllowedTxTypes = append(cfg.AllowedTxTypes, "FUTURE_TYPE")
+	a := NewTransactionApprover(cfg, newTestRegistry())
+	biz := makeBiz("FUTURE_TYPE", "VAULT_ACCOUNT", "acct-main")
+
+	dec, err := a.Evaluate(context.Background(), biz)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != "REJECT" {
+		t.Errorf("action = %q, want REJECT for unknown-but-allowed type", dec.Action)
+	}
+	if !strings.Contains(dec.Reason, "unknown transaction type") {
+		t.Errorf("reason should mention unknown type, got: %q", dec.Reason)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Invalid detail JSON
 // ---------------------------------------------------------------------------
 
@@ -246,6 +269,14 @@ func TestResolveChainSymbol_Empty(t *testing.T) {
 	got := a.ResolveChainSymbol("")
 	if got != "UNKNOWN" {
 		t.Errorf("ResolveChainSymbol(\"\") = %q, want UNKNOWN", got)
+	}
+}
+
+func TestResolveChainSymbol_NilRegistry(t *testing.T) {
+	a := NewTransactionApprover(newTestConfig(), nil)
+	got := a.ResolveChainSymbol("USDT_ERC20")
+	if got != "UNKNOWN" {
+		t.Errorf("ResolveChainSymbol with nil registry = %q, want UNKNOWN", got)
 	}
 }
 

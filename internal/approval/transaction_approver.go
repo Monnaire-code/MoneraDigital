@@ -120,7 +120,7 @@ func (a *TransactionApprover) isTargetAccountAllowed(accountKey string) bool {
 }
 
 func (a *TransactionApprover) ResolveChainSymbol(coinKey string) string {
-	if coinKey == "" {
+	if coinKey == "" || a.registry == nil {
 		return "UNKNOWN"
 	}
 	cc, ok := a.registry.GetCoinChainBySafeheronKey(coinKey)

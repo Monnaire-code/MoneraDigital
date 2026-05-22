@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -350,6 +352,22 @@ func TestUpdateSweepStatus_DBError(t *testing.T) {
 	err := repo.UpdateSweepStatus(context.Background(), "tx-1", "COMPLETED", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestUpdateSweepStatus_RowsAffectedError(t *testing.T) {
+	repo, mock := newMock(t)
+
+	mock.ExpectExec(`UPDATE sweep_transactions`).
+		WithArgs("tx-1", "COMPLETED", nil, nil, (*time.Time)(nil)).
+		WillReturnResult(sqlmock.NewErrorResult(errors.New("driver: rows affected not supported")))
+
+	err := repo.UpdateSweepStatus(context.Background(), "tx-1", "COMPLETED", "", "", nil)
+	if err == nil {
+		t.Fatal("expected error when RowsAffected fails")
+	}
+	if !strings.Contains(err.Error(), "rows affected") {
+		t.Errorf("error should mention rows affected, got: %v", err)
 	}
 }
 

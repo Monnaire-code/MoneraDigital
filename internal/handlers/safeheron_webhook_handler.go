@@ -78,9 +78,10 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		return
 	}
 
+	clientIP := c.ClientIP()
+
 	// D-42: IP whitelist — reject before reading body or running RSA verify
 	if len(h.AllowedIPs) > 0 {
-		clientIP := c.ClientIP()
 		allowed := false
 		for _, ip := range h.AllowedIPs {
 			if ip == clientIP {
@@ -95,7 +96,6 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		}
 	}
 
-	clientIP := c.ClientIP()
 	log.Printf("[webhook] received ip=%s", clientIP)
 
 	// Plan D-12: http.MaxBytesReader caps body at 1MB AND surfaces an explicit

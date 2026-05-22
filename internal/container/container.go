@@ -250,6 +250,10 @@ func WithCosignerCallback() ContainerOption {
 		svc := approval.NewApprovalService(repo, txApprover, alertFn)
 
 		cosignerIPs := splitNonEmpty(viper.GetString("COSIGNER_ALLOWED_IPS"))
+		if viper.GetString("APP_ENV") == "production" && len(cosignerIPs) == 0 {
+			panic("COSIGNER_ALLOWED_IPS must be set in production: " +
+				"comma-separated allowlist of Co-Signer source IPs is required")
+		}
 		if len(cosignerIPs) == 0 {
 			log.Printf("[cosigner] WARNING: COSIGNER_ALLOWED_IPS is empty, no IP restriction")
 		}

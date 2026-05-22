@@ -53,6 +53,10 @@ func (s *stubEvaluator) Evaluate(_ context.Context, _ *safeheron.CoSignerBizCont
 // Helpers
 // ---------------------------------------------------------------------------
 
+type errReader struct{ err error }
+
+func (e *errReader) Read(_ []byte) (int, error) { return 0, e.err }
+
 func cosignerRoute(h *CosignerCallbackHandler) *gin.Engine {
 	r := gin.New()
 	r.POST("/api/cosigner/callback", h.Handle)
@@ -98,6 +102,17 @@ func TestCosignerCallback_NilParser(t *testing.T) {
 	}
 }
 
+func TestCosignerCallback_NilEvaluator(t *testing.T) {
+	h := &CosignerCallbackHandler{Parser: &stubParser{}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = cosignerReq("{}")
+	h.Handle(c)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", w.Code)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 403 — IP whitelist
 // ---------------------------------------------------------------------------
@@ -113,6 +128,48 @@ func TestCosignerCallback_IPBlocked(t *testing.T) {
 	r.ServeHTTP(w, cosignerReq("{}"))
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
+	}
+}
+
+func TestCosignerCallback_IPAllowed(t *testing.T) {
+	h := &CosignerCallbackHandler{
+		Parser: &stubParser{
+			parseResult: &safeheron.CoSignerBizContentV3{
+				ApprovalId: "ap-ip", Type: "CALLBACK_TEST", Detail: json.RawMessage(`{}`),
+			},
+			buildResult: map[string]string{"code": "200"},
+		},
+		Evaluator:  &stubEvaluator{result: &approval.ApprovalDecision{Action: "APPROVE"}},
+		AllowedIPs: []string{"192.168.1.1"},
+	}
+	r := gin.New()
+	r.POST("/api/cosigner/callback", h.Handle)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/cosigner/callback", strings.NewReader(validBody()))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.168.1.1:12345"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 for allowed IP", w.Code)
+	}
+}
+
+func TestCosignerCallback_EmptyIPList_AllowsAll(t *testing.T) {
+	h := &CosignerCallbackHandler{
+		Parser: &stubParser{
+			parseResult: &safeheron.CoSignerBizContentV3{
+				ApprovalId: "ap-noip", Type: "CALLBACK_TEST", Detail: json.RawMessage(`{}`),
+			},
+			buildResult: map[string]string{"code": "200"},
+		},
+		Evaluator: &stubEvaluator{result: &approval.ApprovalDecision{Action: "APPROVE"}},
+	}
+	r := cosignerRoute(h)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, cosignerReq(validBody()))
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 when IP list is empty", w.Code)
 	}
 }
 
@@ -133,6 +190,22 @@ func TestCosignerCallback_BodyTooLarge(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want 413", w.Code)
+	}
+}
+
+func TestCosignerCallback_ReadError(t *testing.T) {
+	h := &CosignerCallbackHandler{
+		Parser:    &stubParser{},
+		Evaluator: &stubEvaluator{},
+	}
+	r := gin.New()
+	r.POST("/api/cosigner/callback", h.Handle)
+	req := httptest.NewRequest(http.MethodPost, "/api/cosigner/callback", &errReader{err: errors.New("connection reset")})
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for read error", w.Code)
 	}
 }
 
@@ -158,12 +231,15 @@ func TestCosignerCallback_InvalidJSON(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCosignerCallback_VerifyFails(t *testing.T) {
-	var alertCalled bool
+	var capturedLevel, capturedTitle string
+	var capturedFields map[string]string
 	h := &CosignerCallbackHandler{
 		Parser:    &stubParser{parseErr: errors.New("bad sig")},
 		Evaluator: &stubEvaluator{},
-		AlertFn: func(_, _ string, _ map[string]string) {
-			alertCalled = true
+		AlertFn: func(level, title string, fields map[string]string) {
+			capturedLevel = level
+			capturedTitle = title
+			capturedFields = fields
 		},
 	}
 	r := cosignerRoute(h)
@@ -172,8 +248,17 @@ func TestCosignerCallback_VerifyFails(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", w.Code)
 	}
-	if !alertCalled {
-		t.Error("verify failure should trigger alert")
+	if capturedLevel != "ERROR" {
+		t.Errorf("alert level = %q, want ERROR", capturedLevel)
+	}
+	if !strings.Contains(capturedTitle, "验签失败") {
+		t.Errorf("alert title = %q, should contain 验签失败", capturedTitle)
+	}
+	if capturedFields["error"] != "bad sig" {
+		t.Errorf("alert error field = %q, want 'bad sig'", capturedFields["error"])
+	}
+	if capturedFields["ip"] == "" {
+		t.Error("alert should include ip field")
 	}
 }
 
