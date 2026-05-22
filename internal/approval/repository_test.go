@@ -365,6 +365,26 @@ func TestUpdateSweepStatus_TxKeyNotFound_Distinct(t *testing.T) {
 	}
 }
 
+func TestUpdateSweepStatus_ExistenceCheckDBError(t *testing.T) {
+	repo, mock := newMock(t)
+
+	mock.ExpectExec(`UPDATE sweep_transactions`).
+		WithArgs("tx-1", "COMPLETED", nil, nil, (*time.Time)(nil)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectQuery(`SELECT EXISTS`).
+		WithArgs("tx-1").
+		WillReturnError(sql.ErrConnDone)
+
+	err := repo.UpdateSweepStatus(context.Background(), "tx-1", "COMPLETED", "", "", nil)
+	if err == nil {
+		t.Fatal("expected error when existence check fails")
+	}
+	if !strings.Contains(err.Error(), "check sweep existence") {
+		t.Errorf("error should mention existence check, got: %v", err)
+	}
+}
+
 func TestUpdateSweepStatus_DBError(t *testing.T) {
 	repo, mock := newMock(t)
 

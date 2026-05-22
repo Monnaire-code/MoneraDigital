@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"monera-digital/internal/approval"
 	"monera-digital/internal/safeheron"
 	"monera-digital/internal/wallet/deposit"
 )
@@ -661,6 +662,25 @@ func TestWebhookSweep_SendDBError_SendsAlert(t *testing.T) {
 		t.Errorf("alert error = %q, want 'connection refused'", alertFields["error"])
 	}
 	_ = alertTitle
+}
+
+func TestWebhookSweep_ErrSweepNotFound_StillAcks(t *testing.T) {
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, _ *time.Time) error {
+		return approval.ErrSweepNotFound
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-notfound", "COMPLETED", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+
+	w := runWebhook(h, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 even when sweep not found, got %d", w.Code)
+	}
 }
 
 func TestWebhookSweep_ReceiveDirection_SkipsSweep(t *testing.T) {

@@ -263,9 +263,7 @@ func WithCosignerCallback() ContainerOption {
 		if c.SafeheronWebhookHandler != nil {
 			c.SafeheronWebhookHandler.SetSweepUpdater(repo)
 			if alertFn != nil {
-				c.SafeheronWebhookHandler.SetAlertFn(func(level, title string, fields map[string]string) {
-					alertFn(level, title, fields)
-				})
+				c.SafeheronWebhookHandler.SetAlertFn(handlers.WebhookAlertFn(alertFn))
 			}
 		}
 
@@ -362,8 +360,7 @@ type Container struct {
 	ActivationService *services.ActivationService
 	ContactService    *services.ContactService
 
-	// 中间件
-	RateLimitMiddleware *middleware.PerEndpointRateLimiter
+	// 中间件（PerEndpointRateLimiter 已移除 — 限速由 routes.go 按路由组分配）
 }
 
 // NewContainer 创建依赖注入容器
@@ -434,11 +431,6 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	}
 
 	// 初始化中间件
-	c.RateLimitMiddleware = middleware.NewPerEndpointRateLimiter()
-	c.RateLimitMiddleware.AddEndpoint("/api/auth/register", 5, time.Minute)
-	c.RateLimitMiddleware.AddEndpoint("/api/auth/login", 5, time.Minute)
-	c.RateLimitMiddleware.AddEndpoint("/api/auth/refresh", 10, time.Minute)
-
 	dbRateLimiter := services.NewRateLimiter(db)
 	c.ActivationService = services.NewActivationService(db, dbRateLimiter, c.EmailService, jwtSecret)
 	c.ContactService = services.NewContactService(db)
