@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -98,7 +99,8 @@ func main() {
 	cont := container.NewContainer(database, cfg.JWTSecret,
 		container.WithEncryption(cfg.EncryptionKey),
 		container.WithRedisCache(redisCache),
-		container.WithSafeheronPool(bgCtx))
+		container.WithSafeheronPool(bgCtx),
+		container.WithCosignerCallback())
 
 	// Verify container
 	if err := cont.Verify(); err != nil {
@@ -106,10 +108,8 @@ func main() {
 			"error", err.Error())
 	}
 
-	// Debug: Check email service status
 	logger.Info("[EmailService] Status check",
 		"enabled", cont.EmailService.IsEnabled(),
-		"RESEND_API_KEY", os.Getenv("RESEND_API_KEY"),
 		"SENDER_EMAIL", os.Getenv("SENDER_EMAIL"))
 
 	// Initialize Gin router
@@ -171,6 +171,11 @@ func main() {
 
 	serverErrCh := make(chan error, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				serverErrCh <- fmt.Errorf("server goroutine panic: %v", r)
+			}
+		}()
 		logger.Info("Server starting on port " + cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErrCh <- err

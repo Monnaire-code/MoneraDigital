@@ -44,6 +44,9 @@ func main() {
 	// Hotfix: frozen_balance NOT NULL without DEFAULT caused first-deposit failures
 	migrator.Register(&migrations.AccountFrozenBalanceDefault{})
 
+	// Approval Callback Service: approval_records + sweep_transactions
+	migrator.Register(&migrations.CreateApprovalAndSweepTables{})
+
 	if err := migrator.Migrate(); err != nil {
 		log.Fatal("Migration failed:", err)
 	}

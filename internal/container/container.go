@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"monera-digital/internal/alert"
+	"monera-digital/internal/approval"
 	"monera-digital/internal/cache"
 	"monera-digital/internal/config"
 	"monera-digital/internal/coreapi"
@@ -177,6 +178,7 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 				"comma-separated allowlist of Safeheron source IPs is required")
 		}
 		c.SafeheronWebhookHandler = handlers.NewSafeheronWebhookHandler(client, depRepo, webhookAllowedIPs)
+		c.SafeheronWebhookHandler.SetAlertFn(handlers.WebhookAlertFn(c.AlertService.Send))
 
 		workerInterval := viper.GetDuration("DEPOSIT_WORKER_INTERVAL")
 		if workerInterval <= 0 {
@@ -197,6 +199,77 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 		log.Printf("Safeheron deposit pipeline enabled: worker interval=%s", workerInterval)
 		log.Printf("[KYT] enabled=%v scan_interval=%s timeout=%s orphan_max_retry=%d",
 			kytEnabled, kytScanInterval, kytTimeout, kytOrphanMaxRetry)
+	}
+}
+
+func WithCosignerCallback() ContainerOption {
+	return func(c *Container) {
+		pubPath := viper.GetString("COSIGNER_PUBLIC_KEY_PATH")
+		privPath := viper.GetString("COSIGNER_CALLBACK_PRIVATE_KEY_PATH")
+
+		if pubPath == "" || privPath == "" {
+			log.Printf("Cosigner callback disabled: COSIGNER_PUBLIC_KEY_PATH or COSIGNER_CALLBACK_PRIVATE_KEY_PATH not configured")
+			return
+		}
+
+		cosignerClient, err := safeheron.NewCosignerClient(safeheron.CosignerConfig{
+			CoSignerPubKeyPath:     pubPath,
+			CallbackPrivateKeyPath: privPath,
+		})
+		if err != nil {
+			if viper.GetString("APP_ENV") == "production" {
+				panic(fmt.Sprintf("Cosigner callback init failed in production (paths configured but invalid): %v", err))
+			}
+			log.Printf("Cosigner callback disabled: client init failed: %v", err)
+			return
+		}
+
+		sweepTargets := splitNonEmpty(viper.GetString("COSIGNER_SWEEP_TARGET_ACCOUNTS"))
+		allowedTxTypes := splitNonEmpty(viper.GetString("COSIGNER_ALLOWED_TX_TYPES"))
+		if len(allowedTxTypes) == 0 {
+			allowedTxTypes = []string{"AUTO_SWEEP", "AUTO_FUEL", "UTXO_COLLECTION"}
+		}
+		if len(sweepTargets) == 0 {
+			log.Printf("[cosigner] WARNING: COSIGNER_SWEEP_TARGET_ACCOUNTS is empty, all sweep transactions will be REJECTED")
+		}
+
+		cfg := approval.ApprovalConfig{
+			SweepTargetAccounts: sweepTargets,
+			AllowedTxTypes:      allowedTxTypes,
+		}
+
+		var registry approval.ChainLookup
+		if c.WalletRegistry != nil {
+			registry = c.WalletRegistry
+		}
+
+		txApprover := approval.NewTransactionApprover(cfg, registry)
+		repo := approval.NewRepository(c.DB)
+
+		var alertFn approval.AlertFunc
+		if c.AlertService != nil {
+			alertFn = c.AlertService.Send
+		}
+
+		svc := approval.NewApprovalService(repo, txApprover, alertFn)
+
+		cosignerIPs := splitNonEmpty(viper.GetString("COSIGNER_ALLOWED_IPS"))
+		if viper.GetString("APP_ENV") == "production" && len(cosignerIPs) == 0 {
+			panic("COSIGNER_ALLOWED_IPS must be set in production: " +
+				"comma-separated allowlist of Co-Signer source IPs is required")
+		}
+		if len(cosignerIPs) == 0 {
+			log.Printf("[cosigner] WARNING: COSIGNER_ALLOWED_IPS is empty, no IP restriction")
+		}
+
+		c.CosignerCallbackHandler = handlers.NewCosignerCallbackHandler(cosignerClient, svc, cosignerIPs, alertFn)
+
+		if c.SafeheronWebhookHandler != nil {
+			c.SafeheronWebhookHandler.SetSweepUpdater(repo)
+		}
+
+		log.Printf("Cosigner callback enabled: allowedTxTypes=%v sweepTargets=%d ips=%d",
+			allowedTxTypes, len(sweepTargets), len(cosignerIPs))
 	}
 }
 
@@ -249,6 +322,9 @@ type Container struct {
 	RateLimiter    *middleware.RateLimiter
 	RedisCache     *cache.RedisCache
 
+	// Safeheron 端点独立限速（webhook + cosigner callback）
+	SafeheronRateLimiter *middleware.RateLimiter
+
 	// 幂等服务
 	IdempotencyService    *services.IdempotencyService
 	IdempotencyRepository *postgres.IdempotencyRepository
@@ -268,6 +344,7 @@ type Container struct {
 	DepositPipeline         *deposit.Service
 	DepositWorker           *deposit.Worker
 	SafeheronWebhookHandler *handlers.SafeheronWebhookHandler
+	CosignerCallbackHandler *handlers.CosignerCallbackHandler
 	AlertService            *alert.AlertService
 
 	// 服务
@@ -284,8 +361,7 @@ type Container struct {
 	ActivationService *services.ActivationService
 	ContactService    *services.ContactService
 
-	// 中间件
-	RateLimitMiddleware *middleware.PerEndpointRateLimiter
+	// 中间件（PerEndpointRateLimiter 已移除 — 限速由 routes.go 按路由组分配）
 }
 
 // NewContainer 创建依赖注入容器
@@ -294,7 +370,8 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 
 	// 初始化缓存
 	c.TokenBlacklist = cache.NewTokenBlacklist()
-	c.RateLimiter = middleware.NewRateLimiter(5, 60)
+	c.RateLimiter = middleware.NewRateLimiter(10, time.Minute)
+	c.SafeheronRateLimiter = middleware.NewRateLimiter(60, time.Minute)
 
 	// 初始化 Core API 客户端
 	coreAPIURL := os.Getenv("MONNAIRE_CORE_API_URL")
@@ -355,11 +432,6 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	}
 
 	// 初始化中间件
-	c.RateLimitMiddleware = middleware.NewPerEndpointRateLimiter()
-	c.RateLimitMiddleware.AddEndpoint("/api/auth/register", 5, 60)
-	c.RateLimitMiddleware.AddEndpoint("/api/auth/login", 5, 60)
-	c.RateLimitMiddleware.AddEndpoint("/api/auth/refresh", 10, 60)
-
 	dbRateLimiter := services.NewRateLimiter(db)
 	c.ActivationService = services.NewActivationService(db, dbRateLimiter, c.EmailService, jwtSecret)
 	c.ContactService = services.NewContactService(db)

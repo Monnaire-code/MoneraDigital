@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"monera-digital/internal/approval"
 	"monera-digital/internal/safeheron"
 	"monera-digital/internal/wallet/deposit"
 )
@@ -92,10 +93,9 @@ func TestWebhook_RawPayloadPreservesOriginalBody(t *testing.T) {
 	originalBody := `{"timestamp":"1734567890123","sig":"abc","bizContent":"ciphertext","unknown_field":"forensic-data","destinationAddressList":[{"addr":"0xabc"}]}`
 	var capturedRaw []byte
 	h := NewSafeheronWebhookHandler(
-		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
-			return &safeheron.WebhookEvent{
-				EventDetail: safeheron.EventDetail{TxKey: "tx-1", TransactionStatus: "COMPLETED"},
-			}, nil
+		&rawVerifier{evt: &safeheron.WebhookEvent{
+			EventDetail: safeheron.EventDetail{TxKey: "tx-1", TransactionStatus: "COMPLETED"},
+			RawBody:     []byte(originalBody),
 		}},
 		&fakeRecorder{insertFn: func(_ context.Context, evt *deposit.Event) (bool, error) {
 			capturedRaw = evt.RawPayload
@@ -371,6 +371,57 @@ func TestWebhook_AMLAlertEventIDIsContentHash(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Empty RawBody after verify → 500
+// ---------------------------------------------------------------------------
+
+type rawVerifier struct {
+	evt *safeheron.WebhookEvent
+	err error
+}
+
+func (r *rawVerifier) WebhookConvert(_ []byte) (*safeheron.WebhookEvent, error) {
+	return r.evt, r.err
+}
+
+func TestWebhook_EmptyRawBodyReturns500(t *testing.T) {
+	h := NewSafeheronWebhookHandler(
+		&rawVerifier{evt: &safeheron.WebhookEvent{
+			EventType:   "TRANSACTION_STATUS_CHANGED",
+			EventDetail: safeheron.EventDetail{TxKey: "tx-empty", TransactionStatus: "COMPLETED"},
+			RawBody:     nil,
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
+			t.Fatal("recorder must not be called when RawBody is empty")
+			return false, nil
+		}},
+		nil,
+	)
+	w := runWebhook(h, `{"sig":"ok"}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for empty RawBody, got %d", w.Code)
+	}
+}
+
+func TestWebhook_EmptyRawBodySliceReturns500(t *testing.T) {
+	h := NewSafeheronWebhookHandler(
+		&rawVerifier{evt: &safeheron.WebhookEvent{
+			EventType:   "TRANSACTION_STATUS_CHANGED",
+			EventDetail: safeheron.EventDetail{TxKey: "tx-zero", TransactionStatus: "COMPLETED"},
+			RawBody:     []byte{},
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) {
+			t.Fatal("recorder must not be called when RawBody is empty slice")
+			return false, nil
+		}},
+		nil,
+	)
+	w := runWebhook(h, `{"sig":"ok"}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for empty RawBody slice, got %d", w.Code)
+	}
+}
+
 // === T11.2 D-42: Webhook IP whitelist ===
 
 func runWebhookWithIP(h *SafeheronWebhookHandler, body, clientIP string) *httptest.ResponseRecorder {
@@ -465,4 +516,240 @@ func TestWebhookIPWhitelist_RejectsForgedXForwardedFor(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 (XFF must be ignored when no trusted proxies), got %d", w.Code)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// SEND-direction sweep update tests
+// ---------------------------------------------------------------------------
+
+type fakeSweepUpdater struct {
+	updateFn   func(ctx context.Context, txKey, status, subStatus, txHash string, completedAt *time.Time) error
+	called     bool
+	lastKey    string
+	lastStatus string
+	lastSub    string
+	lastHash   string
+}
+
+func (f *fakeSweepUpdater) UpdateSweepStatus(ctx context.Context, txKey, status, subStatus, txHash string, completedAt *time.Time) error {
+	f.called = true
+	f.lastKey = txKey
+	f.lastStatus = status
+	f.lastSub = subStatus
+	f.lastHash = txHash
+	return f.updateFn(ctx, txKey, status, subStatus, txHash, completedAt)
+}
+
+func sendWebhookEvent(txKey, status, direction string) *safeheron.WebhookEvent {
+	return &safeheron.WebhookEvent{
+		EventType: "TRANSACTION_STATUS_CHANGED",
+		EventDetail: safeheron.EventDetail{
+			TxKey:                txKey,
+			TransactionStatus:    status,
+			TransactionDirection: direction,
+			TxHash:               "0xhash123",
+		},
+	}
+}
+
+func TestWebhookSweep_SendUpdatesStatus(t *testing.T) {
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, completedAt *time.Time) error {
+		if completedAt == nil {
+			t.Error("completedAt should be set for COMPLETED status")
+		}
+		return nil
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-sweep-1", "COMPLETED", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+
+	w := runWebhook(h, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !updater.called {
+		t.Error("SweepUpdater should be called for SEND direction")
+	}
+	if updater.lastKey != "tx-sweep-1" {
+		t.Errorf("txKey = %q, want tx-sweep-1", updater.lastKey)
+	}
+	if updater.lastStatus != "COMPLETED" {
+		t.Errorf("status = %q, want COMPLETED", updater.lastStatus)
+	}
+	if updater.lastHash != "0xhash123" {
+		t.Errorf("txHash = %q, want 0xhash123", updater.lastHash)
+	}
+}
+
+func TestWebhookSweep_SendAlreadyTerminal_StillAcks(t *testing.T) {
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, _ *time.Time) error {
+		return approval.ErrSweepTerminalState
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-terminal", "COMPLETED", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+
+	w := runWebhook(h, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 even when sweep already terminal, got %d", w.Code)
+	}
+}
+
+func TestWebhookSweep_SendDBError_StillAcks(t *testing.T) {
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, _ *time.Time) error {
+		return errors.New("connection refused")
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-err", "SIGNING", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+
+	w := runWebhook(h, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 even on sweep DB error, got %d", w.Code)
+	}
+}
+
+// M-1: Sweep update DB error should trigger an alert
+func TestWebhookSweep_SendDBError_SendsAlert(t *testing.T) {
+	var alertCalled bool
+	var alertTitle string
+	var alertFields map[string]string
+
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, _ *time.Time) error {
+		return errors.New("connection refused")
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-alert", "COMPLETED", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+	h.SetAlertFn(func(level, title string, fields map[string]string) {
+		alertCalled = true
+		alertTitle = title
+		alertFields = fields
+	})
+
+	w := runWebhook(h, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 even on sweep DB error, got %d", w.Code)
+	}
+	if !alertCalled {
+		t.Fatal("AlertFn should be called when sweep update fails with DB error")
+	}
+	if alertFields["txKey"] != "tx-alert" {
+		t.Errorf("alert txKey = %q, want tx-alert", alertFields["txKey"])
+	}
+	if alertFields["error"] != "connection refused" {
+		t.Errorf("alert error = %q, want 'connection refused'", alertFields["error"])
+	}
+	_ = alertTitle
+}
+
+func TestWebhookSweep_ErrSweepNotFound_StillAcks(t *testing.T) {
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, _ *time.Time) error {
+		return approval.ErrSweepNotFound
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-notfound", "COMPLETED", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+
+	w := runWebhook(h, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 even when sweep not found, got %d", w.Code)
+	}
+}
+
+func TestWebhookSweep_ReceiveDirection_SkipsSweep(t *testing.T) {
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, _ *time.Time) error {
+		t.Fatal("SweepUpdater must NOT be called for RECEIVE direction")
+		return nil
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-recv", "COMPLETED", "RECEIVE"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+
+	w := runWebhook(h, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestWebhookSweep_NilUpdater_SkipsSweep(t *testing.T) {
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-nil", "COMPLETED", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	// No SetSweepUpdater call — SweepUpdater is nil
+
+	w := runWebhook(h, `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with nil SweepUpdater, got %d", w.Code)
+	}
+}
+
+func TestWebhookSweep_FailedStatus_SetsCompletedAt(t *testing.T) {
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, completedAt *time.Time) error {
+		if completedAt == nil {
+			t.Error("completedAt should be set for FAILED status")
+		}
+		return nil
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-fail", "FAILED", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+	runWebhook(h, `{}`)
+}
+
+func TestWebhookSweep_SigningStatus_NoCompletedAt(t *testing.T) {
+	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, completedAt *time.Time) error {
+		if completedAt != nil {
+			t.Error("completedAt should be nil for SIGNING status")
+		}
+		return nil
+	}}
+	h := NewSafeheronWebhookHandler(
+		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+			return sendWebhookEvent("tx-sign", "SIGNING", "SEND"), nil
+		}},
+		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
+		nil,
+	)
+	h.SetSweepUpdater(updater)
+	runWebhook(h, `{}`)
 }

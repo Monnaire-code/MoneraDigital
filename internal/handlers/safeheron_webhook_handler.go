@@ -8,9 +8,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"monera-digital/internal/approval"
 	"monera-digital/internal/safeheron"
 	"monera-digital/internal/wallet/deposit"
 )
@@ -34,16 +36,36 @@ type WebhookEventRecorder interface {
 	InsertEventOrSkip(ctx context.Context, evt *deposit.Event) (inserted bool, err error)
 }
 
+// SweepUpdater updates sweep_transactions status from outgoing webhook events.
+type SweepUpdater interface {
+	UpdateSweepStatus(ctx context.Context, txKey, status, subStatus, txHash string, completedAt *time.Time) error
+}
+
+// WebhookAlertFn is called to send operational alerts from the webhook handler.
+type WebhookAlertFn func(level, title string, fields map[string]string)
+
 // SafeheronWebhookHandler is the sync side of the deposit pipeline.
 type SafeheronWebhookHandler struct {
-	Verifier   WebhookVerifier
-	Recorder   WebhookEventRecorder
-	AllowedIPs []string
+	Verifier     WebhookVerifier
+	Recorder     WebhookEventRecorder
+	SweepUpdater SweepUpdater
+	AllowedIPs   []string
+	AlertFn      WebhookAlertFn
 }
 
 // NewSafeheronWebhookHandler wires the public webhook receiver.
 func NewSafeheronWebhookHandler(v WebhookVerifier, r WebhookEventRecorder, allowedIPs []string) *SafeheronWebhookHandler {
 	return &SafeheronWebhookHandler{Verifier: v, Recorder: r, AllowedIPs: allowedIPs}
+}
+
+// SetSweepUpdater injects the sweep_transactions updater (optional, added by WithCosignerCallback).
+func (h *SafeheronWebhookHandler) SetSweepUpdater(u SweepUpdater) {
+	h.SweepUpdater = u
+}
+
+// SetAlertFn injects the operational alert function (optional).
+func (h *SafeheronWebhookHandler) SetAlertFn(fn WebhookAlertFn) {
+	h.AlertFn = fn
 }
 
 // Receive handles POST /api/webhooks/safeheron. It:
@@ -65,9 +87,10 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		return
 	}
 
+	clientIP := c.ClientIP()
+
 	// D-42: IP whitelist — reject before reading body or running RSA verify
 	if len(h.AllowedIPs) > 0 {
-		clientIP := c.ClientIP()
 		allowed := false
 		for _, ip := range h.AllowedIPs {
 			if ip == clientIP {
@@ -82,7 +105,6 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		}
 	}
 
-	clientIP := c.ClientIP()
 	log.Printf("[webhook] received ip=%s", clientIP)
 
 	// Plan D-12: http.MaxBytesReader caps body at 1MB AND surfaces an explicit
@@ -165,6 +187,41 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 	} else {
 		log.Printf("[webhook] STORED ip=%s eventType=%s txKey=%s eventId=%s",
 			clientIP, evt.EventType, evt.EventDetail.TxKey, eventID)
+	}
+
+	// 出向交易（归集）状态更新 — 竞态待验证 spec §5.2
+	if h.SweepUpdater != nil && evt.EventDetail.TransactionDirection == "SEND" {
+		var completedAt *time.Time
+		if evt.EventDetail.TransactionStatus == "COMPLETED" || evt.EventDetail.TransactionStatus == "FAILED" {
+			now := time.Now()
+			completedAt = &now
+		}
+		err := h.SweepUpdater.UpdateSweepStatus(
+			c.Request.Context(),
+			evt.EventDetail.TxKey,
+			evt.EventDetail.TransactionStatus,
+			evt.EventDetail.TransactionSubStatus,
+			evt.EventDetail.TxHash,
+			completedAt,
+		)
+		if err != nil {
+			if errors.Is(err, approval.ErrSweepNotFound) {
+				log.Printf("[webhook] ERROR: sweep txKey=%s status=%s not in sweep_transactions (unexpected — cosigner callback may not have arrived yet)", evt.EventDetail.TxKey, evt.EventDetail.TransactionStatus)
+			} else if errors.Is(err, approval.ErrSweepTerminalState) {
+				log.Printf("[webhook] sweep txKey=%s already terminal, ignoring", evt.EventDetail.TxKey)
+			} else {
+				log.Printf("[webhook] ERROR updating sweep txKey=%s: %v", evt.EventDetail.TxKey, err)
+				if h.AlertFn != nil {
+					h.AlertFn("ERROR", "归集状态更新失败", map[string]string{
+						"txKey":  evt.EventDetail.TxKey,
+						"status": evt.EventDetail.TransactionStatus,
+						"error":  err.Error(),
+					})
+				}
+			}
+		} else {
+			log.Printf("[webhook] sweep updated txKey=%s status=%s", evt.EventDetail.TxKey, evt.EventDetail.TransactionStatus)
+		}
 	}
 
 	c.Header("Content-Type", "application/json")
