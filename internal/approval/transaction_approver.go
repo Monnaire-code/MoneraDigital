@@ -120,7 +120,6 @@ func (a *TransactionApprover) isTxTypeAllowed(txType string) bool {
 
 func (a *TransactionApprover) isTargetAccountAllowed(accountKey string) bool {
 	if len(a.config.SweepTargetAccounts) == 0 {
-		log.Printf("[approval] REJECT: COSIGNER_SWEEP_TARGET_ACCOUNTS is empty, all sweep rejected")
 		return false
 	}
 	for _, allowed := range a.config.SweepTargetAccounts {

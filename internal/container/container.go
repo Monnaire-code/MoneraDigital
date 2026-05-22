@@ -178,6 +178,7 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 				"comma-separated allowlist of Safeheron source IPs is required")
 		}
 		c.SafeheronWebhookHandler = handlers.NewSafeheronWebhookHandler(client, depRepo, webhookAllowedIPs)
+		c.SafeheronWebhookHandler.SetAlertFn(handlers.WebhookAlertFn(c.AlertService.Send))
 
 		workerInterval := viper.GetDuration("DEPOSIT_WORKER_INTERVAL")
 		if workerInterval <= 0 {
@@ -216,6 +217,9 @@ func WithCosignerCallback() ContainerOption {
 			CallbackPrivateKeyPath: privPath,
 		})
 		if err != nil {
+			if viper.GetString("APP_ENV") == "production" {
+				panic(fmt.Sprintf("Cosigner callback init failed in production (paths configured but invalid): %v", err))
+			}
 			log.Printf("Cosigner callback disabled: client init failed: %v", err)
 			return
 		}
@@ -262,9 +266,6 @@ func WithCosignerCallback() ContainerOption {
 
 		if c.SafeheronWebhookHandler != nil {
 			c.SafeheronWebhookHandler.SetSweepUpdater(repo)
-			if alertFn != nil {
-				c.SafeheronWebhookHandler.SetAlertFn(handlers.WebhookAlertFn(alertFn))
-			}
 		}
 
 		log.Printf("Cosigner callback enabled: allowedTxTypes=%v sweepTargets=%d ips=%d",

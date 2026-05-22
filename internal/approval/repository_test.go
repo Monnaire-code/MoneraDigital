@@ -329,8 +329,8 @@ func TestUpdateSweepStatus_AlreadyTerminal(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
 	err := repo.UpdateSweepStatus(context.Background(), "terminal-tx", "COMPLETED", "", "0xhash", nil)
-	if err != sql.ErrNoRows {
-		t.Fatalf("expected sql.ErrNoRows for already-terminal tx, got %v", err)
+	if !errors.Is(err, ErrSweepTerminalState) {
+		t.Fatalf("expected ErrSweepTerminalState for already-terminal tx, got %v", err)
 	}
 }
 

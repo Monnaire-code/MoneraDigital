@@ -119,6 +119,13 @@ func (h *CosignerCallbackHandler) Handle(c *gin.Context) {
 	resp, err := h.Parser.BuildResponse(biz.ApprovalId, decision.Action)
 	if err != nil {
 		log.Printf("[cosigner] ERROR: build response failed approvalId=%s: %v", biz.ApprovalId, err)
+		if h.AlertFn != nil {
+			h.AlertFn("ERROR", "Co-Signer 响应签名失败", map[string]string{
+				"approvalId": biz.ApprovalId,
+				"action":     decision.Action,
+				"error":      err.Error(),
+			})
+		}
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}

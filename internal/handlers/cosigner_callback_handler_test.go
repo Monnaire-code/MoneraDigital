@@ -349,6 +349,39 @@ func TestCosignerCallback_BuildResponseError(t *testing.T) {
 	}
 }
 
+func TestCosignerCallback_BuildResponseError_SendsAlert(t *testing.T) {
+	var gotLevel, gotTitle string
+	var gotFields map[string]string
+	h := &CosignerCallbackHandler{
+		Parser: &stubParser{
+			parseResult: &safeheron.CoSignerBizContentV3{ApprovalId: "ap-1", Type: "CALLBACK_TEST"},
+			buildErr:    errors.New("sign failed"),
+		},
+		Evaluator: &stubEvaluator{result: &approval.ApprovalDecision{Action: "APPROVE"}},
+		AlertFn: func(level, title string, fields map[string]string) {
+			gotLevel = level
+			gotTitle = title
+			gotFields = fields
+		},
+	}
+	r := cosignerRoute(h)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, cosignerReq(validBody()))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", w.Code)
+	}
+	if gotLevel != "ERROR" {
+		t.Errorf("alertLevel = %q, want ERROR", gotLevel)
+	}
+	if gotFields["approvalId"] != "ap-1" {
+		t.Errorf("alertFields[approvalId] = %q, want ap-1", gotFields["approvalId"])
+	}
+	if gotFields["action"] != "APPROVE" {
+		t.Errorf("alertFields[action] = %q, want APPROVE", gotFields["action"])
+	}
+	_ = gotTitle
+}
+
 // ---------------------------------------------------------------------------
 // 200 — happy path APPROVE
 // ---------------------------------------------------------------------------

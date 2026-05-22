@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -207,8 +206,8 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		)
 		if err != nil {
 			if errors.Is(err, approval.ErrSweepNotFound) {
-				log.Printf("[webhook] WARN: sweep txKey=%s not in sweep_transactions (unexpected — cosigner callback may not have arrived yet)", evt.EventDetail.TxKey)
-			} else if errors.Is(err, sql.ErrNoRows) {
+				log.Printf("[webhook] ERROR: sweep txKey=%s status=%s not in sweep_transactions (unexpected — cosigner callback may not have arrived yet)", evt.EventDetail.TxKey, evt.EventDetail.TransactionStatus)
+			} else if errors.Is(err, approval.ErrSweepTerminalState) {
 				log.Printf("[webhook] sweep txKey=%s already terminal, ignoring", evt.EventDetail.TxKey)
 			} else {
 				log.Printf("[webhook] ERROR updating sweep txKey=%s: %v", evt.EventDetail.TxKey, err)

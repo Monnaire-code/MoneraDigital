@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -170,6 +171,11 @@ func main() {
 
 	serverErrCh := make(chan error, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				serverErrCh <- fmt.Errorf("server goroutine panic: %v", r)
+			}
+		}()
 		logger.Info("Server starting on port " + cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErrCh <- err

@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -587,13 +586,13 @@ func TestWebhookSweep_SendUpdatesStatus(t *testing.T) {
 	}
 }
 
-func TestWebhookSweep_SendNotFound_StillAcks(t *testing.T) {
+func TestWebhookSweep_SendAlreadyTerminal_StillAcks(t *testing.T) {
 	updater := &fakeSweepUpdater{updateFn: func(_ context.Context, _, _, _, _ string, _ *time.Time) error {
-		return sql.ErrNoRows
+		return approval.ErrSweepTerminalState
 	}}
 	h := NewSafeheronWebhookHandler(
 		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
-			return sendWebhookEvent("tx-unknown", "CONFIRMING", "SEND"), nil
+			return sendWebhookEvent("tx-terminal", "COMPLETED", "SEND"), nil
 		}},
 		&fakeRecorder{insertFn: func(_ context.Context, _ *deposit.Event) (bool, error) { return true, nil }},
 		nil,
@@ -602,7 +601,7 @@ func TestWebhookSweep_SendNotFound_StillAcks(t *testing.T) {
 
 	w := runWebhook(h, `{}`)
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 even when sweep not found, got %d", w.Code)
+		t.Fatalf("expected 200 even when sweep already terminal, got %d", w.Code)
 	}
 }
 

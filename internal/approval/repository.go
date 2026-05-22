@@ -9,10 +9,11 @@ import (
 )
 
 var (
-	ErrDuplicateApproval = errors.New("approval: duplicate approval_id")
-	ErrApprovalNotFound  = errors.New("approval: record not found")
-	ErrDuplicateSweepTx  = errors.New("approval: duplicate sweep tx_key")
-	ErrSweepNotFound     = errors.New("approval: sweep tx_key not found")
+	ErrDuplicateApproval  = errors.New("approval: duplicate approval_id")
+	ErrApprovalNotFound   = errors.New("approval: record not found")
+	ErrDuplicateSweepTx   = errors.New("approval: duplicate sweep tx_key")
+	ErrSweepNotFound      = errors.New("approval: sweep tx_key not found")
+	ErrSweepTerminalState = errors.New("approval: sweep tx already in terminal state")
 )
 
 type Repository interface {
@@ -143,7 +144,7 @@ func (r *DBRepository) UpdateSweepStatus(ctx context.Context, txKey, status, sub
 		if !exists {
 			return ErrSweepNotFound
 		}
-		return sql.ErrNoRows
+		return ErrSweepTerminalState
 	}
 	return nil
 }
