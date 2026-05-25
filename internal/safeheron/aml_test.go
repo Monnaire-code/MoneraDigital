@@ -27,6 +27,13 @@ func TestSummarizeAmlRiskLevel(t *testing.T) {
 		}, AmlRiskHigh},
 		{"empty list returns EMPTY sentinel", []AmlReport{}, AmlRiskEmpty},
 		{"nil list returns EMPTY sentinel", nil, AmlRiskEmpty},
+		{"unrecognized status rejects (fail-closed)", []AmlReport{
+			{Status: "PROCESSING", RiskLevel: ""},
+		}, AmlRiskUnknown},
+		{"all unrecognized statuses reject", []AmlReport{
+			{Status: "REVIEWING", RiskLevel: ""},
+			{Status: "PROCESSING", RiskLevel: "LOW"},
+		}, AmlRiskUnknown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

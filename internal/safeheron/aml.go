@@ -43,8 +43,9 @@ func SummarizeAmlRiskLevel(amlList []AmlReport) string {
 	hasPending := false
 	hasFailed := false
 	hasSkipped := false
+	hasCompleted := false
 	maxSev := 0
-	maxLevel := AmlRiskLow
+	maxLevel := AmlRiskUnknown
 
 	for _, r := range amlList {
 		switch r.Status {
@@ -55,6 +56,7 @@ func SummarizeAmlRiskLevel(amlList []AmlReport) string {
 		case "SKIPPED":
 			hasSkipped = true
 		case "COMPLETED":
+			hasCompleted = true
 			sev := amlRiskSeverity(r.RiskLevel)
 			if sev > maxSev {
 				maxSev = sev
@@ -71,6 +73,9 @@ func SummarizeAmlRiskLevel(amlList []AmlReport) string {
 	}
 	if hasSkipped {
 		return AmlRiskSkipped
+	}
+	if !hasCompleted {
+		return AmlRiskUnknown
 	}
 	return maxLevel
 }

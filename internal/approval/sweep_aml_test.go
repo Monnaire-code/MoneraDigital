@@ -152,6 +152,14 @@ func TestDecideSweepAML(t *testing.T) {
 			wantRiskLevel: "STATE_WEIRD_VALUE",
 			wantReason:    "SWEEP_AML_STATE_WEIRD_VALUE",
 		},
+		{
+			name:          "triggered_unrecognized_aml_status_rejects",
+			state:         "TRIGGERED",
+			amlListRaw:    `[{"provider":"X","status":"PROCESSING","riskLevel":""}]`,
+			wantApprove:   false,
+			wantRiskLevel: "UNKNOWN",
+			wantReason:    "SWEEP_AML_RISK_UNKNOWN",
+		},
 	}
 
 	for _, tt := range tests {

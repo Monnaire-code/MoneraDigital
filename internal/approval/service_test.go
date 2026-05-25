@@ -251,6 +251,30 @@ func TestServiceEvaluate_Idempotent(t *testing.T) {
 	}
 }
 
+func TestServiceEvaluate_Idempotent_PreservesAmlRiskLevel(t *testing.T) {
+	repo := &mockRepo{
+		insertApprovalErr: ErrDuplicateApproval,
+		getApprovalResult: &ApprovalRecord{
+			ApprovalID:   "ap-aml",
+			Action:       "REJECT",
+			Reason:       "AUTO_SWEEP rejected: SWEEP_AML_RISK_HIGH (risk=HIGH)",
+			AmlRiskLevel: "HIGH",
+		},
+	}
+	txA := NewTransactionApprover(newTestConfig(), newTestRegistry())
+	svc := NewApprovalService(repo, txA, nil)
+
+	biz := makeBizWithAML("AUTO_SWEEP", "VAULT_ACCOUNT", "acct-main", "TRIGGERED",
+		json.RawMessage(`[{"status":"COMPLETED","riskLevel":"HIGH"}]`))
+	dec, err := svc.Evaluate(context.Background(), biz)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.AmlRiskLevel != "HIGH" {
+		t.Errorf("idempotent AmlRiskLevel = %q, want HIGH", dec.AmlRiskLevel)
+	}
+}
+
 func TestServiceEvaluate_Idempotent_LookupFails(t *testing.T) {
 	repo := &mockRepo{
 		insertApprovalErr: ErrDuplicateApproval,

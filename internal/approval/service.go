@@ -144,8 +144,9 @@ func (s *ApprovalService) handleIdempotent(ctx context.Context, approvalID strin
 	}
 	log.Printf("[approval] idempotent hit for approvalId=%s, returning previous action=%s", approvalID, existing.Action)
 	return &ApprovalDecision{
-		Action: existing.Action,
-		Reason: existing.Reason,
+		Action:       existing.Action,
+		Reason:       existing.Reason,
+		AmlRiskLevel: existing.AmlRiskLevel,
 	}, nil
 }
 

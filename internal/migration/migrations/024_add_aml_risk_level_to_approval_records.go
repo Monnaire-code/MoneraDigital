@@ -21,7 +21,7 @@ func (m *AddAmlRiskLevelToApprovalRecords) Description() string {
 func (m *AddAmlRiskLevelToApprovalRecords) Up(db *sql.DB) error {
 	_, err := db.Exec(`
 		ALTER TABLE approval_records
-			ADD COLUMN IF NOT EXISTS aml_risk_level VARCHAR(16);
+			ADD COLUMN IF NOT EXISTS aml_risk_level VARCHAR(32);
 
 		CREATE INDEX IF NOT EXISTS idx_approval_records_aml_risk
 			ON approval_records(aml_risk_level);
