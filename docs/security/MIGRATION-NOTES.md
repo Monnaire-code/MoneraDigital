@@ -114,13 +114,16 @@ DATABASE_URL="..." go run ./cmd/migrate
 Expected behavior on a production database that was applied by hand
 without ever writing to `migrations`:
 
-- **001-005, 007-016** should all show as "pending". Running the
-  migrator applies them. The DDL uses `IF NOT EXISTS` / `IF NOT
+- **001-005, 007-016, 046-049** should all show as "pending". Running
+  the migrator applies them. The DDL uses `IF NOT EXISTS` / `IF NOT
   EXISTS` on every relevant clause, so the apply is safe on a
   production DB that already has these tables/columns.
 
   In particular:
-  - **016** does data-seeding for `fund_reports` and
+  - **016** (AccountFrozenBalanceDefault) adds a DEFAULT to
+    `accounts.frozen_balance`. Idempotent — re-running is a no-op.
+  - **049** (CreateFundReports, formerly 016 in the pre-merge
+    working tree) does data-seeding for `fund_reports` and
     `fund_asset_allocations`. Re-running the migrator will not
     re-seed (it uses `ON CONFLICT (report_date) DO NOTHING` /
     `ON CONFLICT (report_id, category) DO NOTHING`).
@@ -198,3 +201,90 @@ loosen the directory invariant.
   is sqlmock-based (see `safeheron_migrations_test.go`). For 046, the
   DDL is verified by `go run ./cmd/migrate` against a real DB. A
   follow-up PR can add sqlmock tests if the team prefers that style.
+
+## 8. Origin/main merge reconciliation (2026-06-06)
+
+This handbook was originally written before the local main was pulled
+against origin/main, which had 15 additional commits. Those commits
+included a hotfix migration registered as version **016** (the
+`AccountFrozenBalanceDefault` first-deposit fix from commit `240f7c6`).
+That collides with the `CreateFundReports` migration that was sitting
+untracked in the local working tree as `016_create_fund_reports.go`.
+
+**Resolution: keep both migrations, renumber the create-fund_reports
+migration from 016 to 049.**
+
+### 8.1 What changed in the local file layout
+
+- `internal/migration/migrations/016_create_fund_reports.go` (untracked)
+  → renamed to `internal/migration/migrations/049_create_fund_reports.go`
+  (now tracked). The `Version()` method returns `"049"` instead of
+  `"016"`. The `Description()` string was updated to note the rename.
+  The Up()/Down() bodies are byte-identical.
+- `internal/migration/migrations/016_account_frozen_balance_default.go`
+  (new from origin) is now the slot-016 owner. Registered in
+  `cmd/migrate/main.go` immediately after `SafeheronPhase1` (015).
+- `registerMigrations()` in `cmd/migrate/main.go` now registers 19
+  migrations (was 18): the 16 from C-2 + AccountFrozenBalanceDefault
+  (016, from origin) + the renamed CreateFundReports (049).
+- `migrations_test.go::TestMigrationOrder` has 19 entries with the
+  new ordering: 001-005, 007-015, 016, 046, 047, 048, 049.
+
+### 8.2 What changed in the db-promote tooling
+
+The `scripts/db-promote/` toolkit previously targeted migration 016
+as "the fund_reports migration", which was the untracked local file.
+After the rename, the toolkit targets 049:
+
+- `inspector/main.go::migrationVersion` constant: `"016"` → `"049"`.
+  All preflight/verify/rollback/info subcommands use this constant,
+  so they now target the renamed migration.
+- `inspector/main.go` now also registers
+  `migrations.AccountFrozenBalanceDefault` in its apply list. Without
+  this, the 016 hotfix would not be applied when an operator runs
+  `02-promote.sh` on a fresh DB.
+- All five shell scripts (`01-preflight.sh`, `02-promote.sh`,
+  `03-verify.sh`, `04-rollback.sh`, `05-snapshot.sh`) had their
+  header comments and `echo` strings updated from "016" to "049".
+- The two print statements in preflight that hardcoded "migration
+  016" / "016 not yet applied" now use `fmt.Printf("...%s...", migrationVersion)`.
+
+### 8.3 Operator impact
+
+A `02-promote.sh` run on a fresh DB now applies 19 migrations instead
+of 18. The two new behaviours to be aware of:
+
+1. **`016_account_frozen_balance_default` adds a DEFAULT to
+   `accounts.frozen_balance`.** The migration uses `ADD COLUMN
+   ... DEFAULT ...` semantics. If the column already exists without
+   a DEFAULT (the prod state before this deploy), the migration
+   drops the NOT NULL and re-adds the column with the DEFAULT — this
+   is intentional from the origin dev branch and matches the
+   `ce7a6a9 fix: FindOrCreateAccountForUpdate 缺少 frozen_balance
+   导致入账失败` fix.
+2. **`049_create_fund_reports` creates the `fund_reports` and
+   `fund_asset_allocations` tables** (and seeds 5 monthly rows + the
+   May 2026 allocation snapshot). This was previously "migration 016"
+   in the local pre-merge working tree. If your DB has the
+   `fund_reports` table already (because someone ran the untracked
+   file manually with psql), the migration's `CREATE TABLE IF NOT
+   EXISTS` is a no-op and the `INSERT ... ON CONFLICT DO NOTHING`
+   won't double-seed.
+
+### 8.4 What does NOT change
+
+- The order in which the migrator applies migrations (still
+  version-sorted).
+- The C-1/C-2/H-1/H-2/404 fix code (those are independent of this
+  renumbering).
+- The reversibility table in PRODUCTION-DEPLOY-2026-06-05.md §9.1
+  (still accurate: 049 is the only "soft-reversible" migration via
+  `04-rollback.sh`; 047 is the only truly-irreversible one; everything
+  else is idempotent re-run).
+- The 404 fix's pre-condition: `/api/fund/stats` returns 404 on
+  pre-migration DBs and 200 on post-049 DBs. The fix is at the
+  repository layer (`isUndefinedTable` translating 42P01 to
+  `ErrFundNotFound`); the migration's version number is irrelevant
+  to that mapping.
+
+## 9. Open follow-ups (not blocking C-2 close)

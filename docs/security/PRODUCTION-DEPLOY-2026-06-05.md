@@ -205,7 +205,7 @@ production has never had any Go-migrator-applied migration recorded.
 # .env needs updating BEFORE you continue.
 DATABASE_URL="$(grep ^DATABASE_URL= .env | head -1 | sed 's/^DATABASE_URL=//' | sed "s/^'//" | sed "s/'$//")" \
   /tmp/monera-migrate -dry-run
-# 预期: 18 行 pending (001-005, 007-016, 046, 047, 048)
+# 预期: 19 行 pending (001-005, 007-016, 046-049)
 #       exit 0
 
 # 如果这一步 auth 失败: 你说的"已轮换"是真的, .env 没更新.
@@ -242,14 +242,14 @@ bash scripts/db-promote/01-preflight.sh
 ```bash
 bash scripts/db-promote/02-promote.sh
 # Type 'yes' to confirm.
-# 预期: 18 个 migration 跑完
-#       包括创建 18 个表 + 016 种子 fund_reports (5 行) + 种子 fund_asset_allocations (4 行)
+# 预期: 19 个 migration 跑完
+#       包括创建 19 个表 + 016 加 DEFAULT 到 accounts.frozen_balance + 049 种子 fund_reports (5 行) + 种子 fund_asset_allocations (4 行)
 
 # 关键中间检查 (手工):
 # 1. 看输出 log，应该没有 ERROR/FAIL
 # 2. 看 migrations 表:
 psql "$STAGING_DSN" -c "SELECT version, name, executed_at FROM migrations ORDER BY version"
-# 预期: 18 行, version 001-005, 007-016, 046, 047, 048
+# 预期: 19 行, version 001-005, 007-016, 046-049
 ```
 
 ### 3.3 Staging pre-check verification
@@ -260,7 +260,8 @@ psql "$STAGING_DSN" -c "SELECT version, name, executed_at FROM migrations ORDER 
 |---|---|---|---|
 | 047 (H-1) | `WHERE amount !~ '^-?[0-9]+(\.[0-9]+)?$'` | `H-1: cannot migrate deposits.amount — N rows are not numeric literals` | `SELECT id, amount FROM deposits WHERE amount !~ '^-?[0-9]+(\.[0-9]+)?$' LIMIT 50;` 手动修复（见 H1-H2-NOTES §4） |
 | 048 (H-2) | orphan check on 3 FK | `H-2: cannot add FK — N withdrawal_verification rows have no matching withdrawal_order` | 找出 orphan, 决定保留/删除（见 H1-H2-NOTES §4） |
-| 016 (fund_reports) | none (DML with `ON CONFLICT DO NOTHING` only) | 不会在 pre-check 失败 | — |
+| 016 (AccountFrozenBalanceDefault) | none (idempotent ADD COLUMN DEFAULT) | 不会在 pre-check 失败 | — |
+| 049 (fund_reports) | none (DML with `ON CONFLICT DO NOTHING` only) | 不会在 pre-check 失败 | — |
 
 如果 pre-check 成功, 跑下一步。
 
@@ -316,7 +317,7 @@ ls -la /tmp/prod-*.sql /tmp/prod-*.dump 2>/dev/null
 
 ```bash
 bash scripts/db-promote/01-preflight.sh
-# 预期: PASS (info: 016 not yet applied)
+# 预期: PASS (info: 049 not yet applied)
 ```
 
 如果 preflight fail, **STOP, 不继续**。 看输出找原因。
@@ -668,21 +669,23 @@ git commit -m "test pre-commit hook"
 发现 staging 验证某些东西坏了:
 
 ```bash
-# Option A: 回滚整个 016 (drop 两个 fund 表 + unregister migration)
+# Option A: 回滚整个 049 (drop 两个 fund 表 + unregister migration)
 # 这是 db-promote 工具能回滚的. 它会:
 #   DROP TABLE fund_asset_allocations;
 #   DROP TABLE fund_reports;
-#   DELETE FROM migrations WHERE version = '016';
+#   DELETE FROM migrations WHERE version = '049';
 CONFIRM_ROLLBACK=yes bash scripts/db-promote/04-rollback.sh
 #   Type 'rollback' to confirm
 ```
 
-**重要**: 04-rollback.sh **只** 滚 016. 001-015, 046, 047, 048 不在它
-的 scope 里. 可逆性表:
+**重要**: 04-rollback.sh **只** 滚 049 (fund_reports + fund_asset_allocations).
+001-015, 016 (AccountFrozenBalanceDefault), 046, 047, 048 不在它的 scope 里.
+可逆性表:
 
 | Migration | 可逆? | 怎么回滚 |
 |---|---|---|
-| 016 (fund_reports + fund_asset_allocations) | **是** | `04-rollback.sh` |
+| 049 (fund_reports + fund_asset_allocations) | **是** | `04-rollback.sh` |
+| 016 (AccountFrozenBalanceDefault) | **是** (ADD COLUMN DEFAULT 是 idempotent, no-op) | 重跑 `02-promote.sh` 是 idempotent |
 | 001-015 (其他) | **是** (大多是 IF NOT EXISTS, 跑一次已经是 no-op) | 重跑 `02-promote.sh` 是 idempotent |
 | 046 (PENDING status + activation cols + rate_limits) | **是** (全 IF NOT EXISTS, no-op) | 同上 |
 | 047 (deposits.amount, coin_chains.min_deposit_amount → NUMERIC) | **❌ 否** (Down 显式拒绝, "intended to be a no-op" 注释) | 必须用 `pg_dump` 备份恢复 (见下) |

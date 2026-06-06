@@ -3,34 +3,73 @@
 # Monera Digital - 生产部署脚本（在生产服务器上执行）
 #
 # 用法:
-#   bash scripts/deploy.sh [--skip-build] [--skip-migrate]
+#   ./deploy.sh              全量部署（编译→停服→迁移→启动）
+#   ./deploy.sh build        仅编译+备份，不停服不部署
+#   ./deploy.sh deploy       跳过编译，用已有 binary 部署（搭配 build 使用）
+#   ./deploy.sh stop         停止服务
+#   ./deploy.sh start        启动服务
+#   ./deploy.sh restart      重启服务
+#   ./deploy.sh --skip-migrate  跳过数据库迁移
 #
 # 前提：
-#   - 在源码目录（含 go.mod）执行
+#   - 在源码目录（含 go.mod）执行（build/deploy 时）
 #   - /home/ec2-user/monera/.env 已配置
 #   - ec2-user 有 sudo 权限（用于 systemctl）
-#   - 服务器已安装 Go（版本需匹配 go.mod）
+#   - 服务器已安装 Go（版本需匹配 go.mod，build 时）
 # =============================================================================
 
 set -e
 
+SERVICE_NAME="monera-digital"
+
+# stop/start/restart 直接执行，不需要 go.mod 等预检
+case "${1:-}" in
+    stop)
+        sudo systemctl stop "${SERVICE_NAME}"
+        echo "✓ ${SERVICE_NAME} 已停止"
+        exit 0
+        ;;
+    start)
+        sudo systemctl start "${SERVICE_NAME}"
+        echo "✓ ${SERVICE_NAME} 已启动"
+        exit 0
+        ;;
+    restart)
+        sudo systemctl restart "${SERVICE_NAME}"
+        echo "✓ ${SERVICE_NAME} 已重启"
+        exit 0
+        ;;
+esac
+
 SKIP_BUILD=false
 SKIP_MIGRATE=false
+BUILD_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --skip-build)   SKIP_BUILD=true; shift ;;
+        build)          BUILD_ONLY=true; shift ;;
+        deploy)         SKIP_BUILD=true; shift ;;
         --skip-migrate) SKIP_MIGRATE=true; shift ;;
-        --help|-h)
-            echo "用法: bash scripts/deploy.sh [--skip-build] [--skip-migrate]"
+        --help|-h|help)
+            echo "用法: ./deploy.sh [command] [options]"
+            echo ""
+            echo "Commands:"
+            echo "  (无)      全量部署（编译→停服→迁移→启动）"
+            echo "  build     仅编译+备份，不停服不部署"
+            echo "  deploy    跳过编译，用已有 binary 部署"
+            echo "  stop      停止服务"
+            echo "  start     启动服务"
+            echo "  restart   重启服务"
+            echo ""
+            echo "Options:"
+            echo "  --skip-migrate  跳过数据库迁移"
             exit 0
             ;;
-        *) echo "未知参数: $1"; exit 1 ;;
+        *) echo "未知参数: $1（./deploy.sh help 查看用法）"; exit 1 ;;
     esac
 done
 
 APP_DIR="/home/ec2-user/monera"
-SERVICE_NAME="monera-digital"
 BINARY_NAME="server"
 MIGRATE_NAME="monera-migrate"
 
@@ -46,10 +85,10 @@ if [ ! -f "${APP_DIR}/.env" ]; then
 fi
 chmod 600 "${APP_DIR}/.env"
 
-# --skip-build 时确认 binary 已存在
+# deploy 模式时确认 binary 已存在
 if [ "$SKIP_BUILD" = true ]; then
     if [ ! -x "${APP_DIR}/${BINARY_NAME}" ]; then
-        echo "FATAL: --skip-build 指定但 ${APP_DIR}/${BINARY_NAME} 不存在，请先完整部署一次。"
+        echo "FATAL: deploy 模式但 ${APP_DIR}/${BINARY_NAME} 不存在，请先执行 ./deploy.sh build"
         exit 1
     fi
 fi
@@ -88,7 +127,19 @@ if [ "$SKIP_BUILD" = false ]; then
         go build -ldflags="-s -w" -o "${MIGRATE_NAME}" ./cmd/migrate/
     echo "  编译完成: ${BINARY_NAME}, ${MIGRATE_NAME}"
 else
-    echo "[2/6] 跳过编译（--skip-build）"
+    echo "[2/6] 跳过编译（deploy 模式）"
+fi
+
+# build 模式：仅编译+备份，不停服不部署
+if [ "$BUILD_ONLY" = true ]; then
+    echo ""
+    echo "=============================================="
+    echo "  编译完成（build 模式，服务未受影响）"
+    echo "  新 binary:  $(pwd)/${BINARY_NAME}"
+    echo "  备份:       ${APP_DIR}/${BINARY_NAME}.bak"
+    echo "  下次部署:   ./deploy.sh deploy"
+    echo "=============================================="
+    exit 0
 fi
 
 # -----------------------------------------------------------------------------

@@ -131,10 +131,11 @@ func TestMigrationOrder(t *testing.T) {
 		{"AddFrozenUntilToWhitelist", "013"},
 		{"AddEmailVerifiedStatusAndContactFields", "014"},
 		{"SafeheronPhase1", "015"},
-		{"CreateFundReports", "016"},
+		{"AccountFrozenBalanceDefault", "016"},
 		{"AddPendingStatusAndActivationFields", "046"},
 		{"NormalizeAmountTypes", "047"},
 		{"AddMissingForeignKeys", "048"},
+		{"CreateFundReports", "049"},
 	}
 
 	seen := make(map[string]bool, len(migrations))

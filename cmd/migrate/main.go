@@ -97,6 +97,7 @@ func registerMigrations(m *migration.Migrator) {
 	m.Register(&migrations.AddFrozenUntilToWhitelist{})
 	m.Register(&migrations.AddEmailVerifiedStatusAndContactFields{})
 	m.Register(&migrations.SafeheronPhase1{})
+	m.Register(&migrations.AccountFrozenBalanceDefault{})
 	m.Register(&migrations.CreateFundReports{})
 	m.Register(&migrations.AddPendingStatusAndActivationFields{})
 	m.Register(&migrations.NormalizeAmountTypes{})
