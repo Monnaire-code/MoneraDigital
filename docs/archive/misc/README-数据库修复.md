@@ -1,3 +1,17 @@
+<!--
+  SECURITY NOTICE — Redaction applied 2026-06-05 per audit C-1.
+  This document previously embedded the production Neon database
+  connection string (owner role + password + host). Those values have
+  been redacted because the password was rotated in response to
+  historical exposure in git history and source commits.
+
+  If you need the live values, retrieve them from your local .env
+  (DATABASE_URL) or the deployment secret store. Do NOT re-introduce
+  the literal values into this or any other tracked file — they will
+  re-leak the new password on the next commit.
+  See docs/security/ROTATION_RUNBOOK.md for the full rotation procedure.
+-->
+
 # 🚀 Neon 数据库问题 - 5分钟快速修复指南
 
 **时间**: 2026-01-09
@@ -93,7 +107,7 @@ curl -X POST http://localhost:3000/api/auth/register \
 
 ### 方法 3️⃣：连接 Neon 检查表
 ```bash
-psql "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+psql "postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require"
 ```
 
 **在 psql 中执行**:
@@ -117,7 +131,7 @@ SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public';
 cat .env | grep DATABASE_URL
 
 # 如果没有，手动设置：
-export DATABASE_URL="postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+export DATABASE_URL="postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require"
 
 # 再试
 npx drizzle-kit generate:pg
@@ -131,7 +145,7 @@ npx drizzle-kit generate:pg
 # https://console.neon.tech/app/projects
 
 # 或使用 psql 测试
-psql "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+psql "postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require"
 ```
 
 ### ❌ 错误：`drizzle/ 目录不存在`

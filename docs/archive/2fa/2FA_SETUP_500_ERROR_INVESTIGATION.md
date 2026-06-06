@@ -1,3 +1,17 @@
+<!--
+  SECURITY NOTICE — Redaction applied 2026-06-05 per audit C-1.
+  This document previously embedded the production Neon database
+  connection string (owner role + password + host). Those values have
+  been redacted because the password was rotated in response to
+  historical exposure in git history and source commits.
+
+  If you need the live values, retrieve them from your local .env
+  (DATABASE_URL) or the deployment secret store. Do NOT re-introduce
+  the literal values into this or any other tracked file — they will
+  re-leak the new password on the next commit.
+  See docs/security/ROTATION_RUNBOOK.md for the full rotation procedure.
+-->
+
 # 2FA Setup 500 Error - Comprehensive Investigation Report
 
 **Date:** 2026-01-26
@@ -178,7 +192,7 @@ All 2FA endpoints have this issue because they all use the service layer:
 
 **Local `.env` file:**
 ```bash
-DATABASE_URL='postgresql://neondb_owner:npg_4zuq7JQNWFDB@...'
+DATABASE_URL='postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@...'
 ENCRYPTION_KEY=c70c58a23fd8ab7b80e654cb3dafa371b47949991e6fc5721b33704984c4e016
 JWT_SECRET=8d246099bbf727a8f5291c56dd84056445a35ab66aab626cb116a70ad7af7cb3
 ```
@@ -258,7 +272,7 @@ This would be the actual error chain:
 
    | Variable | Value | Notes |
    |----------|-------|-------|
-   | `DATABASE_URL` | `postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-weathered-mouse-adjd3txp-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require` | Same as local `.env` |
+   | `DATABASE_URL` | `postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require&channel_binding=require` | Same as local `.env` |
    | `ENCRYPTION_KEY` | `c70c58a23fd8ab7b80e654cb3dafa371b47949991e6fc5721b33704984c4e016` | Same as local `.env` |
    | `JWT_SECRET` | `8d246099bbf727a8f5291c56dd84056445a35ab66aab626cb116a70ad7af7cb3` | Same as local `.env` |
 

@@ -4,12 +4,29 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	dsn := "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+	// C-1 fix: env-driven DSN, no fallback. See docs/security/ROTATION_RUNBOOK.md.
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
+	}
+
+	if os.Getenv("APP_ENV") == "production" {
+		log.Fatal("BLOCKED: cmd/add_balance mutates user account balances. It must not run against production. " +
+			"Unset APP_ENV or set APP_ENV=local/development/test.")
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("DATABASE_URL environment variable is required. " +
+			"Set it in .env (copy from .env.example) or pass it inline: " +
+			`DATABASE_URL="postgresql://user:pass@host:port/db?sslmode=require" go run ./cmd/add_balance`)
+	}
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {

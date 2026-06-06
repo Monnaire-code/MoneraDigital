@@ -1,3 +1,13 @@
+<!--
+  SECURITY NOTICE — Redaction applied 2026-06-05 per audit C-1.
+  This document previously embedded a production Neon database
+  connection string (owner role + password + host) and a
+  leaked JWT_SECRET / ENCRYPTION_KEY. Those values have been
+  redacted because the password was rotated in response to
+  historical exposure in git history and source commits.
+  See docs/security/ROTATION_RUNBOOK.md.
+-->
+
 # OpenSpec: Fix 2FA Setup 500 Error in Production
 
 **Date:** 2026-01-26
@@ -50,11 +60,11 @@ Without these variables, the TwoFactorService cannot initialize the database con
 - **Environment:** Production
 
 ```
-DATABASE_URL=postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-weathered-mouse-adjd3txp-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+DATABASE_URL=postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require&channel_binding=require
 
-ENCRYPTION_KEY=c70c58a23fd8ab7b80e654cb3dafa371b47949991e6fc5721b33704984c4e016
+ENCRYPTION_KEY=[REDACTED-SECRET-KEY]
 
-JWT_SECRET=8d246099bbf727a8f5291c56dd84056445a35ab66aab626cb116a70ad7af7cb3
+JWT_SECRET=[REDACTED-SECRET-KEY]
 ```
 
 **How to:**
@@ -220,7 +230,7 @@ While this fix is immediate and low-risk, consider these improvements:
 
 | Variable | Purpose | Source | Example |
 |----------|---------|--------|---------|
-| `DATABASE_URL` | PostgreSQL connection | Neon dashboard | `postgresql://neondb_owner:...` |
+| `DATABASE_URL` | PostgreSQL connection | Neon dashboard | `postgresql://[REDACTED-DB-USER]:...` |
 | `ENCRYPTION_KEY` | AES-256-GCM key (32 bytes hex) | Local .env | `c70c58a23fd8ab7b...` |
 | `JWT_SECRET` | JWT signing key (32+ bytes) | Local .env | `8d246099bbf727a8...` |
 | `BACKEND_URL` | Go backend URL | Already set | `https://monera-digital--...` |

@@ -1,8 +1,15 @@
+<!--
+  SECURITY NOTICE — Redaction applied 2026-06-05 per audit C-1.
+  This document previously named the production Neon project
+  pooler hostname, which identifies the underlying Neon project.
+  It has been redacted. See docs/security/ROTATION_RUNBOOK.md.
+-->
+
 # Monera Digital 定期理财模块测试报告
 
 **测试日期**: 2026-02-06  
 **测试环境**: Neon PostgreSQL (生产数据库)  
-**数据库**: ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb
+**数据库**: [REDACTED-NEON-HOST]/neondb
 
 ---
 

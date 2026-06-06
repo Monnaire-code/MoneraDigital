@@ -1,3 +1,17 @@
+<!--
+  SECURITY NOTICE — Redaction applied 2026-06-05 per audit C-1.
+  This document previously embedded the production Neon database
+  connection string (owner role + password + host). Those values have
+  been redacted because the password was rotated in response to
+  historical exposure in git history and source commits.
+
+  If you need the live values, retrieve them from your local .env
+  (DATABASE_URL) or the deployment secret store. Do NOT re-introduce
+  the literal values into this or any other tracked file — they will
+  re-leak the new password on the next commit.
+  See docs/security/ROTATION_RUNBOOK.md for the full rotation procedure.
+-->
+
 # 用户认证表设计与 Neon 数据库分析报告
 
 **分析日期**: 2026-01-09
@@ -254,7 +268,7 @@ export const withdrawals = pgTable('withdrawals', {
 **文件位置**: `.env`
 
 ```env
-DATABASE_URL="postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+DATABASE_URL="postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require"
 ```
 
 **配置解析**:
@@ -263,9 +277,9 @@ DATABASE_URL="postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-
 |--------|-----|------|
 | **数据库系统** | PostgreSQL | 关系型数据库 |
 | **服务商** | Neon (AWS) | 无服务器 PostgreSQL |
-| **用户** | neondb_owner | 数据库所有者 |
-| **密码** | npg_4zuq7JQNWFDB | 连接密码 |
-| **主机** | ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech | Pooler 连接端点 |
+| **用户** | [REDACTED-DB-USER] | 数据库所有者 |
+| **密码** | [REDACTED-DB-PASSWORD] | 连接密码 |
+| **主机** | [REDACTED-NEON-HOST] | Pooler 连接端点 |
 | **数据库名** | neondb | 项目数据库 |
 | **地区** | us-east-1 | AWS 美东地区 |
 | **SSL 模式** | require | 必须使用 SSL 加密连接 |
