@@ -296,6 +296,12 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	// 初始化缓存
 	c.TokenBlacklist = cache.NewTokenBlacklist()
 	c.RateLimiter = middleware.NewRateLimiter(5, 60*time.Second)
+	// L2: exempt /api/fund/stats from the global limiter. The FundService
+	// in-memory cache (L1) already collapses N concurrent homepage
+	// fetches into 1 repo roundtrip; putting a 5/min/IP limiter in
+	// front of a public read endpoint is what produced the
+	// "too many requests" symptom on the homepage.
+	c.RateLimiter.SkipPath("/api/fund/stats")
 
 	// 初始化 Core API 客户端
 	coreAPIURL := os.Getenv("MONNAIRE_CORE_API_URL")

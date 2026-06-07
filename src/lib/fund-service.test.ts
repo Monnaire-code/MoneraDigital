@@ -147,6 +147,11 @@ describe("parseFundStats", () => {
 describe("FundService.getStats", () => {
   beforeEach(() => {
     vi.spyOn(global, "fetch").mockReset();
+    // L3: clear sessionStorage so prior tests' cached payloads don't
+    // short-circuit subsequent tests in this block.
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.clear();
+    }
   });
 
   afterEach(() => {
@@ -242,6 +247,141 @@ describe("FundService.getStats", () => {
       const data = await FundService.getStats();
       expect(data.current.totalAum).toBe(14820125.94);
       expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // L3: sessionStorage cache + stale-while-revalidate.
+  // Frontend defence in depth on top of the Go backend's in-memory
+  // cache (L1) and rate-limit whitelist (L2). Keeps homepage navigation
+  // snappy and removes the "too many requests" blast radius if a user
+  // hammers refresh in the same tab.
+  describe("sessionStorage cache (L3)", () => {
+    beforeEach(() => {
+      sessionStorage.clear();
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-01T12:00:00Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      sessionStorage.clear();
+    });
+
+    it("populates sessionStorage on first successful fetch", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(buildValidPayload()),
+      });
+
+      const data = await FundService.getStats();
+      expect(data.current.totalAum).toBe(14820125.94);
+
+      const raw = sessionStorage.getItem("fund:stats:v1");
+      expect(raw).not.toBeNull();
+      const entry = JSON.parse(raw!);
+      expect(entry.data.current.totalAum).toBe(14820125.94);
+      expect(typeof entry.ts).toBe("number");
+    });
+
+    it("serves from cache within 30s — no network call", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(buildValidPayload()),
+      });
+
+      await FundService.getStats(); // populates cache
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(new Date("2026-06-01T12:00:25Z")); // 25s later, still inside TTL
+
+      const data = await FundService.getStats();
+      expect(data.current.totalAum).toBe(14820125.94);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("fetches fresh from network after 30s TTL expires", async () => {
+      global.fetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(
+              buildValidPayload({
+                data: {
+                  current: {
+                    reportDate: "2026-05",
+                    totalAum: 1000,
+                    actualApy: 0.1,
+                    weightedApy: 0.2,
+                    monthGrowth: 0.05,
+                    newCapital: 100,
+                  },
+                },
+              })
+            ),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(
+              buildValidPayload({
+                data: {
+                  current: {
+                    reportDate: "2026-05",
+                    totalAum: 2000,
+                    actualApy: 0.1,
+                    weightedApy: 0.2,
+                    monthGrowth: 0.05,
+                    newCapital: 100,
+                  },
+                },
+              })
+            ),
+        });
+
+      const first = await FundService.getStats();
+      expect(first.current.totalAum).toBe(1000);
+
+      vi.setSystemTime(new Date("2026-06-01T12:00:31Z")); // 31s later, past TTL
+
+      const second = await FundService.getStats();
+      expect(second.current.totalAum).toBe(2000);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not pollute cache on error — next call retries", async () => {
+      global.fetch = vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError("network down"))
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(buildValidPayload()),
+        });
+
+      await expect(FundService.getStats()).rejects.toThrow("network down");
+      expect(sessionStorage.getItem("fund:stats:v1")).toBeNull();
+
+      const data = await FundService.getStats();
+      expect(data.current.totalAum).toBe(14820125.94);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("survives corrupted sessionStorage payload", async () => {
+      sessionStorage.setItem("fund:stats:v1", "{not valid json");
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(buildValidPayload()),
+      });
+
+      const data = await FundService.getStats();
+      expect(data.current.totalAum).toBe(14820125.94);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -1,5 +1,54 @@
 import logger from "./logger.js";
 
+// L3: sessionStorage cache for the homepage fund stats widget. 30s TTL
+// is the frontend defence in depth on top of the Go backend's
+// in-memory cache (L1) and the rate-limit whitelist (L2). Serves
+// snappy results on every tab navigation / refresh without ever
+// crossing the network in the steady state, and uses
+// stale-while-revalidate so the cache is pre-warmed for the next
+// caller.
+const FUND_STATS_CACHE_KEY = "fund:stats:v1";
+const FUND_STATS_CACHE_TTL_MS = 30_000;
+
+interface FundStatsCacheEntry {
+  ts: number;
+  data: FundStatsData;
+}
+
+function readCache(): FundStatsCacheEntry | null {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(FUND_STATS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as FundStatsCacheEntry;
+    if (typeof parsed?.ts !== "number" || !parsed.data) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(data: FundStatsData): void {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    const entry: FundStatsCacheEntry = { ts: Date.now(), data };
+    sessionStorage.setItem(FUND_STATS_CACHE_KEY, JSON.stringify(entry));
+  } catch {
+    // Quota exceeded / storage disabled — silently degrade. The
+    // in-memory `inFlight` dedup and the backend cache still hold
+    // the line; this layer is a best-effort optimisation.
+  }
+}
+
+function clearCache(): void {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.removeItem(FUND_STATS_CACHE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export interface FundCurrentMetrics {
   reportDate: string;
   totalAum: number;
@@ -112,6 +161,22 @@ let inFlight: Promise<FundStatsData> | null = null;
 
 export class FundService {
   static async getStats(): Promise<FundStatsData> {
+    // L3: fresh sessionStorage hit → return cached data immediately.
+    // This is the frontend defence in depth on top of the Go backend's
+    // in-memory cache (L1) and rate-limit whitelist (L2). Keeps
+    // homepage navigation snappy and removes the "too many requests"
+    // blast radius if a user hammers refresh in the same tab.
+    const cached = readCache();
+    if (cached && Date.now() - cached.ts < FUND_STATS_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
+    return FundService.fetchAndCache();
+  }
+
+  // fetchAndCache is the cold path: hit the network, write the cache
+  // on success, clear the cache on failure so the next call retries.
+  private static async fetchAndCache(): Promise<FundStatsData> {
     // C1: dedup concurrent callers onto a single in-flight request.
     // Rejected promises are not cached so subsequent calls retry.
     if (inFlight) {
@@ -139,7 +204,15 @@ export class FundService {
           throw new Error(msg);
         }
 
-        return parseFundStats(payload);
+        const data = parseFundStats(payload);
+        writeCache(data);
+        return data;
+      } catch (err) {
+        // Do not leave a stale entry lying around if a refresh fails.
+        // A transient failure should not lock the next caller into
+        // serving a 30s-old value.
+        clearCache();
+        throw err;
       } finally {
         inFlight = null;
       }

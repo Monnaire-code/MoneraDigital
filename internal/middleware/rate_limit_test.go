@@ -2,8 +2,12 @@
 package middleware
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // B1 regression: the previous call site used `NewRateLimiter(5, 60)` where
@@ -91,5 +95,91 @@ func TestRateLimiter_DefaultWindowIsSubSecond_NoLonger(t *testing.T) {
 	}
 	if elapsed > 100*time.Millisecond {
 		t.Fatalf("1000 IsAllowed calls should be fast; took %s", elapsed)
+	}
+}
+
+// L2: whitelisted paths must bypass the limiter entirely. The homepage
+// /api/fund/stats public read endpoint is exactly this case: a 60s
+// in-memory cache (L1) is the primary fix, but the limiter should
+// never even see the request — otherwise a misconfigured cache TTL or
+// a route that forgets to wrap the cache would put us right back at
+// "too many requests" for any user refreshing the homepage.
+func TestRateLimitMiddleware_WhitelistedPathBypassesLimiter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rl := NewRateLimiter(2, 60*time.Second)
+	defer rl.Stop()
+	rl.SkipPath("/api/fund/stats")
+
+	r := gin.New()
+	r.Use(RateLimitMiddleware(rl))
+	r.GET("/api/fund/stats", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+
+	// Hit the whitelisted path 10 times in a row — every request must
+	// pass through, even though the limiter is configured for 2/60s.
+	for i := 1; i <= 10; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/fund/stats", nil)
+		req.RemoteAddr = "203.0.113.7:1234"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("whitelisted request %d should be 200, got %d", i, w.Code)
+		}
+	}
+}
+
+// L2: non-whitelisted paths must still be limited. Guards against
+// accidentally whitelisting everything via a sloppy config.
+func TestRateLimitMiddleware_NonWhitelistedPathStillLimited(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rl := NewRateLimiter(2, 60*time.Second)
+	defer rl.Stop()
+	rl.SkipPath("/api/fund/stats")
+
+	r := gin.New()
+	r.Use(RateLimitMiddleware(rl))
+	r.GET("/api/auth/login", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+
+	for i := 1; i <= 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/auth/login", nil)
+		req.RemoteAddr = "203.0.113.8:1234"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("non-whitelisted request %d should be 200, got %d", i, w.Code)
+		}
+	}
+
+	// 3rd request from same IP — must hit 429.
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/login", nil)
+	req.RemoteAddr = "203.0.113.8:1234"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("3rd request should be 429, got %d", w.Code)
+	}
+}
+
+// L2: different IPs are still isolated for whitelisted paths —
+// whitelisting a path must not collapse the per-IP counter.
+func TestRateLimiter_SkipPath_DoesNotAffectPerKeyCounter(t *testing.T) {
+	rl := NewRateLimiter(2, 60*time.Second)
+	defer rl.Stop()
+
+	// Without SkipPath, two IPs are independent.
+	rl.IsAllowed("ip-A")
+	rl.IsAllowed("ip-A")
+	if rl.IsAllowed("ip-A") {
+		t.Fatal("ip-A 3rd request should be rejected")
+	}
+	if !rl.IsAllowed("ip-B") {
+		t.Fatal("ip-B 1st request should be allowed (per-IP isolation)")
+	}
+
+	if rl.IsPathWhitelisted("/api/fund/stats") {
+		t.Fatal("/api/fund/stats should not be whitelisted yet")
+	}
+	rl.SkipPath("/api/fund/stats")
+	if !rl.IsPathWhitelisted("/api/fund/stats") {
+		t.Fatal("/api/fund/stats should be whitelisted after SkipPath")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,6 +178,163 @@ func TestFundService_GetStats_NormalisesRepoNotFound(t *testing.T) {
 	assert.NotEqual(t, errors.Unwrap(err), postgres.ErrFundNotFound)
 	assert.Nil(t, data)
 	mockRepo.AssertExpectations(t)
+}
+
+// L1: subsequent GetStats calls within the cache TTL must not re-query the
+// repository. Monthly AUM data changes at most once per month, so a 60s
+// in-memory cache collapses N concurrent homepage fetches into 1 DB hit
+// and removes the "too many requests" symptom caused by the global
+// 5/min/IP rate limiter hammering this public read endpoint.
+func TestFundService_GetStats_CacheHitWithinTTL(t *testing.T) {
+	mockRepo := new(MockFundReportRepository)
+	// Frozen clock starting at t=0.
+	clock := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	service := NewFundServiceWithClock(mockRepo, now)
+
+	latest := may2026Report()
+	mockRepo.On("GetLatest", mock.Anything).Return(latest, nil).Once()
+	mockRepo.On("GetTrend", mock.Anything, 5).Return(trendReports(), nil).Once()
+	mockRepo.On("GetAllocationsByReportID", mock.Anything, int64(5)).Return(may2026Allocations(), nil).Once()
+
+	// First call: populates cache.
+	first, err := service.GetStats(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 14820125.94, first.Current.TotalAum)
+
+	// Advance the clock 30s — still inside the 60s TTL window.
+	clock = clock.Add(30 * time.Second)
+
+	// Second call must hit cache, not the repo.
+	second, err := service.GetStats(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 14820125.94, second.Current.TotalAum)
+
+	// The repo should have been touched exactly once.
+	mockRepo.AssertNumberOfCalls(t, "GetLatest", 1)
+	mockRepo.AssertNumberOfCalls(t, "GetTrend", 1)
+	mockRepo.AssertNumberOfCalls(t, "GetAllocationsByReportID", 1)
+}
+
+// L1: once the TTL elapses, the cache must be considered stale and the
+// service must re-query the repository. Without this, a stale AUM would
+// be served forever after a monthly report release.
+func TestFundService_GetStats_CacheExpiresAfterTTL(t *testing.T) {
+	mockRepo := new(MockFundReportRepository)
+	clock := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	service := NewFundServiceWithClock(mockRepo, now)
+
+	latest := may2026Report()
+	// Allow GetLatest to be called twice — once for first request, once
+	// after TTL expires.
+	mockRepo.On("GetLatest", mock.Anything).Return(latest, nil).Twice()
+	mockRepo.On("GetTrend", mock.Anything, 5).Return(trendReports(), nil).Twice()
+	mockRepo.On("GetAllocationsByReportID", mock.Anything, int64(5)).Return(may2026Allocations(), nil).Twice()
+
+	_, err := service.GetStats(context.Background())
+	assert.NoError(t, err)
+
+	// Advance past the 60s TTL.
+	clock = clock.Add(61 * time.Second)
+
+	_, err = service.GetStats(context.Background())
+	assert.NoError(t, err)
+
+	mockRepo.AssertNumberOfCalls(t, "GetLatest", 2)
+}
+
+// L1: a repository error must NOT populate the cache — otherwise a
+// transient DB error would be served for the next 60s, leaving the
+// homepage widget in a permanent error state.
+func TestFundService_GetStats_ErrorNotCached(t *testing.T) {
+	mockRepo := new(MockFundReportRepository)
+	clock := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	service := NewFundServiceWithClock(mockRepo, now)
+
+	mockRepo.On("GetLatest", mock.Anything).Return(nil, assert.AnError).Once()
+	mockRepo.On("GetLatest", mock.Anything).Return(may2026Report(), nil).Once()
+	mockRepo.On("GetTrend", mock.Anything, 5).Return(trendReports(), nil).Once()
+	mockRepo.On("GetAllocationsByReportID", mock.Anything, int64(5)).Return(may2026Allocations(), nil).Once()
+
+	// First call: repo errors, nothing should be cached.
+	_, err := service.GetStats(context.Background())
+	assert.Error(t, err)
+
+	// Second call (still inside TTL): repo must be called again, not
+	// served from cache.
+	data, err := service.GetStats(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 14820125.94, data.Current.TotalAum)
+
+	mockRepo.AssertNumberOfCalls(t, "GetLatest", 2)
+}
+
+// L1: many concurrent first-time callers must coalesce onto a single
+// repo fetch. This is the actual production amplifier: 3 components
+// mount + React 18 StrictMode = 6 simultaneous fetchers on every
+// page load. Without singleflight, the cache populates from 6 parallel
+// repo roundtrips instead of 1.
+func TestFundService_GetStats_ConcurrentFirstCallersShareCache(t *testing.T) {
+	mockRepo := new(MockFundReportRepository)
+	clock := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	service := NewFundServiceWithClock(mockRepo, now)
+
+	latest := may2026Report()
+	// Gate the repo on a channel so we can release N waiters at once.
+	release := make(chan struct{})
+	mockRepo.On("GetLatest", mock.Anything).Return(func(ctx context.Context) *models.FundReport {
+		<-release
+		return latest
+	}, func(ctx context.Context) error {
+		<-release
+		return nil
+	}).Once()
+	mockRepo.On("GetTrend", mock.Anything, 5).Return(func(ctx context.Context, limit int) []models.FundReport {
+		<-release
+		return trendReports()
+	}, func(ctx context.Context, limit int) error {
+		<-release
+		return nil
+	}).Once()
+	mockRepo.On("GetAllocationsByReportID", mock.Anything, int64(5)).Return(func(ctx context.Context, id int64) []models.FundAssetAllocation {
+		<-release
+		return may2026Allocations()
+	}, func(ctx context.Context, id int64) error {
+		<-release
+		return nil
+	}).Once()
+
+	const callers = 6
+	results := make([]float64, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			data, err := service.GetStats(context.Background())
+			if err == nil && data != nil {
+				results[idx] = data.Current.TotalAum
+			}
+			errs[idx] = err
+		}(i)
+	}
+
+	// Give all goroutines time to pile up on the in-flight gate.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	for i, err := range errs {
+		assert.NoError(t, err, "caller %d", i)
+		assert.Equal(t, 14820125.94, results[i], "caller %d", i)
+	}
+	mockRepo.AssertNumberOfCalls(t, "GetLatest", 1)
+	mockRepo.AssertNumberOfCalls(t, "GetTrend", 1)
+	mockRepo.AssertNumberOfCalls(t, "GetAllocationsByReportID", 1)
 }
 
 // D1: service must compute allocation pct as amount / latest.TotalAum,
