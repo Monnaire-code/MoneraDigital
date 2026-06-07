@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"monera-digital/internal/dto"
 	"monera-digital/internal/models"
 	"monera-digital/internal/repository/postgres"
 )
@@ -214,6 +215,72 @@ func TestFundService_GetStats_CacheHitWithinTTL(t *testing.T) {
 	mockRepo.AssertNumberOfCalls(t, "GetLatest", 1)
 	mockRepo.AssertNumberOfCalls(t, "GetTrend", 1)
 	mockRepo.AssertNumberOfCalls(t, "GetAllocationsByReportID", 1)
+}
+
+// B-2: GetStats must return a deep copy of the cached payload, never the
+// same pointer. Without this, any caller that mutates the returned
+// *dto.FundStatsData or its slices (Trend, Allocations) would corrupt
+// the cache for every subsequent caller for the next 60s. Today's HTTP
+// handler is well-behaved (it immediately c.JSON-encodes), but a future
+// admin endpoint or a debug handler that enriches the struct would be a
+// silent 60s AUM-poisoning bug.
+func TestFundService_GetStats_ReturnedDataIsIsolatedFromCache(t *testing.T) {
+	mockRepo := new(MockFundReportRepository)
+	clock := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	service := NewFundServiceWithClock(mockRepo, now)
+
+	latest := may2026Report()
+	mockRepo.On("GetLatest", mock.Anything).Return(latest, nil).Once()
+	mockRepo.On("GetTrend", mock.Anything, 5).Return(trendReports(), nil).Once()
+	mockRepo.On("GetAllocationsByReportID", mock.Anything, int64(5)).Return(may2026Allocations(), nil).Once()
+
+	// First call: cache populated.
+	first, err := service.GetStats(context.Background())
+	assert.NoError(t, err)
+
+	// Caller mutates the returned payload — primitive field, slice
+	// element, and slice length.
+	first.Current.TotalAum = 999
+	first.Trend[0].Aum = 88888
+	first.Trend = append(first.Trend, dto.FundTrendPoint{Month: "2099-01", Aum: 0})
+	first.Allocations[0].Category = "PWNED"
+
+	// Advance 5s (still inside TTL) and re-read.
+	clock = clock.Add(5 * time.Second)
+	second, err := service.GetStats(context.Background())
+	assert.NoError(t, err)
+
+	// Cache must be pristine — none of the mutations leaked through.
+	assert.Equal(t, 14820125.94, second.Current.TotalAum, "primitive field must be isolated")
+	assert.Equal(t, 1000000.00, second.Trend[0].Aum, "slice element must be isolated")
+	assert.Len(t, second.Trend, 5, "slice length must be isolated (appended element must not leak)")
+	assert.Equal(t, "DeFi Yield Farming", second.Allocations[0].Category, "nested struct field must be isolated")
+}
+
+// B-2: the same isolation must hold across the singleflight return path
+// — the original repo result and the cached clone must be independent
+// pointers and independent slices, so even if a caller mutates the
+// fresh response (not a cached one), the cache itself stays clean.
+func TestFundService_GetStats_OriginalFetchIsIsolatedFromCache(t *testing.T) {
+	mockRepo := new(MockFundReportRepository)
+	clock := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	service := NewFundServiceWithClock(mockRepo, now)
+
+	latest := may2026Report()
+	mockRepo.On("GetLatest", mock.Anything).Return(latest, nil).Once()
+	mockRepo.On("GetTrend", mock.Anything, 5).Return(trendReports(), nil).Once()
+	mockRepo.On("GetAllocationsByReportID", mock.Anything, int64(5)).Return(may2026Allocations(), nil).Once()
+
+	first, err := service.GetStats(context.Background())
+	assert.NoError(t, err)
+	first.Allocations[0].Amount = 0 // catastrophic caller-side bug
+
+	clock = clock.Add(5 * time.Second)
+	second, err := service.GetStats(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 3857328.43, second.Allocations[0].Amount, "mutated first response must not corrupt cached allocation")
 }
 
 // L1: once the TTL elapses, the cache must be considered stale and the

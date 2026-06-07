@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	"monera-digital/internal/dto"
 	"monera-digital/internal/models"
 	"monera-digital/internal/repository/postgres"
@@ -43,6 +44,15 @@ type FundService struct {
 	cachedData    *dto.FundStatsData
 	cachedExpires time.Time
 	nowFunc       func() time.Time
+
+	// sf coalesces concurrent first-callers (cold cache) onto a single
+	// repo roundtrip. Without it, N parallel homepage fetches after
+	// deploy / TTL expiry / restart would each hit the DB, multiplying
+	// load by N exactly when the L1 cache was supposed to absorb it.
+	// The singleflight key is a constant because the cache is single-key
+	// today; if multi-key caching is ever added, this becomes a
+	// parameter and the per-key dedup window stays correct.
+	sf singleflight.Group
 }
 
 func NewFundService(repo FundReportRepository) *FundService {
@@ -60,25 +70,55 @@ func NewFundServiceWithClock(repo FundReportRepository, nowFunc func() time.Time
 }
 
 func (s *FundService) GetStats(ctx context.Context) (*dto.FundStatsData, error) {
-	if data, ok := s.cachedStats(); ok {
+	// Fast path: fresh cache hit. Returns a deep copy so caller mutation
+	// cannot poison the cached payload for the next 60s.
+	if data, ok := s.cachedCopy(); ok {
 		return data, nil
 	}
 
-	data, err := s.fetchStats(ctx)
+	// Cold path: coalesce concurrent first-callers onto a single repo
+	// roundtrip via singleflight. N parallel goroutines all call
+	// sf.Do(...) but only one actually runs the function; the rest
+	// wait for its result. This is the B-1 fix that turns the
+	// commit's "1000 concurrent → 1 DB" promise from aspirational
+	// to accurate.
+	v, err, _ := s.sf.Do(fundStatsCacheKey, func() (interface{}, error) {
+		// Re-check inside singleflight: a previous caller may have
+		// populated the cache between our outer miss and entering
+		// the singleflight window. Without this, every cold caller
+		// would unconditionally re-fetch.
+		if data, ok := s.cachedCopy(); ok {
+			return data, nil
+		}
+		data, fetchErr := s.fetchStats(ctx)
+		if fetchErr != nil {
+			// Do NOT cache errors. A transient DB blip should not
+			// lock the homepage widget into a permanent error state
+			// for the rest of the TTL window.
+			return nil, fetchErr
+		}
+		s.storeCache(data)
+		// Return a clone, not the pointer we just stored. The
+		// singleflight result may be shared with N concurrent
+		// callers; if any of them mutates their copy, the cache
+		// must not be affected.
+		return cloneFundStatsData(data), nil
+	})
 	if err != nil {
-		// Do NOT cache errors. A transient DB blip should not lock
-		// the homepage widget into a permanent error state for the
-		// rest of the TTL window.
 		return nil, err
 	}
-	s.storeCache(data)
-	return data, nil
+	return v.(*dto.FundStatsData), nil
 }
 
-// cachedStats returns the cached payload if one exists and is still
-// within its TTL. The RLock is released before any potential repo call
-// in the caller path.
-func (s *FundService) cachedStats() (*dto.FundStatsData, bool) {
+// fundStatsCacheKey is the singleflight grouping key. Single-key today
+// (the cache holds at most one entry); see FundService.sf doc.
+const fundStatsCacheKey = "fund:stats"
+
+// cachedCopy returns a fresh deep copy of the cached payload if one
+// exists and is still within its TTL, otherwise (nil, false). Returning
+// a copy — never the cached pointer — is the B-2 fix: any caller
+// mutation is local to their own response.
+func (s *FundService) cachedCopy() (*dto.FundStatsData, bool) {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
 	if s.cachedData == nil {
@@ -87,17 +127,39 @@ func (s *FundService) cachedStats() (*dto.FundStatsData, bool) {
 	if !s.nowFunc().Before(s.cachedExpires) {
 		return nil, false
 	}
-	return s.cachedData, true
+	return cloneFundStatsData(s.cachedData), true
 }
 
-// storeCache atomically replaces any existing cache entry. Serialised
-// via the write lock so concurrent first-callers see a consistent
-// snapshot after the populate completes.
+// storeCache atomically replaces any existing cache entry with a deep
+// copy of the supplied payload. Storing a clone (not the caller's
+// pointer) means the input can be safely returned to concurrent
+// singleflight peers without aliasing.
 func (s *FundService) storeCache(data *dto.FundStatsData) {
 	s.cacheMu.Lock()
-	s.cachedData = data
+	s.cachedData = cloneFundStatsData(data)
 	s.cachedExpires = s.nowFunc().Add(fundStatsCacheTTL)
 	s.cacheMu.Unlock()
+}
+
+// cloneFundStatsData returns an independent copy of a FundStatsData
+// payload, including fresh backing arrays for the Trend and
+// Allocations slices. The Current struct is value-copied (it holds
+// only primitive fields). Used on every read AND every store so the
+// cache and its callers can never observe each other's mutations.
+func cloneFundStatsData(d *dto.FundStatsData) *dto.FundStatsData {
+	if d == nil {
+		return nil
+	}
+	cloned := *d
+	if d.Trend != nil {
+		cloned.Trend = make([]dto.FundTrendPoint, len(d.Trend))
+		copy(cloned.Trend, d.Trend)
+	}
+	if d.Allocations != nil {
+		cloned.Allocations = make([]dto.FundAllocationItem, len(d.Allocations))
+		copy(cloned.Allocations, d.Allocations)
+	}
+	return &cloned
 }
 
 // fetchStats is the cold path: read from the repo and assemble the
