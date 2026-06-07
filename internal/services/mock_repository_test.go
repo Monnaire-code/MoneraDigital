@@ -436,6 +436,14 @@ func (m *MockWealthRepository) GetExpiredOrders(ctx context.Context) ([]*reposit
 	return args.Get(0).([]*repository.WealthOrderModel), args.Error(1)
 }
 
+func (m *MockWealthRepository) GetPendingOrders(ctx context.Context) ([]*repository.WealthOrderModel, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*repository.WealthOrderModel), args.Error(1)
+}
+
 func (m *MockWealthRepository) AccrueInterest(ctx context.Context, orderID int64, amount string, date string) error {
 	args := m.Called(ctx, orderID, amount, date)
 	return args.Error(0)
@@ -456,5 +464,10 @@ func (m *MockWealthRepository) RenewOrder(ctx context.Context, order *repository
 
 func (m *MockWealthRepository) UpdateInterestAccrued(ctx context.Context, orderID int64, interestAccrued string) error {
 	args := m.Called(ctx, orderID, interestAccrued)
+	return args.Error(0)
+}
+
+func (m *MockWealthRepository) ActivateOrder(ctx context.Context, orderID int64) error {
+	args := m.Called(ctx, orderID)
 	return args.Error(0)
 }

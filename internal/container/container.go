@@ -283,6 +283,7 @@ type Container struct {
 	EmailService      *services.EmailService
 	ActivationService *services.ActivationService
 	ContactService    *services.ContactService
+	FundService       *services.FundService
 
 	// 中间件
 	RateLimitMiddleware *middleware.PerEndpointRateLimiter
@@ -294,7 +295,7 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 
 	// 初始化缓存
 	c.TokenBlacklist = cache.NewTokenBlacklist()
-	c.RateLimiter = middleware.NewRateLimiter(5, 60)
+	c.RateLimiter = middleware.NewRateLimiter(5, 60*time.Second)
 
 	// 初始化 Core API 客户端
 	coreAPIURL := os.Getenv("MONNAIRE_CORE_API_URL")
@@ -363,6 +364,7 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	dbRateLimiter := services.NewRateLimiter(db)
 	c.ActivationService = services.NewActivationService(db, dbRateLimiter, c.EmailService, jwtSecret)
 	c.ContactService = services.NewContactService(db)
+	c.FundService = services.NewFundService(postgres.NewFundReportRepository(db))
 
 	return c
 }

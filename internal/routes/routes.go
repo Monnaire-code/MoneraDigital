@@ -52,6 +52,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 	// Create contact handler
 	contactHandler := handlers.NewContactHandler(cont.ContactService)
 
+	// Create fund handler
+	fundHandler := handlers.NewFundHandler(cont.FundService)
+
 	// Root health check endpoint (backup)
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
@@ -94,6 +97,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 				webhooks.POST("/safeheron", cont.SafeheronWebhookHandler.Receive)
 			}
 		}
+
+		// Public fund stats (homepage AUM widget, no auth)
+		public.GET("/fund/stats", fundHandler.GetStats)
 	}
 
 	// ==================== PROTECTED ROUTES (JWT Auth Required) ====================

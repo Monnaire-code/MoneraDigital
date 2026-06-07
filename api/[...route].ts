@@ -69,6 +69,9 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
   // Webhook endpoints (public, verified via Safeheron signature)
   'POST /api/webhooks/safeheron': { requiresAuth: false, backendPath: '/api/webhooks/safeheron' },
 
+  // Fund stats endpoint (public, powers the homepage AUM widget)
+  'GET /api/fund/stats': { requiresAuth: false, backendPath: '/api/fund/stats' },
+
   // Assets endpoints
   'GET /api/assets': { requiresAuth: true, backendPath: '/api/assets' },
   'GET /api/assets/prices': { requiresAuth: true, backendPath: '/api/assets/prices' },
@@ -134,11 +137,17 @@ function findRoute(method: string, path: string): { found: boolean; config?: Rou
 
   // Handle dynamic address routes: /api/addresses/123, /api/addresses/123/verify, etc.
   if (path.startsWith('/api/addresses/')) {
-    return {
-      found: true,
-      config: { requiresAuth: true, backendPath: '' },
-      backendPath: `/api${path.replace('/api/addresses/', '/addresses/')}`,
-    };
+    const isValidAddressRoute =
+      /^\/api\/addresses\/[\w-]+(\/verify|\/primary)?$/.test(path) &&
+      ['DELETE', 'POST', 'PUT', 'PATCH'].includes(method);
+
+    if (isValidAddressRoute) {
+      return {
+        found: true,
+        config: { requiresAuth: true, backendPath: '' },
+        backendPath: `/api${path.replace('/api/addresses/', '/addresses/')}`,
+      };
+    }
   }
 
   return { found: false };
