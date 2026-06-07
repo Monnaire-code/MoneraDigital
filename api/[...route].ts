@@ -69,6 +69,9 @@ const ROUTE_CONFIG: Record<string, RouteConfig> = {
   // Webhook endpoints (public, verified via Safeheron signature)
   'POST /api/webhooks/safeheron': { requiresAuth: false, backendPath: '/api/webhooks/safeheron' },
 
+  // Health endpoint (public, passthrough to Go backend /api/health)
+  'GET /api/health': { requiresAuth: false, backendPath: '/api/health' },
+
   // Fund stats endpoint (public, powers the homepage AUM widget)
   'GET /api/fund/stats': { requiresAuth: false, backendPath: '/api/fund/stats' },
 
