@@ -55,6 +55,7 @@ main
 
 # Go binaries
 /migrate
+/monera-migrate
 /pool_init
 /backfill_addcoin
 
