@@ -26,6 +26,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// version 由 CI build 用 -ldflags "-X main.version=<sha>" 注入
+// （见 .github/workflows/deploy-backend-prod.yml），本地默认 "dev"。
+// 启动日志打印，便于生产 binary → commit 追溯。
+var version = "dev"
+
 func main() {
 	// Load configuration
 	cfg := config.Load()
@@ -51,7 +56,8 @@ func main() {
 	// Log startup
 	logger.Info("Starting Monera Digital API server",
 		"port", cfg.Port,
-		"environment", env)
+		"environment", env,
+		"version", version)
 
 	// Initialize encryption key for activation codes
 	if cfg.EncryptionKey != "" {
