@@ -3,7 +3,14 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require';
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error(
+    'DATABASE_URL environment variable is required. ' +
+      'Set it in .env (copy from .env.example) or pass it inline: ' +
+      'DATABASE_URL="postgresql://user:pass@host:port/db?sslmode=require" npx tsx seed.ts'
+  );
+}
 
 async function seed() {
   console.log('Connecting to database...');

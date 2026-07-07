@@ -209,6 +209,10 @@ func WithCosignerCallback() ContainerOption {
 		privPath := viper.GetString("COSIGNER_CALLBACK_PRIVATE_KEY_PATH")
 
 		if pubPath == "" || privPath == "" {
+			if viper.GetString("APP_ENV") == "production" {
+				panic("COSIGNER_PUBLIC_KEY_PATH and COSIGNER_CALLBACK_PRIVATE_KEY_PATH must be configured in production: " +
+					"cosigner callback is required for sweep approval (AUTO_SWEEP/UTXO_COLLECTION)")
+			}
 			log.Printf("Cosigner callback disabled: COSIGNER_PUBLIC_KEY_PATH or COSIGNER_CALLBACK_PRIVATE_KEY_PATH not configured")
 			return
 		}
@@ -361,6 +365,7 @@ type Container struct {
 	EmailService      *services.EmailService
 	ActivationService *services.ActivationService
 	ContactService    *services.ContactService
+	FundService       *services.FundService
 
 	// 中间件（PerEndpointRateLimiter 已移除 — 限速由 routes.go 按路由组分配）
 }
@@ -371,7 +376,14 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 
 	// 初始化缓存
 	c.TokenBlacklist = cache.NewTokenBlacklist()
-	c.RateLimiter = middleware.NewRateLimiter(10, time.Minute)
+	c.RateLimiter = middleware.NewRateLimiter(5, 60*time.Second)
+	// L2: exempt /api/fund/stats from the global limiter. The FundService
+	// in-memory cache (L1) already collapses N concurrent homepage
+	// fetches into 1 repo roundtrip; putting a 5/min/IP limiter in
+	// front of a public read endpoint is what produced the
+	// "too many requests" symptom on the homepage.
+	c.RateLimiter.SkipPath("/api/fund/stats")
+	// Cosigner callback & Safeheron webhook: 60/min per IP (public, no JWT)
 	c.SafeheronRateLimiter = middleware.NewRateLimiter(60, time.Minute)
 
 	// 初始化 Core API 客户端
@@ -436,6 +448,7 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	dbRateLimiter := services.NewRateLimiter(db)
 	c.ActivationService = services.NewActivationService(db, dbRateLimiter, c.EmailService, jwtSecret)
 	c.ContactService = services.NewContactService(db)
+	c.FundService = services.NewFundService(postgres.NewFundReportRepository(db))
 
 	return c
 }

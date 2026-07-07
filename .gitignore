@@ -55,6 +55,7 @@ main
 
 # Go binaries
 /migrate
+/monera-migrate
 /pool_init
 /backfill_addcoin
 
@@ -66,3 +67,4 @@ coverage.out
 /artifacts/
 /playwright-report/
 monera-digital
+docs/月度基金报告文稿.xlsx

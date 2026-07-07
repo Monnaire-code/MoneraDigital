@@ -21,6 +21,14 @@ type RateLimiter struct {
 	window time.Duration
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// whitelist holds request paths that should bypass the limiter
+	// entirely. Use for public read endpoints (e.g. /api/fund/stats)
+	// where a single in-memory cache already collapses N concurrent
+	// requests into 1 upstream call — putting the limiter in front
+	// just creates the "too many requests" symptom for legitimate
+	// homepage refreshes.
+	whitelist map[string]struct{}
 }
 
 // NewRateLimiter 创建速率限制器
@@ -109,9 +117,37 @@ func (rl *RateLimiter) cleanupExpiredTimestamps() {
 	}
 }
 
+// SkipPath exempts a request path from rate limiting. Subsequent
+// requests matching the path bypass IsAllowed entirely. Safe to call
+// at startup; not safe to call from inside a request handler.
+func (rl *RateLimiter) SkipPath(path string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if rl.whitelist == nil {
+		rl.whitelist = make(map[string]struct{})
+	}
+	rl.whitelist[path] = struct{}{}
+}
+
+// IsPathWhitelisted reports whether a path has been exempted via
+// SkipPath. Exposed for tests and for middleware that needs to apply
+// the same exemption in a different order.
+func (rl *RateLimiter) IsPathWhitelisted(path string) bool {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	_, ok := rl.whitelist[path]
+	return ok
+}
+
 // RateLimitMiddleware 速率限制中间件
 func RateLimitMiddleware(limiter *RateLimiter) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// L2: whitelisted public read endpoints bypass the limiter.
+		if limiter.IsPathWhitelisted(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
+
 		// 获取客户端 IP
 		clientIP := c.ClientIP()
 

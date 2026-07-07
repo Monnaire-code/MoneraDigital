@@ -1,9 +1,18 @@
+<!--
+  SECURITY NOTICE — Redaction applied 2026-06-05 per audit C-1.
+  This document previously referenced a specific Neon project pooler hostname
+  (ep-bold-cloud-…). Hostnames identify the underlying Neon project, so they
+  have been redacted alongside the password/owner/user triple.
+
+  See docs/security/ROTATION_RUNBOOK.md for the full rotation procedure.
+-->
+
 # 定期理财模块端到端测试报告
 
 **测试日期**: 2026-02-09  
 **测试环境**: http://localhost:8081  
 **测试用户**: wealth-e2e-20260209@example.com (User ID: 265)  
-**数据库**: Neon PostgreSQL (ep-bold-cloud-adfpuk12-pooler)
+**数据库**: Neon PostgreSQL ([REDACTED-NEON-HOST])
 
 ---
 

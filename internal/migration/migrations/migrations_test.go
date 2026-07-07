@@ -6,6 +6,66 @@ import (
 	"monera-digital/internal/migration"
 )
 
+// Interface/Version/Description tests for the new C-2 migration 046.
+// The full SQL behaviour is exercised by running `go run ./cmd/migrate`
+// against a real (or test) database; sqlmock coverage of every
+// statement would duplicate the integration value without catching
+// additional regressions.
+
+func TestAddPendingStatusAndActivationFields_Interface(t *testing.T) {
+	var _ migration.Migration = (*AddPendingStatusAndActivationFields)(nil)
+}
+
+func TestAddPendingStatusAndActivationFields_Version(t *testing.T) {
+	m := &AddPendingStatusAndActivationFields{}
+	if v := m.Version(); v != "046" {
+		t.Errorf("Version() = %q, want %q", v, "046")
+	}
+}
+
+func TestAddPendingStatusAndActivationFields_Description(t *testing.T) {
+	m := &AddPendingStatusAndActivationFields{}
+	if m.Description() == "" {
+		t.Error("Description should not be empty")
+	}
+}
+
+func TestNormalizeAmountTypes_Interface(t *testing.T) {
+	var _ migration.Migration = (*NormalizeAmountTypes)(nil)
+}
+
+func TestNormalizeAmountTypes_Version(t *testing.T) {
+	m := &NormalizeAmountTypes{}
+	if v := m.Version(); v != "047" {
+		t.Errorf("Version() = %q, want %q", v, "047")
+	}
+}
+
+func TestNormalizeAmountTypes_Description(t *testing.T) {
+	m := &NormalizeAmountTypes{}
+	if m.Description() == "" {
+		t.Error("Description should not be empty")
+	}
+}
+
+func TestAddMissingForeignKeys_Interface(t *testing.T) {
+	var _ migration.Migration = (*AddMissingForeignKeys)(nil)
+}
+
+func TestAddMissingForeignKeys_Version(t *testing.T) {
+	m := &AddMissingForeignKeys{}
+	if v := m.Version(); v != "048" {
+		t.Errorf("Version() = %q, want %q", v, "048")
+	}
+}
+
+func TestAddMissingForeignKeys_Description(t *testing.T) {
+	m := &AddMissingForeignKeys{}
+	if m.Description() == "" {
+		t.Error("Description should not be empty")
+	}
+}
+
 // TestAddTwoFactorColumnsMigration_Interface verifies the migration implements the interface
 func TestAddTwoFactorColumnsMigration_Interface(t *testing.T) {
 	var _ migration.Migration = (*AddTwoFactorColumnsMigration)(nil)
@@ -48,7 +108,10 @@ func TestAddTwoFactorTimestampMigration_Description(t *testing.T) {
 	}
 }
 
-// TestMigrationOrder verifies all migrations are properly ordered
+// TestMigrationOrder verifies all migrations are properly ordered and
+// has a unique version per entry. Keep this list in sync with the
+// registerMigrations() function in cmd/migrate/main.go — a CI
+// guard in scripts/check-secrets.sh asserts both are aligned.
 func TestMigrationOrder(t *testing.T) {
 	migrations := []struct {
 		name    string
@@ -60,18 +123,33 @@ func TestMigrationOrder(t *testing.T) {
 		{"AddTwoFactorColumnsMigration", "004"},
 		{"AddTwoFactorTimestampMigration", "005"},
 		{"UpdateWalletRequestsTable", "007"},
+		{"CreateUserWalletsTable", "008"},
+		{"AddUserWalletStatusField", "009"},
+		{"AddIsPrimaryToWhitelist", "010"},
+		{"CreateDepositsTable", "011"},
+		{"AddUserStatus", "012"},
+		{"AddFrozenUntilToWhitelist", "013"},
+		{"AddEmailVerifiedStatusAndContactFields", "014"},
 		{"SafeheronPhase1", "015"},
 		{"AccountFrozenBalanceDefault", "016"},
+		{"CreateApprovalAndSweepTables", "023"},
+		{"AddAmlRiskLevelToApprovalRecords", "024"},
+		{"AddPendingStatusAndActivationFields", "046"},
+		{"NormalizeAmountTypes", "047"},
+		{"AddMissingForeignKeys", "048"},
+		{"CreateFundReports", "049"},
 	}
 
+	seen := make(map[string]bool, len(migrations))
 	for i, m := range migrations {
 		t.Run(m.name, func(t *testing.T) {
-			// Verify version is not empty
 			if m.version == "" {
 				t.Error("Version should not be empty")
 			}
-
-			// Verify versions are in order (simple check)
+			if seen[m.version] {
+				t.Errorf("Duplicate version %q in migration list", m.version)
+			}
+			seen[m.version] = true
 			if i > 0 {
 				prevVersion := migrations[i-1].version
 				if m.version <= prevVersion {

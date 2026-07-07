@@ -18,9 +18,14 @@ func NewDepositRepository(db *sql.DB) repository.Deposit {
 }
 
 func (r *DepositRepository) Create(ctx context.Context, deposit *models.Deposit) error {
+	// amount is $3::numeric to bridge the text parameter to the
+	// NUMERIC(32, 8) column installed by migration 047. The implicit
+	// text→numeric cast would also work, but the explicit cast makes
+	// the type contract obvious at the call site and protects against
+	// a future PG upgrade tightening implicit-cast rules.
 	query := `
 		INSERT INTO deposits (user_id, tx_hash, amount, asset, chain, status, from_address, to_address, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3::numeric, $4, $5, $6, $7, $8, $9)
 		RETURNING id`
 
 	err := r.db.QueryRowContext(ctx, query,

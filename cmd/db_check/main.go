@@ -4,19 +4,31 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
-const DATABASE_URL = "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
-
 func main() {
+	// C-1 fix: env-driven DSN, no fallback. See docs/security/ROTATION_RUNBOOK.md.
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL environment variable is required. " +
+			"Set it in .env (copy from .env.example) or pass it inline: " +
+			`DATABASE_URL="postgresql://user:pass@host:port/db?sslmode=require" go run ./cmd/db_check`)
+	}
+
 	fmt.Println("==============================================")
 	fmt.Println("   数据库数据检查 - Database Data Check       ")
 	fmt.Println("==============================================")
 	fmt.Println()
 
-	db, err := sql.Open("postgres", DATABASE_URL)
+	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
 		log.Fatal("Failed to connect:", err)
 	}

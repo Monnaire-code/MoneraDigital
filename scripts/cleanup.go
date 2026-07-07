@@ -4,12 +4,31 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
 func main() {
-	connStr := "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+	// C-1 fix: load DATABASE_URL from environment. The hardcoded credential
+	// was previously leaked in git history and is now rotated; this script
+	// must never carry a fallback. See docs/security/ROTATION_RUNBOOK.md.
+	if os.Getenv("APP_ENV") != "production" {
+		_ = godotenv.Overload(".env")
+	}
+
+	if os.Getenv("APP_ENV") == "production" {
+		log.Fatal("BLOCKED: scripts/cleanup.go performs destructive operations (DELETE wealth_order, mutate account balances). " +
+			"It must not be run against production. Unset APP_ENV or set APP_ENV=local/development/test.")
+	}
+
+	connStr := os.Getenv("DATABASE_URL")
+	if connStr == "" {
+		log.Fatal("DATABASE_URL environment variable is required. " +
+			"Set it in .env (copy from .env.example) or pass it inline: " +
+			`DATABASE_URL="postgresql://user:pass@host:port/db?sslmode=require" go run scripts/cleanup.go`)
+	}
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {

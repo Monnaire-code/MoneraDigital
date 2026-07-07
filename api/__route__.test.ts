@@ -969,4 +969,68 @@ describe('/api/[...route] - Unified API Router', () => {
       expect(res.status).toHaveBeenCalledWith(410);
     });
   });
+
+  describe('GET /api/fund/stats (public AUM widget)', () => {
+    it('routes without requiring auth', async () => {
+      const handler = await import('./[...route].js').then(m => m.default);
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          success: true,
+          data: {
+            current: { reportDate: '2026-05', totalAum: 14820125.94, actualApy: 0.1623 },
+            trend: [],
+            allocations: [],
+          },
+        }),
+      });
+
+      const req = {
+        method: 'GET',
+        query: { route: ['fund', 'stats'] },
+        headers: {},
+      } as any;
+
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      } as any;
+
+      await handler(req, res);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:8081/api/fund/stats',
+        expect.objectContaining({ method: 'GET' })
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('returns 404 when backend reports no fund data', async () => {
+      vi.clearAllMocks();
+      const handler = await import('./[...route].js').then(m => m.default);
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: vi.fn().mockResolvedValue({ success: false, error: 'No fund report available yet' }),
+      });
+
+      const req = {
+        method: 'GET',
+        query: { route: ['fund', 'stats'] },
+        headers: {},
+      } as any;
+
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn().mockReturnThis(),
+      } as any;
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+  });
 });

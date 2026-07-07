@@ -3,6 +3,7 @@ import { ArrowRight, Shield, TrendingUp, Lock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
+import HeroAumCard from "@/components/HeroAumCard";
 
 const Hero = () => {
   const { t } = useTranslation();
@@ -57,6 +58,7 @@ const Hero = () => {
           </div>
 
           {/* Trust Indicators */}
+          <HeroAumCard />
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 max-w-3xl mx-auto animate-fade-in-delay-3">
             <div className="flex items-center justify-center gap-3 p-4 rounded-xl glass">
               <Shield className="w-5 h-5 text-primary" />

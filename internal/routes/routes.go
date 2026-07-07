@@ -51,6 +51,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 	// Create contact handler
 	contactHandler := handlers.NewContactHandler(cont.ContactService)
 
+	// Create fund handler
+	fundHandler := handlers.NewFundHandler(cont.FundService)
+
 	// Root health check endpoint (backup)
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
@@ -67,7 +70,7 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			c.JSON(200, gin.H{"status": "ok"})
 		})
 
-		// Authentication routes (10/min per IP)
+		// Authentication routes (5/min per IP)
 		auth := public.Group("/auth")
 		auth.Use(middleware.RateLimitMiddleware(cont.RateLimiter))
 		{
@@ -96,6 +99,9 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			}
 		}
 
+		// Public fund stats (homepage AUM widget, no auth)
+		public.GET("/fund/stats", fundHandler.GetStats)
+
 		// Cosigner callback (public, no JWT, 60/min per IP)
 		if cont.CosignerCallbackHandler != nil {
 			cosigner := public.Group("/cosigner")
@@ -104,7 +110,7 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 		}
 	}
 
-	// ==================== PROTECTED ROUTES (JWT Auth Required, 10/min per IP) ====================
+	// ==================== PROTECTED ROUTES (JWT Auth Required, 5/min per IP) ====================
 	protected := api.Group("")
 	protected.Use(middleware.AuthMiddleware(cont.JWTSecret, cont.Repository.User))
 	protected.Use(middleware.RateLimitMiddleware(cont.RateLimiter))

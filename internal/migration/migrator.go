@@ -27,7 +27,7 @@ func (m *Migrator) Register(migration Migration) {
 	m.migrations = append(m.migrations, migration)
 }
 
-// Init initializes the migration tracking table
+// Init initializes the migration tracking table.
 func (m *Migrator) Init() error {
 	query := `
 	CREATE TABLE IF NOT EXISTS migrations (
@@ -107,11 +107,25 @@ func (m *Migrator) GetStatus() ([]MigrationStatus, error) {
 	return statuses, nil
 }
 
-// Migrate runs all pending migrations
+// Migrate runs all pending migrations under a session-level advisory lock
+// so that two concurrent invocations (e.g., a deploy step racing a local
+// ops run) cannot interleave DDL with `migrations` row inserts.
 func (m *Migrator) Migrate() error {
 	if err := m.Init(); err != nil {
 		return err
 	}
+
+	// 8675309 is an arbitrary 32-bit key. The memorable value makes it
+	// easy to look up in pg_locks if a stuck run is suspected.
+	const advisoryLockKey int64 = 8675309
+	if _, err := m.db.Exec(`SELECT pg_advisory_lock($1)`, advisoryLockKey); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer func() {
+		if _, err := m.db.Exec(`SELECT pg_advisory_unlock($1)`, advisoryLockKey); err != nil {
+			log.Printf("warning: failed to release migration lock: %v", err)
+		}
+	}()
 
 	applied, err := m.GetAppliedMigrations()
 	if err != nil {
@@ -137,7 +151,6 @@ func (m *Migrator) Migrate() error {
 			return fmt.Errorf("migration %s failed: %w", version, err)
 		}
 
-		// Record the migration
 		query := `INSERT INTO migrations (version, name) VALUES ($1, $2)`
 		_, err := m.db.Exec(query, version, migration.Description())
 		if err != nil {
@@ -150,8 +163,23 @@ func (m *Migrator) Migrate() error {
 	return nil
 }
 
-// Rollback reverts the last migration
+// Rollback reverts the last applied migration under the same advisory lock
+// as Migrate so it cannot race with a concurrent Migrate.
 func (m *Migrator) Rollback() error {
+	if err := m.Init(); err != nil {
+		return err
+	}
+
+	const advisoryLockKey int64 = 8675309
+	if _, err := m.db.Exec(`SELECT pg_advisory_lock($1)`, advisoryLockKey); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer func() {
+		if _, err := m.db.Exec(`SELECT pg_advisory_unlock($1)`, advisoryLockKey); err != nil {
+			log.Printf("warning: failed to release migration lock: %v", err)
+		}
+	}()
+
 	applied, err := m.GetAppliedMigrations()
 	if err != nil {
 		return err
@@ -164,7 +192,6 @@ func (m *Migrator) Rollback() error {
 
 	lastRecord := applied[len(applied)-1]
 
-	// Find the migration
 	var migration Migration
 	for _, m := range m.migrations {
 		if m.Version() == lastRecord.Version {
@@ -183,11 +210,10 @@ func (m *Migrator) Rollback() error {
 		return fmt.Errorf("rollback of migration %s failed: %w", lastRecord.Version, err)
 	}
 
-	// Remove the migration record
 	query := `DELETE FROM migrations WHERE version = $1`
 	_, err = m.db.Exec(query, lastRecord.Version)
 	if err != nil {
-		return fmt.Errorf("failed to remove migration record: %w", err)
+		return fmt.Errorf("failed to remove migration record %s: %w", lastRecord.Version, err)
 	}
 
 	log.Printf("Migration %s rolled back successfully\n", lastRecord.Version)

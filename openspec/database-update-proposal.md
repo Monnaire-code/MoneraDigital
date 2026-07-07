@@ -1,3 +1,13 @@
+<!--
+  SECURITY NOTICE — Redaction applied 2026-06-05 per audit C-1.
+  This document previously embedded a production Neon database
+  connection string (owner role + password + host) and a
+  leaked JWT_SECRET / ENCRYPTION_KEY. Those values have been
+  redacted because the password was rotated in response to
+  historical exposure in git history and source commits.
+  See docs/security/ROTATION_RUNBOOK.md.
+-->
+
 # Neon 数据库更新方案
 
 ## 安全警告
@@ -17,7 +27,7 @@
 
 ```bash
 # 1. 设置环境变量
-export DATABASE_URL='postgresql://neondb_owner:xxx@ep-xxx.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require'
+export DATABASE_URL='postgresql://[REDACTED-DB-USER]:xxx@ep-xxx.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require'
 
 # 2. 编译迁移工具
 go build -o migrate ./cmd/migrate

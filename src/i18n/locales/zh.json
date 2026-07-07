@@ -63,26 +63,48 @@
   "stats": {
     "items": [
       {
-        "value": "1亿美元+",
-        "label": "目标资产管理规模",
-        "sublabel": "第一年"
+        "value": "1482万美元",
+        "label": "当前管理资产规模",
+        "sublabel": "截至 2026 年 5 月"
       },
       {
-        "value": "8-12%",
-        "label": "目标年化收益率",
-        "sublabel": "风险调整后"
+        "value": "16.23%",
+        "label": "实际年化收益率",
+        "sublabel": "加权 58.71%"
       },
       {
-        "value": "99.95%",
-        "label": "正常运行时间承诺",
-        "sublabel": "平台可用性"
+        "value": "+4.61%",
+        "label": "月度增长",
+        "sublabel": "新增资本 213 万美元"
       },
       {
-        "value": "100%",
-        "label": "资产隔离",
-        "sublabel": "冷存储"
+        "value": "4",
+        "label": "策略组合",
+        "sublabel": "多元化资产配置"
       }
     ]
+  },
+  "fund": {
+    "heroLabel": "当前管理资产规模",
+    "heroProgressLabel": "达成 1 亿美元年度目标的",
+    "heroAsOf": "截至 {{date}}",
+    "sectionLabel": "基金表现",
+    "sectionTitle": "Monnaire Group 基金月度表现",
+    "sectionDesc": "机构级基金的真实可验证业绩。",
+    "trendTitle": "AUM 增长趋势",
+    "allocationTitle": "资产配置",
+    "currentAum": "当前管理资产规模",
+    "actualApy": "实际年化收益率",
+    "weightedApy": "加权年化收益率",
+    "monthGrowth": "月度增长",
+    "newCapital": "新增资本",
+    "strategy": "策略",
+    "amount": "金额",
+    "share": "占比",
+    "loading": "正在加载基金数据…",
+    "errorPrefix": "基金指标暂时不可用",
+    "poweredBy": "数据来源：Monnaire Group 月度报告",
+    "viewFullReport": "查看完整 2026 年 5 月报告"
   },
   "howItWorks": {
     "sectionLabel": "简单流程",

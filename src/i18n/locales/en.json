@@ -63,26 +63,48 @@
   "stats": {
     "items": [
       {
-        "value": "$100M+",
-        "label": "Target AUM",
-        "sublabel": "Year 1"
+        "value": "$14.82M",
+        "label": "Current AUM",
+        "sublabel": "As of May 2026"
       },
       {
-        "value": "8-12%",
-        "label": "Target APY",
-        "sublabel": "Risk-adjusted"
+        "value": "16.23%",
+        "label": "Actual APY",
+        "sublabel": "Weighted 58.71%"
       },
       {
-        "value": "99.95%",
-        "label": "Uptime SLA",
-        "sublabel": "Platform availability"
+        "value": "+4.61%",
+        "label": "Monthly Growth",
+        "sublabel": "Net new $2.13M"
       },
       {
-        "value": "100%",
-        "label": "Asset Segregation",
-        "sublabel": "Cold storage"
+        "value": "4",
+        "label": "Strategy Buckets",
+        "sublabel": "Diversified allocation"
       }
     ]
+  },
+  "fund": {
+    "heroLabel": "Currently Managed Assets",
+    "heroProgressLabel": "of $100M Year-1 Target",
+    "heroAsOf": "As of {{date}}",
+    "sectionLabel": "Fund Performance",
+    "sectionTitle": "Monnaire Group Fund Monthly Performance",
+    "sectionDesc": "Real, verifiable returns from our institutional fund.",
+    "trendTitle": "AUM Growth Trend",
+    "allocationTitle": "Asset Allocation",
+    "currentAum": "Current AUM",
+    "actualApy": "Actual APY",
+    "weightedApy": "Weighted APY",
+    "monthGrowth": "Monthly Growth",
+    "newCapital": "New Capital",
+    "strategy": "Strategy",
+    "amount": "Amount",
+    "share": "Share",
+    "loading": "Loading fund metrics…",
+    "errorPrefix": "Fund metrics temporarily unavailable",
+    "poweredBy": "Data source: Monnaire Group monthly report",
+    "viewFullReport": "View full May 2026 report"
   },
   "howItWorks": {
     "sectionLabel": "Simple Process",

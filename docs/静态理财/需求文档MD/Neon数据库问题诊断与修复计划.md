@@ -1,3 +1,17 @@
+<!--
+  SECURITY NOTICE — Redaction applied 2026-06-05 per audit C-1.
+  This document previously embedded the production Neon database
+  connection string (owner role + password + host). Those values have
+  been redacted because the password was rotated in response to
+  historical exposure in git history and source commits.
+
+  If you need the live values, retrieve them from your local .env
+  (DATABASE_URL) or the deployment secret store. Do NOT re-introduce
+  the literal values into this or any other tracked file — they will
+  re-leak the new password on the next commit.
+  See docs/security/ROTATION_RUNBOOK.md for the full rotation procedure.
+-->
+
 # 🚨 Neon 数据库问题诊断与修复计划
 
 **诊断日期**: 2026-01-09
@@ -136,7 +150,7 @@ npx drizzle-kit push:pg
 npx drizzle-kit introspect:pg
 
 # 方式 2：直接连接 Neon 数据库检查
-psql "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+psql "postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require"
 
 # 在 psql 中执行：
 \dt              # 列出所有表
@@ -189,7 +203,7 @@ go run cmd/db_migration/main.go
 #### 第 3 步：验证所有 22 个表
 ```bash
 # 连接 Neon 检查
-psql "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+psql "postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require"
 
 # 在 psql 中执行：
 SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public';
@@ -237,7 +251,7 @@ curl -X POST http://localhost:3000/api/auth/register \
 go run cmd/db_migration/main.go
 
 # 验证
-psql "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+psql "postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require"
 
 # 在 psql：
 \dt  # 应该看到 27 个表
@@ -266,7 +280,7 @@ Error: DATABASE_URL is not set
 cat .env | grep DATABASE_URL
 
 # 或手动设置
-export DATABASE_URL="postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+export DATABASE_URL="postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require"
 
 # 再试一次
 npx drizzle-kit generate:pg
@@ -282,7 +296,7 @@ Error: connect ECONNREFUSED or SSL error
 **解决**：
 ```bash
 # 测试连接
-psql "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+psql "postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require"
 
 # 如果 psql 不可用，使用 Node.js 测试
 node -e "
@@ -434,7 +448,7 @@ npm test -- src/lib/auth-service.test.ts
 go run cmd/db_migration/main.go
 
 # 6. 最终验证
-psql "postgresql://neondb_owner:npg_4zuq7JQNWFDB@ep-bold-cloud-adfpuk12-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require" -c "\dt"
+psql "postgresql://[REDACTED-DB-USER]:[REDACTED-DB-PASSWORD]@[REDACTED-NEON-HOST]/neondb?sslmode=require" -c "\dt"
 ```
 
 ---
