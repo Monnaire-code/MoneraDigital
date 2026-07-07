@@ -309,15 +309,14 @@ APP_ENV                         # production / local / development / test
 
 ## Deployment
 
-### Test Environment (CI/CD)
-- **Backend**: `test` 分支 push → GitHub Actions → 编译 Go binary → SCP 到测试服务器 → systemd 托管（端口 8086）
-- **Frontend**: `scripts/deploy-remote.sh --frontend` → Vercel
-- **Workflow**: `.github/workflows/deploy-backend-test-env.yml`
-- **Deploy script**: `scripts/deploy-remote.sh`（`--env test` 后端 / `--frontend` 前端）
-
 ### Production
-- **Frontend**: Vercel（main 分支自动部署）
-- **Backend**: Docker 镜像 → GHCR → 服务器 docker compose（`.github/workflows/deploy.yml`）
+- **Frontend**: Vercel（main 分支**不自动构建**，手动 `vercel deploy --prod --scope monera-digital`；配置见 `vercel.json` git.deploymentEnabled）
+- **Backend**: GitHub Actions 手动触发 `workflow_dispatch` → CI 编译 Go binary（gzip 压缩）→ SCP 到生产 → 原子替换 + 健康检查 + 失败回滚 → systemd 重启（`.github/workflows/deploy-backend-prod.yml`）
+- **生产服务器**: `52.195.194.71`（ec2-user），binary `/home/ec2-user/monera/server`，systemd `monera-digital.service`，端口 8081
+- **部署前置**: GitHub repo Settings → Environments → `production` 须配 required reviewers（workflow 无 confirm input，靠 env protection 兜底）
+- **本地手动运维脚本**（CI 不依赖，仍可用）: `scripts/deploy.sh`（服务器现场编译 + SCP+systemd）、`scripts/deploy-remote.sh`
+
+> Test Environment（test 分支 push 自动部署）已随 test 分支废弃（2026-05-21）移除。
 
 ---
 

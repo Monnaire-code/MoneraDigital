@@ -31,5 +31,12 @@
         }
       ]
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "stage": true,
+      "main": false,
+      "*": false
+    }
+  }
 }

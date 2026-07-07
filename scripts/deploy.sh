@@ -71,7 +71,6 @@ done
 
 APP_DIR="/home/ec2-user/monera"
 BINARY_NAME="server"
-MIGRATE_NAME="monera-migrate"
 
 # 确认在源码目录
 if [ ! -f "go.mod" ]; then
@@ -118,14 +117,12 @@ if [ "$SKIP_BUILD" = false ]; then
     echo "[2/6] 编译 Go binary..."
     # 编译前备份现有 binary，用于迁移失败时自动回滚
     if [ -f "${APP_DIR}/${BINARY_NAME}" ]; then
-        cp "${APP_DIR}/${BINARY_NAME}" "${APP_DIR}/${BINARY_NAME}.bak"
+        mv "${APP_DIR}/${BINARY_NAME}" "${APP_DIR}/${BINARY_NAME}.bak"
         echo "  已备份: ${APP_DIR}/${BINARY_NAME}.bak"
     fi
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
         go build -ldflags="-s -w" -o "${BINARY_NAME}" ./cmd/server/main.go
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-        go build -ldflags="-s -w" -o "${MIGRATE_NAME}" ./cmd/migrate/
-    echo "  编译完成: ${BINARY_NAME}, ${MIGRATE_NAME}"
+    echo "  编译完成: ${BINARY_NAME}"
 else
     echo "[2/6] 跳过编译（deploy 模式）"
 fi
@@ -166,8 +163,7 @@ fi
 echo "[4/6] 部署 binary..."
 if [ "$SKIP_BUILD" = false ]; then
     cp "${BINARY_NAME}" "${APP_DIR}/${BINARY_NAME}"
-    cp "${MIGRATE_NAME}" "${APP_DIR}/${MIGRATE_NAME}"
-    chmod +x "${APP_DIR}/${BINARY_NAME}" "${APP_DIR}/${MIGRATE_NAME}"
+    chmod +x "${APP_DIR}/${BINARY_NAME}"
     echo "  已复制到 ${APP_DIR}"
 fi
 
@@ -176,7 +172,7 @@ fi
 # -----------------------------------------------------------------------------
 if [ "$SKIP_MIGRATE" = false ]; then
     echo "[5/6] 运行数据库迁移..."
-    (cd "${APP_DIR}" && ./${MIGRATE_NAME}) || {
+    (set -a && source "${APP_DIR}/.env" && set +a && go run ./cmd/migrate/) || {
         echo "FATAL: 迁移失败，自动回滚..."
         if [ -f "${APP_DIR}/${BINARY_NAME}.bak" ]; then
             cp "${APP_DIR}/${BINARY_NAME}.bak" "${APP_DIR}/${BINARY_NAME}"
