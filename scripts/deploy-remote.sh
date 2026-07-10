@@ -91,6 +91,8 @@ AML_FIRST_POLL_DELAY=5m
 AML_POLL_INTERVAL=60s
 # Alert
 ALERT_WEBHOOK_URL=
+# Signing secret from Lark bot security settings (leave empty if signing is disabled)
+ALERT_WEBHOOK_SIGN_SECRET=
 ALERT_EMAIL_RECIPIENTS=
 EOF
         chmod 600 "${APP_DIR}/.env"
