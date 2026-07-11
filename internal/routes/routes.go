@@ -105,20 +105,23 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 		public.GET("/fund/stats", fundHandler.GetStats)
 	}
 
-	// Company-fund management routes deliberately sit outside the ordinary
-	// customer JWT group. They are only registered after WithCompanyFund has
-	// constructed a dedicated constant-time admin-key boundary; an unset key
-	// leaves no routable management endpoint at all.
-	if cont.CompanyFundFinanceHandler != nil {
-		companyFund := api.Group("/company-fund")
-		companyFund.Use(cont.CompanyFundFinanceHandler.RequireAdminKey())
-		finance := companyFund.Group("/finance")
-		{
-			finance.GET("/dashboard", cont.CompanyFundFinanceHandler.GetDashboard)
-			finance.GET("/transactions", cont.CompanyFundFinanceHandler.ListTransactions)
-			finance.PUT("/transactions/:transactionID/classification", cont.CompanyFundFinanceHandler.UpdateClassification)
+	// Company-fund reporting and classification are owned by the separate
+	// management backend, which reads and maintains the same database directly.
+	// Keep the former route wiring commented for reference so this customer API
+	// exposes ingestion/webhook processing only and cannot become a second
+	// management write path.
+	/*
+		if cont.CompanyFundFinanceHandler != nil {
+			companyFund := api.Group("/company-fund")
+			companyFund.Use(cont.CompanyFundFinanceHandler.RequireAdminKey())
+			finance := companyFund.Group("/finance")
+			{
+				finance.GET("/dashboard", cont.CompanyFundFinanceHandler.GetDashboard)
+				finance.GET("/transactions", cont.CompanyFundFinanceHandler.ListTransactions)
+				finance.PUT("/transactions/:transactionID/classification", cont.CompanyFundFinanceHandler.UpdateClassification)
+			}
 		}
-	}
+	*/
 
 	// ==================== PROTECTED ROUTES (JWT Auth Required) ====================
 	protected := api.Group("")
