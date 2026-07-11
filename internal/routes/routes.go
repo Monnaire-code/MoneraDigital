@@ -96,10 +96,28 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			if cont.SafeheronWebhookHandler != nil {
 				webhooks.POST("/safeheron", cont.SafeheronWebhookHandler.Receive)
 			}
+			if cont.CompanyFundAirwallexWebhookHandler != nil {
+				webhooks.POST("/airwallex", cont.CompanyFundAirwallexWebhookHandler.Receive)
+			}
 		}
 
 		// Public fund stats (homepage AUM widget, no auth)
 		public.GET("/fund/stats", fundHandler.GetStats)
+	}
+
+	// Company-fund management routes deliberately sit outside the ordinary
+	// customer JWT group. They are only registered after WithCompanyFund has
+	// constructed a dedicated constant-time admin-key boundary; an unset key
+	// leaves no routable management endpoint at all.
+	if cont.CompanyFundFinanceHandler != nil {
+		companyFund := api.Group("/company-fund")
+		companyFund.Use(cont.CompanyFundFinanceHandler.RequireAdminKey())
+		finance := companyFund.Group("/finance")
+		{
+			finance.GET("/dashboard", cont.CompanyFundFinanceHandler.GetDashboard)
+			finance.GET("/transactions", cont.CompanyFundFinanceHandler.ListTransactions)
+			finance.PUT("/transactions/:transactionID/classification", cont.CompanyFundFinanceHandler.UpdateClassification)
+		}
 	}
 
 	// ==================== PROTECTED ROUTES (JWT Auth Required) ====================

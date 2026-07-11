@@ -1,0 +1,123 @@
+package companyfund
+
+import (
+	"context"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/shopspring/decimal"
+)
+
+func TestListCompanyFundValuationRepairCandidates_SelectsOnlyRepairableCurrentStates(t *testing.T) {
+	db, mock := newCompanyFundMockDB(t)
+	defer db.Close()
+	candidate := newValuationRuntimeCandidate(81, "ETH", decimal.RequireFromString("1.234567890123456789"))
+	candidate.Asset = AssetIdentity{Currency: "ETH", ChainCode: "ETHEREUM", ProviderAssetKey: "ETH"}
+	providerFactID := int64(71)
+	candidate.ProviderTransactionFactID = &providerFactID
+	reportedUSD := decimal.RequireFromString("3000.123456789012345678")
+	candidate.ProviderReportedUSD = &reportedUSD
+	candidate.ProviderValueScope = ProviderValueScopeDirectItem
+	candidate.ProviderAllocationState = ProviderFactAllocationStateNotApplicable
+
+	mock.ExpectQuery(regexp.QuoteMeta(selectCompanyFundValuationRepairCandidatesSQL)).
+		WithArgs(25).
+		WillReturnRows(companyFundValuationCandidateRows(candidate))
+
+	result, err := NewDBRepository(db).ListCompanyFundValuationRepairCandidates(context.Background(), 25)
+	if err != nil || len(result) != 1 {
+		t.Fatalf("ListCompanyFundValuationRepairCandidates() = %#v, %v", result, err)
+	}
+	got := result[0]
+	if got.ID != candidate.ID || !got.Amount.Equal(candidate.Amount) || got.ProviderReportedUSD == nil || !got.ProviderReportedUSD.Equal(reportedUSD) || got.ProviderTransactionFactID == nil || *got.ProviderTransactionFactID != providerFactID {
+		t.Fatalf("candidate lost exact provider facts: %#v", got)
+	}
+	assertCompanyFundMockExpectations(t, mock)
+
+	lower := strings.ToLower(selectCompanyFundValuationRepairCandidatesSQL)
+	for _, required := range []string{
+		"movement.current_valuation_history_id is null",
+		"current_history.usd_valuation_status in ('unpriced', 'stale')",
+		"order by movement.first_seen_at, movement.id",
+	} {
+		if !strings.Contains(lower, required) {
+			t.Fatalf("repair candidate SQL missing %q: %s", required, selectCompanyFundValuationRepairCandidatesSQL)
+		}
+	}
+	if strings.Contains(lower, "'provisional'") || strings.Contains(lower, "'final'") {
+		t.Fatalf("repair sweep must not continuously revalue priced current rows: %s", selectCompanyFundValuationRepairCandidatesSQL)
+	}
+}
+
+func TestGetCompanyFundTransactionValuationCandidate_ReturnsNilForMissingRow(t *testing.T) {
+	db, mock := newCompanyFundMockDB(t)
+	defer db.Close()
+	mock.ExpectQuery(regexp.QuoteMeta(selectCompanyFundTransactionValuationCandidateSQL)).
+		WithArgs(int64(99)).
+		WillReturnRows(sqlmock.NewRows(companyFundValuationCandidateColumnNames()))
+
+	candidate, err := NewDBRepository(db).GetCompanyFundTransactionValuationCandidate(context.Background(), 99)
+	if err != nil || candidate != nil {
+		t.Fatalf("GetCompanyFundTransactionValuationCandidate() = %#v, %v; want no candidate", candidate, err)
+	}
+	assertCompanyFundMockExpectations(t, mock)
+}
+
+func companyFundValuationCandidateColumnNames() []string {
+	return []string{
+		"id", "channel", "movement_kind", "transaction_direction", "currency", "amount", "chain_code", "provider_asset_key", "asset_contract",
+		"from_company_fund_account_id", "to_company_fund_account_id", "occurred_at", "completed_at", "first_seen_at", "provider_transaction_fact_id",
+		"provider_reported_usd_value", "value_scope", "allocation_state", "conversion_from_currency", "conversion_to_currency",
+		"current_valuation_history_id", "dependency_fingerprint", "usd_valuation_status",
+	}
+}
+
+func companyFundValuationCandidateRows(candidate CompanyFundTransactionValuationCandidate) *sqlmock.Rows {
+	return sqlmock.NewRows(companyFundValuationCandidateColumnNames()).AddRow(
+		candidate.ID,
+		candidate.Channel,
+		candidate.MovementKind,
+		candidate.Direction,
+		candidate.Currency,
+		candidate.Amount.String(),
+		candidate.Asset.ChainCode,
+		candidate.Asset.ProviderAssetKey,
+		candidate.Asset.ContractAddress,
+		valuationTestID(candidate.FromCompanyFundAccountID),
+		valuationTestID(candidate.ToCompanyFundAccountID),
+		valuationTestTime(candidate.OccurredAt),
+		valuationTestTime(candidate.CompletedAt),
+		candidate.FirstSeenAt,
+		valuationTestID(candidate.ProviderTransactionFactID),
+		valuationTestDecimal(candidate.ProviderReportedUSD),
+		candidate.ProviderValueScope,
+		candidate.ProviderAllocationState,
+		candidate.AirwallexConversionFrom,
+		candidate.AirwallexConversionTo,
+		valuationTestID(candidate.CurrentValuationHistoryID),
+		candidate.CurrentValuationDependencyFingerprint,
+		candidate.CurrentValuationStatus,
+	)
+}
+
+func TestCompanyFundValuationCandidate_UsesFirstSeenFallbackOnlyWhenProviderTimesMissing(t *testing.T) {
+	firstSeen := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	candidate := newValuationRuntimeCandidate(90, "USD", decimal.NewFromInt(1))
+	candidate.FirstSeenAt = firstSeen
+	if target := candidate.transactionValuationTime(); target != nil {
+		t.Fatalf("transaction target without provider times = %v, want nil so ingestion fallback is explicit", target)
+	}
+	completed := firstSeen.Add(-time.Minute)
+	candidate.CompletedAt = &completed
+	if target := candidate.transactionValuationTime(); target == nil || !target.Equal(completed) {
+		t.Fatalf("completed target = %v, want %v", target, completed)
+	}
+	occurred := completed.Add(-time.Minute)
+	candidate.OccurredAt = &occurred
+	if target := candidate.transactionValuationTime(); target == nil || !target.Equal(occurred) {
+		t.Fatalf("occurred target = %v, want %v", target, occurred)
+	}
+}

@@ -25,7 +25,13 @@ type complianceAPIClient interface {
 
 type transactionAPIClient interface {
 	CreateTransactionsV3(api.CreateTransactionsRequest, *api.CreateTransactionV3Response) error
+	ListTransactionsV2(api.ListTransactionsV2Request, *api.TransactionsResponseV2) error
 	OneTransactions(api.OneTransactionsRequest, *api.OneTransactionsResponse) error
+}
+
+type webhookAPIClient interface {
+	ResendWebhook(api.ResendWebhookRequest, *api.ResultResponse) error
+	ResendFailed(api.ResendFailedRequest, *api.MessagesCountResponse) error
 }
 
 type webhookConverter interface {
@@ -47,10 +53,11 @@ type Config struct {
 }
 
 type Client struct {
-	account     accountAPIClient
-	compliance  complianceAPIClient
-	transaction transactionAPIClient
-	webhookConv webhookConverter
+	account       accountAPIClient
+	compliance    complianceAPIClient
+	transaction   transactionAPIClient
+	webhookReplay webhookAPIClient
+	webhookConv   webhookConverter
 }
 
 func NewClient(cfg Config) (*Client, error) {
@@ -73,9 +80,10 @@ func NewClient(cfg Config) (*Client, error) {
 	}}
 
 	c := &Client{
-		account:     &api.AccountApi{Client: baseClient},
-		compliance:  &api.ComplianceApi{Client: baseClient},
-		transaction: &api.TransactionApi{Client: baseClient},
+		account:       &api.AccountApi{Client: baseClient},
+		compliance:    &api.ComplianceApi{Client: baseClient},
+		transaction:   &api.TransactionApi{Client: baseClient},
+		webhookReplay: &api.WebhookApi{Client: baseClient},
 	}
 
 	if (cfg.WebhookPublicKeyPath == "") != (cfg.WebhookPrivateKeyPath == "") {

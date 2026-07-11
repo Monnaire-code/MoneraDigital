@@ -104,7 +104,10 @@ func main() {
 	cont := container.NewContainer(database, cfg.JWTSecret,
 		container.WithEncryption(cfg.EncryptionKey),
 		container.WithRedisCache(redisCache),
-		container.WithSafeheronPool(bgCtx))
+		container.WithSafeheronPool(bgCtx),
+		// This is intentionally a separate option. Its Airwallex/account-cache
+		// path must remain eligible when the customer Safeheron pool is absent.
+		container.WithCompanyFund(bgCtx))
 
 	// Verify container
 	if err := cont.Verify(); err != nil {
