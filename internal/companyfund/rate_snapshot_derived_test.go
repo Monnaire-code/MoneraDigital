@@ -128,3 +128,14 @@ func TestAppendRateSnapshot_RejectsCurrentDerivedResponseGroupMismatch(t *testin
 	}
 	assertCompanyFundMockExpectations(t, mock)
 }
+
+func TestStoredRateSnapshotPriceKind_RecognizesDurableCurrentSnapshotWithoutRequest(t *testing.T) {
+	effectiveAt := time.Date(2026, time.July, 13, 3, 0, 0, 0, time.UTC)
+	snapshot := RateSnapshotRecord{
+		Granularity: currentRateSnapshotGranularity,
+		EffectiveAt: &effectiveAt,
+	}
+	if got := storedRateSnapshotPriceKind(snapshot); got != MarketPriceKindCurrent {
+		t.Fatalf("storedRateSnapshotPriceKind() = %q, want CURRENT", got)
+	}
+}

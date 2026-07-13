@@ -13,7 +13,8 @@ import (
 // original migrations forgot to constrain:
 //
 //   - withdrawal_verification.withdrawal_order_id  -> withdrawal_order(id)
-//   - withdrawal_freeze_log.order_id               -> withdrawal_order(id)
+//   - withdrawal_freeze_log.order_id               -> withdrawal_order(id), if a
+//     legacy schema actually has that column
 //   - address_pool.assigned_user_id                 -> users(id)
 //
 // ON DELETE semantics:
@@ -35,7 +36,7 @@ type AddMissingForeignKeys struct{}
 func (m *AddMissingForeignKeys) Version() string { return "048" }
 
 func (m *AddMissingForeignKeys) Description() string {
-	return "Add missing foreign keys on withdrawal_verification.withdrawal_order_id, withdrawal_freeze_log.order_id, and address_pool.assigned_user_id (H-2)"
+	return "Add missing foreign keys on withdrawal_verification.withdrawal_order_id, optional legacy withdrawal_freeze_log.order_id, and address_pool.assigned_user_id (H-2)"
 }
 
 func (m *AddMissingForeignKeys) Up(db *sql.DB) error {
@@ -122,13 +123,22 @@ BEGIN
         RAISE EXCEPTION 'H-2: cannot add FK — % withdrawal_verification rows have no matching withdrawal_order', bad_count;
     END IF;
 
-    -- withdrawal_freeze_log.order_id orphans
-    SELECT COUNT(*) INTO bad_count
-    FROM withdrawal_freeze_log wfl
-    WHERE wfl.order_id IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM withdrawal_order wo WHERE wo.id = wfl.order_id);
-    IF bad_count > 0 THEN
-        RAISE EXCEPTION 'H-2: cannot add FK — % withdrawal_freeze_log rows have no matching withdrawal_order', bad_count;
+    -- Some legacy schemas have no withdrawal_freeze_log.order_id. Do not
+    -- fabricate a relationship that the audit table never recorded.
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'withdrawal_freeze_log'
+          AND column_name = 'order_id'
+    ) THEN
+        SELECT COUNT(*) INTO bad_count
+        FROM withdrawal_freeze_log wfl
+        WHERE wfl.order_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM withdrawal_order wo WHERE wo.id = wfl.order_id);
+        IF bad_count > 0 THEN
+            RAISE EXCEPTION 'H-2: cannot add FK — % withdrawal_freeze_log rows have no matching withdrawal_order', bad_count;
+        END IF;
     END IF;
 
     -- address_pool.assigned_user_id orphans
@@ -168,7 +178,13 @@ func addFKWithdrawalFreezeLog(tx *sql.Tx) error {
 	stmt := `
 DO $$
 BEGIN
-    IF NOT EXISTS (
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'withdrawal_freeze_log'
+          AND column_name = 'order_id'
+    ) AND NOT EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'fk_withdrawal_freeze_log_order'
     ) THEN
         ALTER TABLE withdrawal_freeze_log

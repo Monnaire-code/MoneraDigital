@@ -63,7 +63,9 @@ func TestCompanyFundCurrentValuator_UsesFreshCurrentQuoteAsProvisional(t *testin
 		t.Fatal("policy should have cache key")
 	}
 	if _, err := cache.Refresh(context.Background(), func(context.Context) (map[CoinGeckoQuoteCacheKey]CoinGeckoQuote, error) {
-		return map[CoinGeckoQuoteCacheKey]CoinGeckoQuote{key: newCoinGeckoCacheQuote("2500.123456789012345678", now)}, nil
+		quote := newCoinGeckoCacheQuote("2500.123456789012345678", now)
+		quote.RateSnapshotID = 91
+		return map[CoinGeckoQuoteCacheKey]CoinGeckoQuote{key: quote}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +82,7 @@ func TestCompanyFundCurrentValuator_UsesFreshCurrentQuoteAsProvisional(t *testin
 	if result.Result.Value == nil || !result.Result.Value.Equal(decimal.RequireFromString("3750.185185183518518517")) {
 		t.Fatalf("current-market USD value = %#v", result.Result.Value)
 	}
-	if len(store.applies) != 1 || store.applies[0].CalculatedUSDValue == nil || !store.applies[0].CalculatedUSDValue.Equal(*result.Result.Value) || store.applies[0].DerivationMethod != ValuationDerivationMethodMarketPrice {
+	if len(store.applies) != 1 || store.applies[0].CalculatedUSDValue == nil || !store.applies[0].CalculatedUSDValue.Equal(*result.Result.Value) || store.applies[0].DerivationMethod != ValuationDerivationMethodMarketPrice || store.applies[0].RateSnapshotID == nil || *store.applies[0].RateSnapshotID != 91 {
 		t.Fatalf("market apply input = %#v", store.applies)
 	}
 }
@@ -102,7 +104,10 @@ func TestCompanyFundCurrentValuator_UsesExplicitFiatExchangeRateQuoteAsProvision
 			"JPY": {Code: "JPY", Type: "fiat", Value: decimal.NewFromInt(6000000)},
 		},
 	}}
-	refresher, err := NewCoinGeckoCurrentRateRefresher(client, registry, cache, CoinGeckoCurrentRateRefresherConfig{Clock: func() time.Time { return now }})
+	storeSnapshots := &fakeCurrentRateSnapshotStore{nextID: 200}
+	refresher, err := NewCoinGeckoCurrentRateRefresher(client, registry, cache, CoinGeckoCurrentRateRefresherConfig{
+		Clock: func() time.Time { return now }, SnapshotStore: storeSnapshots, PolicyVersion: "current-usd-v1",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,11 +122,14 @@ func TestCompanyFundCurrentValuator_UsesExplicitFiatExchangeRateQuoteAsProvision
 	valuator := newTestCompanyFundCurrentValuator(t, now, store, registry, cache)
 
 	result := valuator.ValueTransaction(context.Background(), 15)
-	if result.Err != nil || !result.Applied || result.Result.Status != USDValuationStatusProvisional || result.Result.Source != USDValuationSourceCoinGecko || result.Result.Basis != USDValuationBasisIngestionTime {
+	if result.Err != nil || !result.Applied || result.Result.Status != USDValuationStatusProvisional || result.Result.Source != USDValuationSourceCoinGecko || result.Result.Method != USDValuationMethodCoinGeckoBTCCross || result.Result.Basis != USDValuationBasisIngestionTime {
 		t.Fatalf("fiat ValueTransaction() = %#v", result)
 	}
 	if result.Result.Value == nil || !result.Result.Value.Equal(decimal.NewFromInt(60000)) || result.Result.PriceAt == nil || !result.Result.PriceAt.Equal(now) {
 		t.Fatalf("fiat provisional valuation must preserve derived current quote and fetched timestamp: %#v", result.Result)
+	}
+	if len(store.applies) != 1 || store.applies[0].RateSnapshotID == nil || *store.applies[0].RateSnapshotID <= 0 {
+		t.Fatalf("fiat valuation must retain derived snapshot ID: %#v", store.applies)
 	}
 }
 

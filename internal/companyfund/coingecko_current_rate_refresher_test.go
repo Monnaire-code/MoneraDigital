@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,130 @@ func TestCoinGeckoCurrentRateRefresher_RefreshesOnlyExplicitPolicyMappings(t *te
 	}
 }
 
+func TestCoinGeckoCurrentRateRefresher_DefaultIntervalMatchesDemoBudget(t *testing.T) {
+	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	refresher, err := NewCoinGeckoCurrentRateRefresher(
+		&fakeCoinGeckoCurrentPriceClient{},
+		newCurrentRateRefresherRegistry(t, nil),
+		newTestCurrentRateCache(t, &now, 10*time.Minute),
+		CoinGeckoCurrentRateRefresherConfig{Clock: func() time.Time { return now }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refresher.RefreshInterval() != 5*time.Minute {
+		t.Fatalf("default refresh interval = %s, want 5m", refresher.RefreshInterval())
+	}
+}
+
+func TestCoinGeckoCurrentRateRefresher_PersistsAllQuotesBeforeCacheSwap(t *testing.T) {
+	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	policies := []AccountAssetPolicy{
+		{ID: 10, AccountID: 1, Asset: AssetIdentity{Currency: "ETH", ChainCode: "ETHEREUM", ProviderAssetKey: "ETH"}, CoinGeckoID: "ethereum", Enabled: true},
+		{ID: 11, AccountID: 1, Asset: AssetIdentity{Currency: "BTC", ChainCode: "BITCOIN", ProviderAssetKey: "BTC"}, CoinGeckoID: "bitcoin", Enabled: true},
+	}
+	registry := newCurrentRateRefresherRegistry(t, policies)
+	cache := newTestCurrentRateCache(t, &now, 10*time.Minute)
+	client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+		"bitcoin,ethereum": fakeCoinGeckoPriceBatch(now,
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("60000", now)},
+			CoinGeckoPrice{CoinID: "ethereum", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("2500", now)},
+		),
+	}}
+	store := &fakeCurrentRateSnapshotStore{nextID: 70}
+	refresher, err := NewCoinGeckoCurrentRateRefresher(client, registry, cache, CoinGeckoCurrentRateRefresherConfig{
+		Clock: func() time.Time { return now }, SnapshotStore: store, PolicyVersion: "current-usd-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := refresher.Refresh(t.Context())
+	if err != nil || !result.Refreshed || len(store.appended) != 2 {
+		t.Fatalf("Refresh() = %#v, %v; appended=%#v", result, err, store.appended)
+	}
+	for _, input := range store.appended {
+		if input.Provider != "COINGECKO" || input.QuoteCurrency != "USD" ||
+			input.Method != string(USDValuationMethodCoinGeckoDirect) ||
+			input.Granularity != currentRateSnapshotGranularity ||
+			input.PolicyVersion != "current-usd-v1" || input.PriceKind != MarketPriceKindCurrent ||
+			input.BucketStart.IsZero() || input.EffectiveAt == nil || input.SourcePayloadDigest == "" {
+			t.Fatalf("persisted current snapshot input = %#v", input)
+		}
+	}
+	for _, policy := range policies {
+		key, ok := CoinGeckoQuoteCacheKeyForPolicy(policy)
+		if !ok {
+			t.Fatalf("policy %#v should create cache key", policy)
+		}
+		read, found := cache.Get(key)
+		if !found || read.Quote.RateSnapshotID < 70 {
+			t.Fatalf("persisted cache quote = %#v, found=%v", read, found)
+		}
+	}
+}
+
+func TestCoinGeckoCurrentRateRefresher_PersistenceFailureDoesNotSwapPartialCache(t *testing.T) {
+	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	policies := []AccountAssetPolicy{
+		{ID: 10, AccountID: 1, Asset: AssetIdentity{Currency: "ETH"}, CoinGeckoID: "ethereum", Enabled: true},
+		{ID: 11, AccountID: 1, Asset: AssetIdentity{Currency: "BTC"}, CoinGeckoID: "bitcoin", Enabled: true},
+	}
+	cache := newTestCurrentRateCache(t, &now, 10*time.Minute)
+	client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+		"bitcoin,ethereum": fakeCoinGeckoPriceBatch(now,
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("60000", now)},
+			CoinGeckoPrice{CoinID: "ethereum", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("2500", now)},
+		),
+	}}
+	store := &fakeCurrentRateSnapshotStore{nextID: 70, appendErrAt: 2}
+	refresher, err := NewCoinGeckoCurrentRateRefresher(client, newCurrentRateRefresherRegistry(t, policies), cache, CoinGeckoCurrentRateRefresherConfig{
+		Clock: func() time.Time { return now }, SnapshotStore: store, PolicyVersion: "current-usd-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := refresher.Refresh(t.Context())
+	if err == nil || !result.RefreshFailed || !result.Stale || len(cache.Snapshot().Quotes) != 0 {
+		t.Fatalf("Refresh() = %#v, %v; cache=%#v", result, err, cache.Snapshot())
+	}
+}
+
+func TestCoinGeckoCurrentRateRefresher_RestoresPersistedSnapshotBeforeProviderAttempt(t *testing.T) {
+	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	policy := AccountAssetPolicy{ID: 10, AccountID: 1, Asset: AssetIdentity{Currency: "ETH"}, CoinGeckoID: "ethereum", Enabled: true}
+	key, ok := CoinGeckoQuoteCacheKeyForPolicy(policy)
+	if !ok {
+		t.Fatal("policy should create cache key")
+	}
+	store := &fakeCurrentRateSnapshotStore{loaded: map[string]*RateSnapshotRecord{
+		key.identity(): {
+			ID: 91, Provider: "COINGECKO", AssetIdentityKey: key.AssetIdentityKey, ProviderAssetID: "ethereum",
+			BaseCurrency: "ETH", QuoteCurrency: "USD", Rate: decimal.NewFromInt(2400), Method: string(USDValuationMethodCoinGeckoDirect),
+			Granularity: "CURRENT", BucketStart: now.Add(-5 * time.Minute), EffectiveAt: timePointerUTC(now.Add(-time.Minute)),
+			AvailableAt: now.Add(-time.Minute), FetchedAt: now.Add(-time.Minute), PolicyVersion: "current-usd-v1",
+			SourcePayloadDigest: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", IsEligibleLeaf: true,
+		},
+	}}
+	cache := newTestCurrentRateCache(t, &now, 10*time.Minute)
+	refresher, err := NewCoinGeckoCurrentRateRefresher(
+		&fakeCoinGeckoCurrentPriceClient{simpleErr: errors.New("provider unavailable")},
+		newCurrentRateRefresherRegistry(t, []AccountAssetPolicy{policy}),
+		cache,
+		CoinGeckoCurrentRateRefresherConfig{Clock: func() time.Time { return now }, SnapshotStore: store, PolicyVersion: "current-usd-v1"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := refresher.Refresh(t.Context())
+	read, found := cache.Get(key)
+	if err == nil || !result.RefreshFailed || !found || read.Quote.RateSnapshotID != 91 || !read.Quote.Price.Equal(decimal.NewFromInt(2400)) {
+		t.Fatalf("Refresh() = %#v, %v; restored=%#v found=%v", result, err, read, found)
+	}
+}
+
 func TestCoinGeckoCurrentRateRefresher_SkipsWhenNoExplicitMappingsExist(t *testing.T) {
 	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
 	registry := newCurrentRateRefresherRegistry(t, []AccountAssetPolicy{
@@ -125,7 +250,10 @@ func TestCoinGeckoCurrentRateRefresher_DerivesConfiguredFiatUSDFromOneExchangeRa
 			"CNY": {Code: "CNY", Type: "fiat", Value: decimal.NewFromInt(420000)},
 		},
 	}}
-	refresher, err := NewCoinGeckoCurrentRateRefresher(client, registry, cache, CoinGeckoCurrentRateRefresherConfig{Clock: func() time.Time { return now }})
+	store := &fakeCurrentRateSnapshotStore{nextID: 100}
+	refresher, err := NewCoinGeckoCurrentRateRefresher(client, registry, cache, CoinGeckoCurrentRateRefresherConfig{
+		Clock: func() time.Time { return now }, SnapshotStore: store, PolicyVersion: "current-usd-v1",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,9 +277,43 @@ func TestCoinGeckoCurrentRateRefresher_DerivesConfiguredFiatUSDFromOneExchangeRa
 			t.Fatalf("%s fiat policy cache key = %#v, %v", testCase.currency, key, ok)
 		}
 		quote, found := cache.Get(key)
-		if !found || quote.Stale || !quote.Quote.Price.Equal(decimal.RequireFromString(testCase.want)) || !quote.Quote.ProviderUpdatedAt.Equal(now) || quote.Quote.ResponseDigest != client.exchange.ResponseDigest {
+		if !found || quote.Stale || !quote.Quote.Price.Equal(decimal.RequireFromString(testCase.want)) || !quote.Quote.ProviderUpdatedAt.Equal(now) || quote.Quote.ResponseDigest != client.exchange.ResponseDigest || quote.Quote.Method != USDValuationMethodCoinGeckoBTCCross || quote.Quote.RateSnapshotID <= 0 {
 			t.Fatalf("%s derived fiat quote = %#v, found=%v", testCase.currency, quote, found)
 		}
+	}
+	derivedCount := 0
+	for _, input := range store.appended {
+		if input.Method != string(USDValuationMethodCoinGeckoBTCCross) {
+			continue
+		}
+		derivedCount++
+		if input.NumeratorSnapshotID == nil || input.DenominatorSnapshotID == nil || input.ProviderAssetID == "" {
+			t.Fatalf("fiat derived snapshot lacks auditable BTC legs: %#v", input)
+		}
+	}
+	if derivedCount != len(policies) {
+		t.Fatalf("derived fiat snapshots = %d, want %d; all=%#v", derivedCount, len(policies), store.appended)
+	}
+}
+
+func TestCoinGeckoCurrentRateRefresher_ExposesSnapshotRestoreFailureWithoutBlockingProviderRepair(t *testing.T) {
+	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	policy := AccountAssetPolicy{ID: 10, AccountID: 1, Asset: AssetIdentity{Currency: "ETH"}, CoinGeckoID: "ethereum", Enabled: true}
+	client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+		"ethereum": fakeCoinGeckoPriceBatch(now, CoinGeckoPrice{CoinID: "ethereum", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("2500", now)}),
+	}}
+	store := &fakeCurrentRateSnapshotStore{nextID: 70, findErr: errors.New("restore unavailable")}
+	refresher, err := NewCoinGeckoCurrentRateRefresher(client, newCurrentRateRefresherRegistry(t, []AccountAssetPolicy{policy}), newTestCurrentRateCache(t, &now, 10*time.Minute), CoinGeckoCurrentRateRefresherConfig{
+		Clock: func() time.Time { return now }, SnapshotStore: store, PolicyVersion: "current-usd-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := refresher.Refresh(t.Context())
+	status := refresher.Status()
+	if err != nil || !result.Refreshed || !result.RestoreFailed || status.LastRestoreError == nil || !status.LastRestoreErrorAt.Equal(now) {
+		t.Fatalf("Refresh() = %#v, %v; status=%#v", result, err, status)
 	}
 }
 
@@ -273,10 +435,54 @@ type fakeCoinGeckoCurrentPriceClient struct {
 	exchangeCalls  int
 }
 
+type fakeCurrentRateSnapshotStore struct {
+	nextID      int64
+	appendErrAt int
+	appended    []RateSnapshotInput
+	loaded      map[string]*RateSnapshotRecord
+	findErr     error
+}
+
+func (store *fakeCurrentRateSnapshotStore) AppendRateSnapshot(_ context.Context, input RateSnapshotInput) (RateSnapshotAppendResult, error) {
+	store.appended = append(store.appended, input)
+	if store.appendErrAt > 0 && len(store.appended) == store.appendErrAt {
+		return RateSnapshotAppendResult{}, errors.New("persist current rate snapshot")
+	}
+	store.nextID++
+	record := RateSnapshotRecord{
+		ID: store.nextID, Provider: input.Provider, AssetIdentityKey: input.AssetIdentityKey,
+		ProviderAssetID: input.ProviderAssetID, ProviderPlatformID: input.ProviderPlatformID, AssetContract: input.AssetContract,
+		BaseCurrency: input.BaseCurrency, QuoteCurrency: input.QuoteCurrency, Rate: input.Rate, Method: input.Method,
+		Granularity: input.Granularity, BucketStart: input.BucketStart, EffectiveAt: input.EffectiveAt,
+		AvailableAt: input.AvailableAt, FetchedAt: input.FetchedAt, SnapshotGroupID: input.SnapshotGroupID,
+		PolicyVersion: input.PolicyVersion, SourcePayloadDigest: input.SourcePayloadDigest, IsEligibleLeaf: true,
+		NumeratorSnapshotID: input.NumeratorSnapshotID, DenominatorSnapshotID: input.DenominatorSnapshotID,
+	}
+	return RateSnapshotAppendResult{Snapshot: record, Inserted: true}, nil
+}
+
+func (store *fakeCurrentRateSnapshotStore) FindLatestUsableRateSnapshot(_ context.Context, lookup RateSnapshotLookup) (*RateSnapshotRecord, error) {
+	if store.findErr != nil {
+		return nil, store.findErr
+	}
+	key := CoinGeckoQuoteCacheKey{
+		Provider: lookup.Provider, AssetIdentityKey: lookup.AssetIdentityKey, CoinID: lookup.ProviderAssetID,
+		PlatformID: lookup.ProviderPlatformID, ContractAddress: lookup.AssetContract, QuoteCurrency: lookup.QuoteCurrency,
+	}
+	if len(lookup.ProviderAssetID) > len(coinGeckoFiatMappingPrefix) && lookup.ProviderAssetID[:len(coinGeckoFiatMappingPrefix)] == coinGeckoFiatMappingPrefix {
+		key.CoinID = ""
+		key.FiatCode = lookup.ProviderAssetID[len(coinGeckoFiatMappingPrefix):]
+	}
+	return store.loaded[key.identity()], nil
+}
+
 func (client *fakeCoinGeckoCurrentPriceClient) FetchSimplePrices(_ context.Context, request CoinGeckoSimplePriceRequest) (CoinGeckoPriceBatch, error) {
 	client.simpleRequests = append(client.simpleRequests, request)
 	if client.simpleErr != nil {
 		return CoinGeckoPriceBatch{}, client.simpleErr
+	}
+	if batch, found := client.simple[strings.Join(request.CoinIDs, ",")]; found {
+		return batch, nil
 	}
 	return client.simple[request.CoinIDs[0]], nil
 }

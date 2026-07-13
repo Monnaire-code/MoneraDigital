@@ -103,6 +103,7 @@ func registerMigrations(m *migration.Migrator) {
 	m.Register(&migrations.AddMissingForeignKeys{})
 	m.Register(&migrations.CreateFundReports{})
 	m.Register(&migrations.CreateCompanyFundLedger{})
+	m.Register(&migrations.WidenAmountPrecision{})
 }
 
 func printStatus(status []migration.MigrationStatus) {

@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	defaultCurrentRateCacheTTL         = time.Minute
-	defaultCurrentRateCacheMaxQuoteAge = 5 * time.Minute
+	defaultCurrentRateCacheTTL         = 10 * time.Minute
+	defaultCurrentRateCacheMaxQuoteAge = 60 * time.Minute
 )
 
 // CoinGeckoQuoteCacheKey contains the full provider/asset mapping identity.
@@ -263,6 +263,23 @@ func copyCurrentRateQuotes(quotes map[CoinGeckoQuoteCacheKey]CoinGeckoQuote) (ma
 		}
 		if !quote.Price.GreaterThan(decimal.Zero) || quote.ProviderUpdatedAt.IsZero() || quote.FetchedAt.IsZero() || quote.ProviderUpdatedAt.After(quote.FetchedAt) || !isLowerSHA256Hex(quote.ResponseDigest) {
 			return nil, fmt.Errorf("current rate cache quote for %q must have positive price and complete audit metadata", key.AssetIdentityKey)
+		}
+		if quote.RateSnapshotID < 0 {
+			return nil, fmt.Errorf("current rate cache quote for %q has an invalid rate snapshot ID", key.AssetIdentityKey)
+		}
+		switch quote.valuationMethod() {
+		case USDValuationMethodCoinGeckoDirect:
+			if !quote.BTCCrossNumerator.IsZero() || !quote.BTCCrossDenominator.IsZero() {
+				return nil, fmt.Errorf("direct current rate cache quote for %q cannot carry BTC cross inputs", key.AssetIdentityKey)
+			}
+		case USDValuationMethodCoinGeckoBTCCross:
+			hasRawInputs := quote.BTCCrossNumerator.GreaterThan(decimal.Zero) && quote.BTCCrossDenominator.GreaterThan(decimal.Zero)
+			hasPersistedDerivation := quote.RateSnapshotID > 0 && quote.BTCCrossNumerator.IsZero() && quote.BTCCrossDenominator.IsZero()
+			if key.FiatCode == "" || (!hasRawInputs && !hasPersistedDerivation) {
+				return nil, fmt.Errorf("BTC-cross current rate cache quote for %q requires a fiat key and positive inputs", key.AssetIdentityKey)
+			}
+		default:
+			return nil, fmt.Errorf("current rate cache quote for %q has unsupported valuation method %q", key.AssetIdentityKey, quote.Method)
 		}
 		copy[key] = quote
 	}

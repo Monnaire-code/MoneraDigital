@@ -1,8 +1,10 @@
 package companyfund
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +162,36 @@ func TestProviderEventWorker_ProcessNextSchedulesRetryForTransientFailure(t *tes
 	}
 	if want := now.Add(2 * time.Second); !finalization.retryAt.Equal(want) {
 		t.Fatalf("retryAt = %s, want %s", finalization.retryAt, want)
+	}
+}
+
+func TestProviderEventWorker_ProcessNextDoesNotLogProviderFailureDetailWhenRetryFinalizationFails(t *testing.T) {
+	const sensitiveDetail = "provider payload wallet=0xSensitive transaction=secret-tx"
+	lease := validProviderEventWorkerLease()
+	repository := &providerEventWorkerRepositoryStub{
+		lease:       &lease,
+		finalizeErr: errors.New("database unavailable"),
+	}
+	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{
+		err: errors.New(sensitiveDetail),
+	}, map[Channel]ProviderEventNormalizer{
+		ChannelAirwallex: &providerEventNormalizerStub{},
+	}, time.Date(2026, time.July, 10, 6, 0, 0, 0, time.UTC))
+
+	var output bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	result, err := worker.ProcessNext(t.Context())
+	if err == nil || !result.Claimed {
+		t.Fatalf("ProcessNext() = %#v, %v; want claimed finalization failure", result, err)
+	}
+	if strings.Contains(output.String(), sensitiveDetail) {
+		t.Fatalf("process log leaked provider failure detail: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "stage=finalize_retry") {
+		t.Fatalf("process log lacks stable retry-finalization stage: %q", output.String())
 	}
 }
 

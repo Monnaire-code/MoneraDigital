@@ -128,7 +128,7 @@ func TestProviderTransactionSupplementSQL_ExcludesManualFinanceAndManualRiskOver
 		}
 	}
 	for _, contract := range []string{
-		"CASE WHEN $2 THEN COALESCE", "WHEN $20 = true THEN true", "::jsonb",
+		"CASE WHEN $2 THEN COALESCE", "WHEN $20::boolean = true THEN true", "::jsonb",
 	} {
 		if !strings.Contains(updateCompanyFundTransactionProviderSupplementSQL, contract) {
 			t.Fatalf("provider supplement SQL is missing merge contract %q", contract)

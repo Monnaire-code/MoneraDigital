@@ -35,9 +35,9 @@ const (
 	defaultCompanyFundSafeheronCollectorBatchSize     = 100
 	defaultCompanyFundAirwallexFinancialPageSize      = 100
 	defaultCompanyFundAirwallexFinancialMaxPages      = 100
-	defaultCompanyFundCurrentRateRefreshInterval      = time.Minute
-	defaultCompanyFundCurrentRateCacheTTL             = time.Minute
-	defaultCompanyFundCurrentRateCacheMaxAge          = 5 * time.Minute
+	defaultCompanyFundCurrentRateRefreshInterval      = 5 * time.Minute
+	defaultCompanyFundCurrentRateCacheTTL             = 10 * time.Minute
+	defaultCompanyFundCurrentRateCacheMaxAge          = 60 * time.Minute
 	defaultCompanyFundCurrentValuationSweepInterval   = time.Minute
 	defaultCompanyFundCurrentValuationSweepBatch      = 100
 	maxCompanyFundPayloadKeyVersionBytes              = 64
@@ -537,6 +537,8 @@ func newCompanyFundCurrentValuationRuntime(c *Container, config companyFundRunti
 	refresher, err := companyfund.NewCoinGeckoCurrentRateRefresher(client, c.CompanyFundAccountRegistry, cache, companyfund.CoinGeckoCurrentRateRefresherConfig{
 		RefreshInterval: companyFundDurationOrDefault(config.CurrentRateRefreshInterval, defaultCompanyFundCurrentRateRefreshInterval),
 		Clock:           time.Now,
+		SnapshotStore:   c.CompanyFundRepository,
+		PolicyVersion:   config.CurrentValuationPolicyVersion,
 	})
 	if err != nil {
 		log.Printf("company-fund USD valuation disabled: CoinGecko refresher configuration is invalid")

@@ -208,6 +208,7 @@ func (v *CompanyFundCurrentValuator) evaluateCandidate(candidate CompanyFundTran
 	if err != nil {
 		return USDValuationResult{}, nil, nil, err
 	}
+	market.Method = quoteRead.Quote.valuationMethod()
 	return market, &policy, &quoteRead, nil
 }
 
@@ -226,7 +227,7 @@ func companyFundStaleCurrentRateResult(input USDValuationInput, providerReported
 	return USDValuationResult{
 		ProviderReportedUSD: providerReportedUSD,
 		Source:              USDValuationSourceCoinGecko,
-		Method:              USDValuationMethodCoinGeckoDirect,
+		Method:              quote.Quote.valuationMethod(),
 		Status:              USDValuationStatusStale,
 		Reason:              USDValuationReasonCacheStale,
 		Basis:               USDValuationBasisIngestionTime,
@@ -282,6 +283,10 @@ func (v *CompanyFundCurrentValuator) applyInputForCandidate(
 		DependencyFingerprint:     dependencyFingerprint,
 		PolicyVersion:             v.policyVersion,
 		TransitionTrigger:         companyFundCurrentValuationTrigger,
+	}
+	if quoteRead != nil && quoteRead.Quote.RateSnapshotID > 0 {
+		rateSnapshotID := quoteRead.Quote.RateSnapshotID
+		input.RateSnapshotID = &rateSnapshotID
 	}
 	if candidate.CurrentValuationHistoryID == nil {
 		expectation := ValuationCurrentStateExpectationNone
@@ -386,6 +391,7 @@ func companyFundCurrentValuationFingerprint(
 			quoteRead.Quote.ProviderUpdatedAt.UTC().Format(time.RFC3339Nano),
 			quoteRead.Quote.FetchedAt.UTC().Format(time.RFC3339Nano),
 			quoteRead.Quote.ResponseDigest,
+			fmt.Sprintf("rate-snapshot-id=%d", quoteRead.Quote.RateSnapshotID),
 			fmt.Sprintf("stale=%t", quoteRead.Stale),
 			fmt.Sprintf("provider-stale=%t", quoteRead.ProviderStale),
 			fmt.Sprintf("refresh-failed=%t", quoteRead.RefreshFailed),

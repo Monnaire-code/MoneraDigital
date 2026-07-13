@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -96,6 +97,7 @@ func (worker *ProviderEventWorker) ProcessNext(ctx context.Context) (result Prov
 	// Renew once before external work begins. This both verifies our still-live
 	// lease and gives source I/O the complete configured lease window.
 	if _, err := worker.repository.RenewProviderEventLease(ctx, lease.ID, worker.config.Owner, worker.config.LeaseDuration); err != nil {
+		logProviderEventWorkerDeferral("initial_lease_renewal")
 		return result, fmt.Errorf("renew provider event lease before processing: %w", err)
 	}
 
@@ -114,9 +116,11 @@ func (worker *ProviderEventWorker) ProcessNext(ctx context.Context) (result Prov
 		}
 		if processingErr == nil && normalized.Ignored {
 			if heartbeatErr := stopHeartbeat(); heartbeatErr != nil {
+				logProviderEventWorkerDeferral("lease_heartbeat")
 				return result, heartbeatErr
 			}
 			if err := worker.repository.FinalizeProviderEvent(ctx, lease.ID, worker.config.Owner, ProviderEventFinalizeIgnored, nil, ""); err != nil {
+				logProviderEventWorkerDeferral("finalize_ignored")
 				return result, fmt.Errorf("finalize ignored provider event: %w", err)
 			}
 			result.Outcome = ProviderEventFinalizeIgnored
@@ -148,12 +152,14 @@ func (worker *ProviderEventWorker) ProcessNext(ctx context.Context) (result Prov
 	}
 
 	if heartbeatErr := stopHeartbeat(); heartbeatErr != nil {
+		logProviderEventWorkerDeferral("lease_heartbeat")
 		return result, heartbeatErr
 	}
 	if processingErr != nil {
 		return worker.finalizeProcessingFailure(ctx, lease, result, processingErr)
 	}
 	if err := worker.repository.FinalizeProviderEvent(ctx, lease.ID, worker.config.Owner, ProviderEventFinalizeProcessed, nil, ""); err != nil {
+		logProviderEventWorkerDeferral("finalize_processed")
 		return result, fmt.Errorf("finalize processed provider event: %w", err)
 	}
 	result.Outcome = ProviderEventFinalizeProcessed
@@ -176,8 +182,10 @@ func (worker *ProviderEventWorker) valueSuccessfulLedgerTransactionBestEffort(ct
 }
 
 func (worker *ProviderEventWorker) finalizeProcessingFailure(ctx context.Context, lease *ProviderEventLease, result ProviderEventWorkerResult, processingErr error) (ProviderEventWorkerResult, error) {
+	failureDetail := providerEventFailureDetail(processingErr)
 	if isPermanentProviderEventFailure(processingErr) {
-		if err := worker.repository.FinalizeProviderEvent(ctx, lease.ID, worker.config.Owner, ProviderEventFinalizeFailed, nil, providerEventFailureDetail(processingErr)); err != nil {
+		if err := worker.repository.FinalizeProviderEvent(ctx, lease.ID, worker.config.Owner, ProviderEventFinalizeFailed, nil, failureDetail); err != nil {
+			logProviderEventWorkerDeferral("finalize_dead_letter")
 			return result, fmt.Errorf("dead-letter provider event: %w", err)
 		}
 		result.Outcome = ProviderEventFinalizeFailed
@@ -193,11 +201,19 @@ func (worker *ProviderEventWorker) finalizeProcessingFailure(ctx context.Context
 		return result, fmt.Errorf("provider event worker clock returned zero time")
 	}
 	retryAt := now.Add(delay)
-	if err := worker.repository.FinalizeProviderEvent(ctx, lease.ID, worker.config.Owner, ProviderEventFinalizeRetry, &retryAt, providerEventFailureDetail(processingErr)); err != nil {
+	if err := worker.repository.FinalizeProviderEvent(ctx, lease.ID, worker.config.Owner, ProviderEventFinalizeRetry, &retryAt, failureDetail); err != nil {
+		logProviderEventWorkerDeferral("finalize_retry")
 		return result, fmt.Errorf("schedule provider event retry: %w", err)
 	}
 	result.Outcome = ProviderEventFinalizeRetry
 	return result, nil
+}
+
+func logProviderEventWorkerDeferral(stage string) {
+	// Do not include the wrapped error: adapters can carry provider-originated
+	// data. The stage alone is enough to distinguish retry mechanics from a
+	// parser or persistence failure in operational logs.
+	log.Printf("company-fund provider event worker deferred: stage=%s", stage)
 }
 
 func bindProviderEventMovementProvenance(lease ProviderEventLease, movement TransactionUpsertInput) (TransactionUpsertInput, error) {

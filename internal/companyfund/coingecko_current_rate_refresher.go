@@ -11,7 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-const defaultCoinGeckoCurrentRateRefreshInterval = time.Minute
+const defaultCoinGeckoCurrentRateRefreshInterval = 5 * time.Minute
 
 // CoinGeckoCurrentPriceClient is the narrow current-price surface used by the
 // process-local refresher. It deliberately excludes history, quotas, and
@@ -24,10 +24,12 @@ type CoinGeckoCurrentPriceClient interface {
 
 // CoinGeckoCurrentRateRefresherConfig controls only local refresh cadence.
 // The cache owns freshness evaluation; the registry owns the account/policy
-// snapshot. A zero interval uses the requested one-minute default.
+// snapshot. A zero interval uses the configured five-minute default.
 type CoinGeckoCurrentRateRefresherConfig struct {
 	RefreshInterval time.Duration
 	Clock           func() time.Time
+	SnapshotStore   CurrentRateSnapshotStore
+	PolicyVersion   string
 }
 
 // CoinGeckoCurrentRateRefreshResult is intentionally metadata-only. Quote
@@ -38,6 +40,7 @@ type CoinGeckoCurrentRateRefreshResult struct {
 	Skipped       bool
 	Stale         bool
 	RefreshFailed bool
+	RestoreFailed bool
 	FailureCount  uint64
 	MappingCount  int
 	QuoteCount    int
@@ -49,6 +52,8 @@ type CoinGeckoCurrentRateRefresherStatus struct {
 	LastSuccessfulRefreshAt time.Time
 	LastRefreshError        error
 	LastRefreshErrorAt      time.Time
+	LastRestoreError        error
+	LastRestoreErrorAt      time.Time
 	Age                     time.Duration
 }
 
@@ -59,16 +64,20 @@ type CoinGeckoCurrentRateRefresher struct {
 	client   CoinGeckoCurrentPriceClient
 	registry *AccountRegistry
 	cache    *CurrentRateCache
+	store    CurrentRateSnapshotStore
+	policy   string
 	interval time.Duration
 	now      func() time.Time
 
-	mu            sync.RWMutex
-	lastSuccessAt time.Time
-	lastError     error
-	lastErrorAt   time.Time
-	running       bool
-	runCancel     context.CancelFunc
-	runDone       chan struct{}
+	mu                 sync.RWMutex
+	lastSuccessAt      time.Time
+	lastError          error
+	lastErrorAt        time.Time
+	lastRestoreError   error
+	lastRestoreErrorAt time.Time
+	running            bool
+	runCancel          context.CancelFunc
+	runDone            chan struct{}
 }
 
 func NewCoinGeckoCurrentRateRefresher(
@@ -97,8 +106,16 @@ func NewCoinGeckoCurrentRateRefresher(
 	if now == nil {
 		now = time.Now
 	}
+	policyVersion := strings.TrimSpace(config.PolicyVersion)
+	if policyVersion == "" {
+		policyVersion = defaultCompanyFundCurrentValuationPolicyVersion
+	}
+	if err := validateRequiredString("CoinGecko current-rate policy version", policyVersion, maxRateSnapshotPolicyVersionBytes); err != nil {
+		return nil, err
+	}
 	return &CoinGeckoCurrentRateRefresher{
-		client: client, registry: registry, cache: cache, interval: interval, now: now,
+		client: client, registry: registry, cache: cache, store: config.SnapshotStore,
+		policy: policyVersion, interval: interval, now: now,
 	}, nil
 }
 
@@ -118,6 +135,8 @@ func (r *CoinGeckoCurrentRateRefresher) Status() CoinGeckoCurrentRateRefresherSt
 		LastSuccessfulRefreshAt: r.lastSuccessAt,
 		LastRefreshError:        r.lastError,
 		LastRefreshErrorAt:      r.lastErrorAt,
+		LastRestoreError:        r.lastRestoreError,
+		LastRestoreErrorAt:      r.lastRestoreErrorAt,
 	}
 	r.mu.RUnlock()
 	if !status.LastSuccessfulRefreshAt.IsZero() {
@@ -145,9 +164,22 @@ func (r *CoinGeckoCurrentRateRefresher) Refresh(ctx context.Context) (CoinGeckoC
 		result.Skipped = true
 		return result, nil
 	}
+	// Recovery is best-effort: a provider refresh may repair a missing or stale
+	// durable cache, while a later persistence failure still prevents an
+	// untracked quote from being published to readers.
+	if err := r.restoreCurrentRateQuotes(ctx, plan); err != nil {
+		result.RestoreFailed = true
+		r.recordRestoreFailure(err)
+	} else {
+		r.recordRestoreSuccess()
+	}
 
 	cacheResult, err := r.cache.Refresh(ctx, func(refreshContext context.Context) (map[CoinGeckoQuoteCacheKey]CoinGeckoQuote, error) {
-		return r.fetchCurrentUSDQuotes(refreshContext, plan)
+		quotes, fetchErr := r.fetchCurrentUSDQuotes(refreshContext, plan)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		return r.persistCurrentRateQuotes(refreshContext, plan, quotes)
 	})
 	result.Refreshed = cacheResult.Refreshed
 	result.Stale = cacheResult.Stale
@@ -257,10 +289,13 @@ func (r *CoinGeckoCurrentRateRefresher) fetchCurrentFiatUSDQuotes(
 			return fmt.Errorf("derive USD per %s from CoinGecko exchange rates: non-positive result", fiatCode)
 		}
 		quote := CoinGeckoQuote{
-			Price:             usdPerFiat,
-			ProviderUpdatedAt: batch.FetchedAt.UTC(),
-			FetchedAt:         batch.FetchedAt.UTC(),
-			ResponseDigest:    batch.ResponseDigest,
+			Price:               usdPerFiat,
+			ProviderUpdatedAt:   batch.FetchedAt.UTC(),
+			FetchedAt:           batch.FetchedAt.UTC(),
+			ResponseDigest:      batch.ResponseDigest,
+			Method:              USDValuationMethodCoinGeckoBTCCross,
+			BTCCrossNumerator:   usdRate.Value,
+			BTCCrossDenominator: fiatRate.Value,
 		}
 		for _, key := range keys {
 			quotes[key] = quote
@@ -281,6 +316,20 @@ func (r *CoinGeckoCurrentRateRefresher) recordRefreshFailure(err error) {
 	r.mu.Lock()
 	r.lastError = err
 	r.lastErrorAt = r.now().UTC()
+	r.mu.Unlock()
+}
+
+func (r *CoinGeckoCurrentRateRefresher) recordRestoreSuccess() {
+	r.mu.Lock()
+	r.lastRestoreError = nil
+	r.lastRestoreErrorAt = time.Time{}
+	r.mu.Unlock()
+}
+
+func (r *CoinGeckoCurrentRateRefresher) recordRestoreFailure(err error) {
+	r.mu.Lock()
+	r.lastRestoreError = err
+	r.lastRestoreErrorAt = r.now().UTC()
 	r.mu.Unlock()
 }
 
@@ -351,6 +400,7 @@ type coinGeckoCurrentRatePlan struct {
 	simpleKeys   map[string][]CoinGeckoQuoteCacheKey
 	tokenKeys    map[string]map[string][]CoinGeckoQuoteCacheKey
 	fiatKeys     map[string][]CoinGeckoQuoteCacheKey
+	mappings     map[CoinGeckoQuoteCacheKey]currentRateSnapshotMapping
 	mappingCount int
 }
 
@@ -359,6 +409,7 @@ func buildCoinGeckoCurrentRatePlan(policies []AccountAssetPolicy) coinGeckoCurre
 		simpleKeys: make(map[string][]CoinGeckoQuoteCacheKey),
 		tokenKeys:  make(map[string]map[string][]CoinGeckoQuoteCacheKey),
 		fiatKeys:   make(map[string][]CoinGeckoQuoteCacheKey),
+		mappings:   make(map[CoinGeckoQuoteCacheKey]currentRateSnapshotMapping),
 	}
 	seen := make(map[CoinGeckoQuoteCacheKey]struct{})
 	for _, policy := range policies {
@@ -371,6 +422,7 @@ func buildCoinGeckoCurrentRatePlan(policies []AccountAssetPolicy) coinGeckoCurre
 		}
 		seen[key] = struct{}{}
 		plan.mappingCount++
+		plan.mappings[key] = currentRateSnapshotMapping{BaseCurrency: strings.ToUpper(strings.TrimSpace(policy.Asset.Currency))}
 		if key.FiatCode != "" {
 			plan.fiatKeys[key.FiatCode] = append(plan.fiatKeys[key.FiatCode], key)
 			continue

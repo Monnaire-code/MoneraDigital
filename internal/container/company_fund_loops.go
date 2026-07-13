@@ -181,7 +181,11 @@ func runCompanyFundCurrentRateRefreshLoop(
 	interval time.Duration,
 ) {
 	refresh := func() {
-		if _, err := refresher.Refresh(ctx); err != nil && ctx.Err() == nil {
+		result, err := refresher.Refresh(ctx)
+		if result.RestoreFailed && ctx.Err() == nil {
+			log.Printf("company-fund current USD rate snapshot restore failed")
+		}
+		if err != nil && ctx.Err() == nil {
 			log.Printf("company-fund current USD rate refresh failed")
 		}
 	}

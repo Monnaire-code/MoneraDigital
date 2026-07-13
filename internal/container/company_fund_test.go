@@ -24,6 +24,12 @@ func (companyFundEventWriterStub) InsertProviderEvent(context.Context, companyfu
 
 type companyFundHistoryClientStub struct{}
 
+func TestCompanyFundCurrentRateDefaultsMatchDemoRefreshBudget(t *testing.T) {
+	require.Equal(t, 5*time.Minute, defaultCompanyFundCurrentRateRefreshInterval)
+	require.Equal(t, 10*time.Minute, defaultCompanyFundCurrentRateCacheTTL)
+	require.Equal(t, 60*time.Minute, defaultCompanyFundCurrentRateCacheMaxAge)
+}
+
 func (companyFundHistoryClientStub) CreateAssetWallet(context.Context, string, []string) (*safeheron.Wallet, error) {
 	return nil, nil
 }

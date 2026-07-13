@@ -345,6 +345,8 @@ func TestCompanyFundRepositorySQLContracts(t *testing.T) {
 		"event_state = 'FAILED' AND next_attempt_at IS NOT NULL AND next_attempt_at <= NOW()",
 		"event_state = 'LEASED' AND lease_expires_at <= NOW()",
 		"NOW() + ($3::bigint * INTERVAL '1 microsecond')",
+		"next_attempt_at = $4::TIMESTAMPTZ",
+		"$4::TIMESTAMPTZ IS NOT NULL",
 		"DEAD_LETTER",
 	} {
 		if !strings.Contains(claimNextProviderEventSQL+updateClaimedProviderEventSQL+finalizeProviderEventSQL+renewProviderEventLeaseSQL, contract) {
@@ -373,6 +375,16 @@ func TestUpsertCompanyFundTransaction_InsertsThroughChannelAwareMerge(t *testing
 	mock.ExpectQuery(transactionForUpdateQueryPattern()).
 		WillReturnRows(sqlmock.NewRows(transactionForUpdateColumns()))
 	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO company_fund_transactions")).
+		WithArgs(
+			ChannelSafeheron, nil, nil, nil, nil,
+			0, "v1:movement-1", MovementIdentityAlgorithmVersion,
+			MovementKindPrincipal, TransferModeSingle, DirectionOutflow,
+			int64(101), nil,
+			"USDT", nil, nil, nil, "1.234567890123456789",
+			"0xtx", LifecycleStatusPending, int64(1), nil, ProviderSourceWebhook, 1,
+			nil, nil, TransactionSeenSourceWebhook, TransactionSeenSourceWebhook,
+			nil, nil, nil,
+		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(99))
 	mock.ExpectCommit()
 
@@ -578,6 +590,17 @@ func TestProtectedTransactionUpsertSQLContracts(t *testing.T) {
 	} {
 		if !strings.Contains(insertCompanyFundTransactionSQL+updateCompanyFundTransactionSQL, contract) {
 			t.Errorf("protected transaction SQL is missing %q", contract)
+		}
+	}
+	for _, contract := range []string{
+		"$17::jsonb IS NOT NULL",
+		"$20::boolean IS NOT NULL",
+		"$27::varchar IS NOT NULL",
+		"$29::jsonb IS NOT NULL",
+		"$30::boolean IS NOT NULL",
+	} {
+		if !strings.Contains(updateCompanyFundTransactionProviderSupplementSQL, contract) {
+			t.Fatalf("provider supplement CASE guard is missing %q", contract)
 		}
 	}
 	for _, manualColumn := range []string{

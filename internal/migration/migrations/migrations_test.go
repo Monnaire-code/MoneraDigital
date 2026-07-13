@@ -70,6 +70,13 @@ func TestAddMissingForeignKeys_Description(t *testing.T) {
 	}
 }
 
+func TestWidenAmountPrecision_InterfaceAndVersion(t *testing.T) {
+	var _ migration.Migration = (*WidenAmountPrecision)(nil)
+	if version := (&WidenAmountPrecision{}).Version(); version != "051" {
+		t.Fatalf("Version() = %q, want 051", version)
+	}
+}
+
 // TestAddTwoFactorColumnsMigration_Interface verifies the migration implements the interface
 func TestAddTwoFactorColumnsMigration_Interface(t *testing.T) {
 	var _ migration.Migration = (*AddTwoFactorColumnsMigration)(nil)
@@ -141,6 +148,7 @@ func TestMigrationOrder(t *testing.T) {
 		{"AddMissingForeignKeys", "048"},
 		{"CreateFundReports", "049"},
 		{"CreateCompanyFundLedger", "050"},
+		{"WidenAmountPrecision", "051"},
 	}
 
 	seen := make(map[string]bool, len(migrations))
@@ -182,6 +190,7 @@ func TestMigrationRunnerRegistersVersionsInOrder(t *testing.T) {
 		"m.Register(&migrations.AddMissingForeignKeys{})",
 		"m.Register(&migrations.CreateFundReports{})",
 		"m.Register(&migrations.CreateCompanyFundLedger{})",
+		"m.Register(&migrations.WidenAmountPrecision{})",
 	} {
 		position := strings.Index(string(source), registration)
 		if position < 0 {

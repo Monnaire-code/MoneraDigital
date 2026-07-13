@@ -82,13 +82,13 @@ func TestCurrentRateCache_ProviderQuoteAgeExpiresFreshSnapshot(t *testing.T) {
 	}
 }
 
-func TestCurrentRateCache_DefaultsProviderQuoteAgeLimit(t *testing.T) {
+func TestCurrentRateCache_DefaultsMatchFiveMinuteProviderRefresh(t *testing.T) {
 	cache, err := NewCurrentRateCache(CurrentRateCacheConfig{})
 	if err != nil {
 		t.Fatalf("NewCurrentRateCache() error = %v", err)
 	}
-	if cache.maxQuoteAge != defaultCurrentRateCacheMaxQuoteAge {
-		t.Fatalf("default max quote age = %s, want %s", cache.maxQuoteAge, defaultCurrentRateCacheMaxQuoteAge)
+	if cache.ttl != 10*time.Minute || cache.maxQuoteAge != 60*time.Minute {
+		t.Fatalf("default cache freshness = ttl %s, max quote age %s; want 10m and 60m", cache.ttl, cache.maxQuoteAge)
 	}
 }
 

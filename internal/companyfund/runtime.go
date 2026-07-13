@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -318,33 +321,78 @@ func (runtime *CompanyFundRuntime) Run(ctx context.Context) {
 		ctx = context.Background()
 	}
 
-	var (
-		eventTimer           *time.Timer
-		eventTimerC          <-chan time.Time
-		reconciliationTimer  *time.Timer
-		reconciliationTimerC <-chan time.Time
-	)
+	var loops sync.WaitGroup
 	if runtime.dependencies.ProviderEventWorker != nil {
-		eventTimer = time.NewTimer(0)
-		eventTimerC = eventTimer.C
-		defer eventTimer.Stop()
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			runtime.runProviderEventLoop(ctx)
+		}()
 	}
 	if runtime.hasReconciliation() {
-		reconciliationTimer = time.NewTimer(0)
-		reconciliationTimerC = reconciliationTimer.C
-		defer reconciliationTimer.Stop()
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			runtime.runReconciliationLoop(ctx)
+		}()
 	}
+	loops.Wait()
+}
+
+func (runtime *CompanyFundRuntime) runProviderEventLoop(ctx context.Context) {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-eventTimerC:
-			_, _ = runtime.DrainProviderEvents(ctx)
-			eventTimer.Reset(runtime.config.EventPollInterval)
-		case <-reconciliationTimerC:
+		case <-timer.C:
+			result, err := runtime.DrainProviderEvents(ctx)
+			if err != nil && ctx.Err() == nil {
+				// Keep provider payloads and database details out of process logs.
+				// The durable lease owns retries; this metadata-only signal exposes
+				// a repeatedly deferred event without leaking its contents.
+				log.Printf("company-fund provider event drain deferred: kind=%s claimed=%d", providerEventDrainFailureKind(err), result.Claimed)
+			}
+			timer.Reset(runtime.config.EventPollInterval)
+		}
+	}
+}
+
+func providerEventDrainFailureKind(err error) string {
+	var pgErr *pgconn.PgError
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, ErrProviderEventLeaseNotOwned):
+		return "lease_not_owned"
+	case errors.Is(err, ErrProviderEventClaimLost):
+		return "claim_lost"
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context_deadline_exceeded"
+	case errors.As(err, &pgErr) && pgErr.Code != "":
+		// SQLSTATE is stable database metadata, unlike an error message which
+		// can contain provider-originated values through a wrapped failure.
+		return "database_" + pgErr.Code
+	default:
+		return "processing_error"
+	}
+}
+
+func (runtime *CompanyFundRuntime) runReconciliationLoop(ctx context.Context) {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
 			_, _ = runtime.ReconcileDueWindows(ctx)
-			reconciliationTimer.Reset(runtime.config.ReconciliationPollInterval)
+			timer.Reset(runtime.config.ReconciliationPollInterval)
 		case <-runtime.airwallexWake:
 			_, _ = runtime.ReconcileAirwallexWebhookWindow(ctx)
 		}

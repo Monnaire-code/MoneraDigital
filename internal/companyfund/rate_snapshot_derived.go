@@ -132,6 +132,9 @@ func storedRateSnapshotPriceKind(snapshot RateSnapshotRecord) MarketPriceKind {
 	if kind, ok := marketPriceKindFromRequestKind(snapshot.OriginatingRequestKind); ok {
 		return kind
 	}
+	if snapshot.Granularity == string(MarketPriceKindCurrent) {
+		return MarketPriceKindCurrent
+	}
 	if snapshot.EffectiveAt == nil {
 		return MarketPriceKindCurrent
 	}

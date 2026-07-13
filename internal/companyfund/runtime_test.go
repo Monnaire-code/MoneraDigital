@@ -3,8 +3,13 @@ package companyfund
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestCompanyFundRuntime_DrainProviderEventsIsBoundedAndStopsAtConfiguredLimit(t *testing.T) {
@@ -26,6 +31,28 @@ func TestCompanyFundRuntime_DrainProviderEventsIsBoundedAndStopsAtConfiguredLimi
 	}
 }
 
+func TestProviderEventDrainFailureKindDoesNotExposeUnderlyingErrorText(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "nil", want: "none"},
+		{name: "lease lost", err: fmt.Errorf("renew event lease: %w", ErrProviderEventLeaseNotOwned), want: "lease_not_owned"},
+		{name: "claim lost", err: ErrProviderEventClaimLost, want: "claim_lost"},
+		{name: "canceled", err: context.Canceled, want: "context_canceled"},
+		{name: "deadline", err: context.DeadlineExceeded, want: "context_deadline_exceeded"},
+		{name: "database", err: fmt.Errorf("finalize: %w", &pgconn.PgError{Code: "23514", Message: "must not leak"}), want: "database_23514"},
+		{name: "opaque", err: errors.New("provider payload must not be logged"), want: "processing_error"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := providerEventDrainFailureKind(testCase.err); got != testCase.want {
+				t.Fatalf("providerEventDrainFailureKind() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestCompanyFundRuntime_StartIsTheExplicitBoundaryForBackgroundEventPolling(t *testing.T) {
 	worker := &companyFundRuntimeEventWorkerStub{notify: make(chan struct{}, 1)}
 	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{ProviderEventWorker: worker}, CompanyFundRuntimeConfig{
@@ -43,6 +70,41 @@ func TestCompanyFundRuntime_StartIsTheExplicitBoundaryForBackgroundEventPolling(
 	case <-worker.notify:
 	case <-time.After(time.Second):
 		t.Fatal("Start() did not begin the event polling loop")
+	}
+}
+
+func TestCompanyFundRuntime_ReconciliationDelayDoesNotBlockProviderEventPolling(t *testing.T) {
+	worker := &companyFundRuntimeContinuousEventWorkerStub{notify: make(chan struct{}, 4)}
+	reconciler := &companyFundRuntimeBlockingSafeheronReconciler{started: make(chan struct{})}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{
+		ProviderEventWorker: worker,
+		AccountSnapshots:    companyFundRuntimeSnapshotSource(t, []CompanyFundAccount{validCompanyFundRuntimeAccounts()[0]}),
+		SafeheronReconciler: reconciler,
+		SyncRunFinalizer:    &companyFundRuntimeFinalizerStub{},
+	}, CompanyFundRuntimeConfig{
+		EventPollInterval:           10 * time.Millisecond,
+		ReconciliationPollInterval:  time.Hour,
+		ReconciliationSchedule:      ReconciliationDailyScheduleConfig{CatchUpDays: 1},
+		LateStatusOverlapConfigured: true,
+		LateStatusOverlapDays:       0,
+	})
+
+	runtime.Start(context.Background())
+	defer runtime.Stop()
+
+	select {
+	case <-reconciler.started:
+	case <-time.After(time.Second):
+		t.Fatal("reconciliation loop did not start")
+	}
+
+	deadline := time.After(time.Second)
+	for worker.calls.Load() < 2 {
+		select {
+		case <-worker.notify:
+		case <-deadline:
+			t.Fatalf("provider event polling stopped while reconciliation was delayed; calls=%d", worker.calls.Load())
+		}
 	}
 }
 
@@ -336,6 +398,31 @@ type companyFundRuntimeEventWorkerStub struct {
 	results []companyFundRuntimeEventWorkerCall
 	calls   int
 	notify  chan struct{}
+}
+
+type companyFundRuntimeContinuousEventWorkerStub struct {
+	notify chan struct{}
+	calls  atomic.Int32
+}
+
+func (stub *companyFundRuntimeContinuousEventWorkerStub) ProcessNext(context.Context) (ProviderEventWorkerResult, error) {
+	stub.calls.Add(1)
+	select {
+	case stub.notify <- struct{}{}:
+	default:
+	}
+	return ProviderEventWorkerResult{}, nil
+}
+
+type companyFundRuntimeBlockingSafeheronReconciler struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (stub *companyFundRuntimeBlockingSafeheronReconciler) Reconcile(ctx context.Context, _ SafeheronTransactionHistoryReconcileInput) (SafeheronTransactionHistoryReconcileResult, error) {
+	stub.once.Do(func() { close(stub.started) })
+	<-ctx.Done()
+	return SafeheronTransactionHistoryReconcileResult{}, ctx.Err()
 }
 
 func (stub *companyFundRuntimeEventWorkerStub) ProcessNext(context.Context) (ProviderEventWorkerResult, error) {

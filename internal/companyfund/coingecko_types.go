@@ -88,10 +88,24 @@ const (
 // times. It contains no float and can be copied safely into an immutable cache
 // snapshot.
 type CoinGeckoQuote struct {
-	Price             decimal.Decimal
-	ProviderUpdatedAt time.Time
-	FetchedAt         time.Time
-	ResponseDigest    string
+	Price               decimal.Decimal
+	ProviderUpdatedAt   time.Time
+	FetchedAt           time.Time
+	ResponseDigest      string
+	Method              USDValuationMethod
+	BTCCrossNumerator   decimal.Decimal
+	BTCCrossDenominator decimal.Decimal
+	// RateSnapshotID is zero only for an explicitly non-persistent test or
+	// standalone cache. The company-fund runtime persists provider facts before
+	// publishing a quote and carries the resulting audit FK with every read.
+	RateSnapshotID int64
+}
+
+func (quote CoinGeckoQuote) valuationMethod() USDValuationMethod {
+	if quote.Method == "" {
+		return USDValuationMethodCoinGeckoDirect
+	}
+	return quote.Method
 }
 
 // CoinGeckoPrice represents one requested asset/currency pair. Quote is nil

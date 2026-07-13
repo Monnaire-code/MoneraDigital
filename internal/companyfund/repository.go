@@ -225,7 +225,7 @@ const finalizeProviderEventSQL = `
 UPDATE company_fund_provider_events
 SET event_state = $3,
     processed_at = CASE WHEN $3 IN ('PROCESSED', 'IGNORED', 'DEAD_LETTER') THEN NOW() ELSE NULL END,
-    next_attempt_at = $4,
+    next_attempt_at = $4::TIMESTAMPTZ,
     lease_owner = NULL,
     lease_expires_at = NULL,
     last_error = $5,
@@ -234,7 +234,7 @@ WHERE id = $1
   AND event_state = 'LEASED'
   AND lease_owner = $2
   AND lease_expires_at > NOW()
-  AND ($3 <> 'FAILED' OR ($4 IS NOT NULL AND $4 > NOW()))`
+  AND ($3 <> 'FAILED' OR ($4::TIMESTAMPTZ IS NOT NULL AND $4::TIMESTAMPTZ > NOW()))`
 
 // InsertProviderEvent inserts a logical delivery idempotently. A duplicate
 // returns the existing row ID without creating a second delivery reference.
@@ -816,37 +816,37 @@ SET from_address_or_account = CASE WHEN $2 THEN COALESCE($3, from_address_or_acc
 	provider_reported_fee_amount = CASE WHEN $2 THEN COALESCE($15::numeric, provider_reported_fee_amount) ELSE COALESCE(provider_reported_fee_amount, $15::numeric) END,
 	provider_reported_fee_currency = CASE WHEN $2 THEN COALESCE($16, provider_reported_fee_currency) ELSE COALESCE(provider_reported_fee_currency, $16) END,
 	fee_details = CASE
-		WHEN $2 AND $17 IS NOT NULL THEN $17::jsonb
-		WHEN fee_details = '{}'::jsonb AND $17 IS NOT NULL THEN $17::jsonb
+		WHEN $2 AND $17::jsonb IS NOT NULL THEN $17::jsonb
+		WHEN fee_details = '{}'::jsonb AND $17::jsonb IS NOT NULL THEN $17::jsonb
 		ELSE fee_details
 	END,
 	block_height = CASE WHEN $2 THEN COALESCE($18::bigint, block_height) ELSE COALESCE(block_height, $18::bigint) END,
 	block_hash = CASE WHEN $2 THEN COALESCE($19, block_hash) ELSE COALESCE(block_hash, $19) END,
-	is_dust = CASE WHEN $2 AND $20 IS NOT NULL THEN $20 WHEN $20 = true THEN true ELSE is_dust END,
+	is_dust = CASE WHEN $2 AND $20::boolean IS NOT NULL THEN $20::boolean WHEN $20::boolean = true THEN true ELSE is_dust END,
 	dust_policy_id = CASE WHEN $2 THEN COALESCE($21::bigint, dust_policy_id) ELSE COALESCE(dust_policy_id, $21::bigint) END,
 	dust_threshold = CASE WHEN $2 THEN COALESCE($22::numeric, dust_threshold) ELSE COALESCE(dust_threshold, $22::numeric) END,
-	is_source_phishing = CASE WHEN $2 AND $23 IS NOT NULL THEN $23 WHEN $23 = true THEN true ELSE COALESCE(is_source_phishing, $23) END,
-	is_destination_phishing = CASE WHEN $2 AND $24 IS NOT NULL THEN $24 WHEN $24 = true THEN true ELSE COALESCE(is_destination_phishing, $24) END,
-	is_unrecognized_asset = CASE WHEN $2 AND $25 IS NOT NULL THEN $25 WHEN $25 = true THEN true ELSE is_unrecognized_asset END,
-	aml_lock = CASE WHEN $2 AND $26 IS NOT NULL THEN $26 WHEN $26 = true THEN true ELSE COALESCE(aml_lock, $26) END,
+	is_source_phishing = CASE WHEN $2 AND $23::boolean IS NOT NULL THEN $23::boolean WHEN $23::boolean = true THEN true ELSE COALESCE(is_source_phishing, $23::boolean) END,
+	is_destination_phishing = CASE WHEN $2 AND $24::boolean IS NOT NULL THEN $24::boolean WHEN $24::boolean = true THEN true ELSE COALESCE(is_destination_phishing, $24::boolean) END,
+	is_unrecognized_asset = CASE WHEN $2 AND $25::boolean IS NOT NULL THEN $25::boolean WHEN $25::boolean = true THEN true ELSE is_unrecognized_asset END,
+	aml_lock = CASE WHEN $2 AND $26::boolean IS NOT NULL THEN $26::boolean WHEN $26::boolean = true THEN true ELSE COALESCE(aml_lock, $26::boolean) END,
 	aml_screening_state = CASE
-		WHEN $2 AND $27 IS NOT NULL THEN $27
-		WHEN aml_screening_state = 'NOT_SCREENED' AND $27 IS NOT NULL THEN $27
+		WHEN $2 AND $27::varchar IS NOT NULL THEN $27::varchar
+		WHEN aml_screening_state = 'NOT_SCREENED' AND $27::varchar IS NOT NULL THEN $27::varchar
 		ELSE aml_screening_state
 	END,
 	aml_risk_level = CASE
-		WHEN $2 AND $28 IS NOT NULL THEN $28
-		WHEN aml_risk_level = 'UNKNOWN' AND $28 IS NOT NULL THEN $28
+		WHEN $2 AND $28::varchar IS NOT NULL THEN $28::varchar
+		WHEN aml_risk_level = 'UNKNOWN' AND $28::varchar IS NOT NULL THEN $28::varchar
 		ELSE aml_risk_level
 	END,
 	risk_flags = CASE
-		WHEN $2 AND $29 IS NOT NULL THEN $29::jsonb
-		WHEN risk_flags = '[]'::jsonb AND $29 IS NOT NULL THEN $29::jsonb
+		WHEN $2 AND $29::jsonb IS NOT NULL THEN $29::jsonb
+		WHEN risk_flags = '[]'::jsonb AND $29::jsonb IS NOT NULL THEN $29::jsonb
 		ELSE risk_flags
 	END,
 	auto_excluded_from_summary = CASE
-		WHEN $2 AND $30 IS NOT NULL THEN $30
-		WHEN $30 = true THEN true
+		WHEN $2 AND $30::boolean IS NOT NULL THEN $30::boolean
+		WHEN $30::boolean = true THEN true
 		ELSE auto_excluded_from_summary
 	END,
 	updated_at = NOW()
@@ -1104,6 +1104,7 @@ func insertCompanyFundTransaction(ctx context.Context, tx *sql.Tx, input Transac
 		providerAssetKey,
 		assetContract,
 		providerDecimal(provider.Amount, input.Amount),
+		nullableStringPointer(provider.TxHash),
 		nullableLifecycleStatus(provider.Status),
 		nullableInt64(provider.Metadata.Revision),
 		nullableTime(provider.Metadata.UpdatedAt),
