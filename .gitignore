@@ -52,6 +52,7 @@ test-artifacts/
 openspec/
 main
 .gstack/
+/omx_wiki/
 
 # Go binaries
 /migrate

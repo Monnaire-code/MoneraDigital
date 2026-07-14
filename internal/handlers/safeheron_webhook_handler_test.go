@@ -83,18 +83,19 @@ func TestWebhook_AckBodyVerbatim(t *testing.T) {
 	}
 }
 
-// TestWebhook_RawPayloadPreservesOriginalBody verifies that raw_payload is the
-// verbatim webhook body (so forensic replay can re-verify signatures and recover
-// fields the SDK schema doesn't model: replaceTxHash, destinationAddressList,
-// custom Safeheron metadata). Regression: T7-I-4 — previously the handler
-// re-marshalled the SDK's stripped WebhookEvent struct, dropping unknown fields.
-func TestWebhook_RawPayloadPreservesOriginalBody(t *testing.T) {
-	originalBody := `{"timestamp":"1734567890123","sig":"abc","bizContent":"ciphertext","unknown_field":"forensic-data","destinationAddressList":[{"addr":"0xabc"}]}`
+// TestWebhook_RawPayloadPreservesDecryptedBusinessPayload verifies that
+// raw_payload is the lossless plaintext returned only after SDK verification
+// and decryption. The outer signed envelope is intentionally never used as the
+// business payload or as the digest source.
+func TestWebhook_RawPayloadPreservesDecryptedBusinessPayload(t *testing.T) {
+	outerEnvelope := `{"timestamp":"1734567890123","sig":"abc","bizContent":"ciphertext"}`
+	decryptedPayload := `{"eventType":"TRANSACTION_STATUS_CHANGED","unknown_field":"forensic-data","destinationAddressList":[{"addr":"0xabc"}]}`
 	var capturedRaw []byte
 	h := NewSafeheronWebhookHandler(
 		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
 			return &safeheron.WebhookEvent{
 				EventDetail: safeheron.EventDetail{TxKey: "tx-1", TransactionStatus: "COMPLETED"},
+				RawBody:     []byte(decryptedPayload),
 			}, nil
 		}},
 		&fakeRecorder{insertFn: func(_ context.Context, evt *deposit.Event) (bool, error) {
@@ -104,14 +105,14 @@ func TestWebhook_RawPayloadPreservesOriginalBody(t *testing.T) {
 		nil,
 	)
 
-	w := runWebhook(h, originalBody)
+	w := runWebhook(h, outerEnvelope)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	if string(capturedRaw) != originalBody {
-		t.Errorf("raw_payload must preserve original webhook body verbatim\n  got: %s\n want: %s",
-			string(capturedRaw), originalBody)
+	if string(capturedRaw) != decryptedPayload {
+		t.Errorf("raw_payload must preserve decrypted business payload verbatim\n  got: %s\n want: %s",
+			string(capturedRaw), decryptedPayload)
 	}
 }
 
@@ -320,18 +321,21 @@ func TestWebhook_BenchAckTime(t *testing.T) {
 	}
 }
 
-// I-1 regression: AML_KYT_ALERT eventID must derive from body content (sha256),
-// not wall-clock time. Two deliveries of the same encrypted body must collapse
-// to a single eventID so Safeheron's retry storm is dedup'd by ON CONFLICT.
-// Two deliveries of *different* body must produce *different* eventIDs so
-// genuine follow-up alerts still land.
+// I-1 regression: AML_KYT_ALERT eventID must derive from the decrypted content
+// digest, not wall-clock time or the outer encrypted envelope. Two deliveries
+// of the same alert collapse, while distinct rescans for one txKey coexist.
 func TestWebhook_AMLAlertEventIDIsContentHash(t *testing.T) {
 	var capturedEventIDs []string
+	decryptedByEnvelope := map[string][]byte{
+		`{"timestamp":"1","sig":"sigA","bizContent":"ciphertextA"}`: []byte(`{"eventType":"AML_KYT_ALERT","finding":"one"}`),
+		`{"timestamp":"2","sig":"sigB","bizContent":"ciphertextB"}`: []byte(`{"eventType":"AML_KYT_ALERT","finding":"two"}`),
+	}
 	h := NewSafeheronWebhookHandler(
-		&fakeVerifier{convertFn: func(_ []byte) (*safeheron.WebhookEvent, error) {
+		&fakeVerifier{convertFn: func(envelope []byte) (*safeheron.WebhookEvent, error) {
 			return &safeheron.WebhookEvent{
 				EventType:   "AML_KYT_ALERT",
 				EventDetail: safeheron.EventDetail{TxKey: "tx-aml-dedup"},
+				RawBody:     append([]byte(nil), decryptedByEnvelope[string(envelope)]...),
 			}, nil
 		}},
 		&fakeRecorder{insertFn: func(_ context.Context, evt *deposit.Event) (bool, error) {
@@ -354,10 +358,8 @@ func TestWebhook_AMLAlertEventIDIsContentHash(t *testing.T) {
 		t.Errorf("I-1 regression: identical bodies must produce same eventID for dedup; got %q vs %q",
 			capturedEventIDs[0], capturedEventIDs[1])
 	}
-	// And the eventID must start with the txKey + ":AML_KYT_ALERT:" prefix
-	prefix := "tx-aml-dedup:AML_KYT_ALERT:"
-	if !strings.HasPrefix(capturedEventIDs[0], prefix) {
-		t.Errorf("eventID missing AML alert prefix: got %q", capturedEventIDs[0])
+	if !safeheronContentEventIDPattern.MatchString(capturedEventIDs[0]) {
+		t.Errorf("eventID must be fixed lowercase SHA-256 hex: got %q", capturedEventIDs[0])
 	}
 
 	// Different body content — must produce a different eventID

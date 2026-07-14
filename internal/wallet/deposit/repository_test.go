@@ -18,7 +18,7 @@ func TestInsertEventOrSkip_NewRow(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectExec("INSERT INTO safeheron_webhook_events").
-		WithArgs("evt-1", "T", "tk", "cref", []byte(`{}`)).
+		WithArgs("evt-1", "T", "tk", "cref", []byte(`{}`), eventPayloadDigest([]byte(`{}`))).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	r := NewRepository(db)
@@ -32,6 +32,9 @@ func TestInsertEventOrSkip_NewRow(t *testing.T) {
 	if err != nil || !inserted {
 		t.Fatalf("expected inserted=true, got %v / %v", inserted, err)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestInsertEventOrSkip_Conflict(t *testing.T) {
@@ -39,10 +42,16 @@ func TestInsertEventOrSkip_Conflict(t *testing.T) {
 	defer db.Close()
 	mock.ExpectExec("INSERT INTO safeheron_webhook_events").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT payload_digest FROM safeheron_webhook_events WHERE event_id = \\$1").
+		WithArgs("evt-1").
+		WillReturnRows(sqlmock.NewRows([]string{"payload_digest"}).AddRow(eventPayloadDigest([]byte(`{}`))))
 	r := NewRepository(db)
 	inserted, err := r.InsertEventOrSkip(context.Background(), &Event{EventID: "evt-1", RawPayload: []byte(`{}`)})
 	if err != nil || inserted {
 		t.Fatalf("expected inserted=false, got %v / %v", inserted, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

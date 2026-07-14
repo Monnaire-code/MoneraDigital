@@ -98,10 +98,12 @@ func registerMigrations(m *migration.Migrator) {
 	m.Register(&migrations.AddEmailVerifiedStatusAndContactFields{})
 	m.Register(&migrations.SafeheronPhase1{})
 	m.Register(&migrations.AccountFrozenBalanceDefault{})
-	m.Register(&migrations.CreateFundReports{})
 	m.Register(&migrations.AddPendingStatusAndActivationFields{})
 	m.Register(&migrations.NormalizeAmountTypes{})
 	m.Register(&migrations.AddMissingForeignKeys{})
+	m.Register(&migrations.CreateFundReports{})
+	m.Register(&migrations.CreateCompanyFundLedger{})
+	m.Register(&migrations.WidenAmountPrecision{})
 }
 
 func printStatus(status []migration.MigrationStatus) {
