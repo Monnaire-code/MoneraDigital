@@ -12,6 +12,7 @@ import (
 
 	"monera-digital/internal/alert"
 	"monera-digital/internal/cache"
+	"monera-digital/internal/companyfund"
 	"monera-digital/internal/config"
 	"monera-digital/internal/coreapi"
 	"monera-digital/internal/handlers"
@@ -129,8 +130,9 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 
 		// Alert sink (Feishu webhook + email recipients).
 		feishuURL := viper.GetString("ALERT_WEBHOOK_URL")
+		feishuSecret := viper.GetString("ALERT_WEBHOOK_SIGN_SECRET")
 		recipients := splitNonEmpty(viper.GetString("ALERT_EMAIL_RECIPIENTS"))
-		c.AlertService = alert.NewAlertService(feishuURL, recipients, c.EmailService)
+		c.AlertService = alert.NewAlertService(feishuURL, feishuSecret, recipients, c.EmailService)
 		c.PoolManager.SetAlertFunc(func(level, title, message string) {
 			c.AlertService.Send(level, title, map[string]string{"message": message})
 		})
@@ -177,6 +179,7 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 				"comma-separated allowlist of Safeheron source IPs is required")
 		}
 		c.SafeheronWebhookHandler = handlers.NewSafeheronWebhookHandler(client, depRepo, webhookAllowedIPs)
+		wireCompanyFundSafeheronBridge(c)
 
 		workerInterval := viper.GetDuration("DEPOSIT_WORKER_INTERVAL")
 		if workerInterval <= 0 {
@@ -270,6 +273,34 @@ type Container struct {
 	SafeheronWebhookHandler *handlers.SafeheronWebhookHandler
 	AlertService            *alert.AlertService
 
+	// Company-fund runtime. These dependencies intentionally remain independent
+	// of the customer wallet pool and its Redis/cache lifecycle. The runtime is
+	// finalized after every ContainerOption has been applied, which makes
+	// WithSafeheronPool and WithCompanyFund order-independent.
+	CompanyFundRepository              *companyfund.DBRepository
+	CompanyFundAccountRegistry         *companyfund.AccountRegistry
+	CompanyFundOwnedPayloadService     *companyfund.OwnedProviderPayloadService
+	CompanyFundProviderEventWorker     *companyfund.ProviderEventWorker
+	CompanyFundRuntime                 *companyfund.CompanyFundRuntime
+	CompanyFundSafeheronNormalizer     *companyfund.SafeheronProviderEventNormalizer
+	CompanyFundSafeheronReconciler     *companyfund.SafeheronTransactionHistoryReconciler
+	CompanyFundSafeheronCollector      *companyfund.SafeheronProviderEventCollector
+	CompanyFundAirwallexRuntimeBundle  *companyfund.AirwallexFinancialTransactionsRuntimeBundle
+	CompanyFundAirwallexClient         *companyfund.AirwallexClient
+	CompanyFundAirwallexReconciler     *companyfund.AirwallexFinancialTransactionsReconciler
+	CompanyFundAirwallexWebhookHandler *handlers.CompanyFundAirwallexWebhookHandler
+	CompanyFundCurrentRateCache        *companyfund.CurrentRateCache
+	CompanyFundCoinGeckoRateRefresher  *companyfund.CoinGeckoCurrentRateRefresher
+	CompanyFundCurrentValuator         *companyfund.CompanyFundCurrentValuator
+	CompanyFundFinanceHandler          *handlers.CompanyFundFinanceHandler
+
+	companyFundRuntimeConfig    companyFundRuntimeConfig
+	companyFundRuntimeContext   context.Context
+	companyFundRuntimePending   bool
+	companyFundRuntimeFinalized bool
+	companyFundAuxCancel        context.CancelFunc
+	companyFundAuxDone          chan struct{}
+
 	// 服务
 	AuthService       *services.AuthService
 	LendingService    *services.LendingService
@@ -355,6 +386,10 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	for _, opt := range opts {
 		opt(c)
 	}
+	// Company-fund provider adapters need the completed option graph: the
+	// Safeheron option can be before or after WithCompanyFund. Finalization
+	// starts no background work until all dependencies have been assembled.
+	finalizeCompanyFundRuntime(c)
 
 	// 注入TwoFactorService依赖（如果在选项函数中已初始化）
 	if c.TwoFAService != nil {
@@ -377,12 +412,25 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 
 // Close 关闭容器中的资源
 //
-// 顺序：TokenBlacklist → SafeheronClient → DB。任一资源 Close 失败仅记录首个
-// 错误，后续资源仍会尝试关闭。v1.6 起 SafeheronClient.Close 是 no-op（PEM
+// 顺序：company-fund auxiliary loops → company-fund runtime → company-fund
+// registry → TokenBlacklist → SafeheronClient → DB。任一资源 Close 失败仅记录
+// 首个错误，后续资源仍会尝试关闭。v1.6 起 SafeheronClient.Close 是 no-op（PEM
 // 改读 secrets/ 真实文件，不再有进程托管的临时文件），保留调用是为了向后兼容
 // 接口契约。
 func (c *Container) Close() error {
 	var firstErr error
+
+	// Stop auxiliary ingress/valuation loops before halting the durable worker,
+	// then retain the registry until every worker/reconciliation call has
+	// returned. This order keeps new bridge rows from arriving during shutdown
+	// and ensures no loop can observe a closed database.
+	stopCompanyFundAuxiliaryLoops(c)
+	if c.CompanyFundRuntime != nil {
+		c.CompanyFundRuntime.Stop()
+	}
+	if c.CompanyFundAccountRegistry != nil {
+		c.CompanyFundAccountRegistry.Stop()
+	}
 
 	if c.TokenBlacklist != nil {
 		c.TokenBlacklist.Close()

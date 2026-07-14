@@ -2,7 +2,9 @@ package deposit
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -108,12 +110,16 @@ func asSQLTx(tx Tx) *sql.Tx {
 }
 
 func (r *DBRepository) InsertEventOrSkip(ctx context.Context, evt *Event) (bool, error) {
+	payloadDigest := eventPayloadDigest(evt.RawPayload)
+	if evt.PayloadDigest != "" && evt.PayloadDigest != payloadDigest {
+		return false, fmt.Errorf("webhook event payload digest does not match raw payload")
+	}
 	res, err := r.db.ExecContext(ctx,
 		`INSERT INTO safeheron_webhook_events
-		   (event_id, event_type, safeheron_tx_key, customer_ref_id, raw_payload, process_status)
-		 VALUES ($1, $2, $3, $4, $5, 'PENDING')
+		   (event_id, event_type, safeheron_tx_key, customer_ref_id, raw_payload, payload_digest, process_status)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'PENDING')
 		 ON CONFLICT (event_id) DO NOTHING`,
-		evt.EventID, evt.EventType, evt.SafeheronTxKey, evt.CustomerRefID, evt.RawPayload,
+		evt.EventID, evt.EventType, evt.SafeheronTxKey, evt.CustomerRefID, evt.RawPayload, payloadDigest,
 	)
 	if err != nil {
 		return false, fmt.Errorf("insert webhook event: %w", err)
@@ -122,7 +128,15 @@ func (r *DBRepository) InsertEventOrSkip(ctx context.Context, evt *Event) (bool,
 	if err != nil {
 		return false, fmt.Errorf("rows affected: %w", err)
 	}
-	return n > 0, nil
+	if n > 0 {
+		return true, nil
+	}
+	return r.validateExistingEventPayloadDigest(ctx, evt.EventID, payloadDigest)
+}
+
+func eventPayloadDigest(rawPayload []byte) string {
+	sum := sha256.Sum256(rawPayload)
+	return hex.EncodeToString(sum[:])
 }
 
 func (r *DBRepository) LockNextPendingEvent(ctx context.Context, tx Tx) (*Event, error) {

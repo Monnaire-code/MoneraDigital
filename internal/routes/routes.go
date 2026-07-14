@@ -96,11 +96,32 @@ func SetupRoutes(router *gin.Engine, cont *container.Container) {
 			if cont.SafeheronWebhookHandler != nil {
 				webhooks.POST("/safeheron", cont.SafeheronWebhookHandler.Receive)
 			}
+			if cont.CompanyFundAirwallexWebhookHandler != nil {
+				webhooks.POST("/airwallex", cont.CompanyFundAirwallexWebhookHandler.Receive)
+			}
 		}
 
 		// Public fund stats (homepage AUM widget, no auth)
 		public.GET("/fund/stats", fundHandler.GetStats)
 	}
+
+	// Company-fund reporting and classification are owned by the separate
+	// management backend, which reads and maintains the same database directly.
+	// Keep the former route wiring commented for reference so this customer API
+	// exposes ingestion/webhook processing only and cannot become a second
+	// management write path.
+	/*
+		if cont.CompanyFundFinanceHandler != nil {
+			companyFund := api.Group("/company-fund")
+			companyFund.Use(cont.CompanyFundFinanceHandler.RequireAdminKey())
+			finance := companyFund.Group("/finance")
+			{
+				finance.GET("/dashboard", cont.CompanyFundFinanceHandler.GetDashboard)
+				finance.GET("/transactions", cont.CompanyFundFinanceHandler.ListTransactions)
+				finance.PUT("/transactions/:transactionID/classification", cont.CompanyFundFinanceHandler.UpdateClassification)
+			}
+		}
+	*/
 
 	// ==================== PROTECTED ROUTES (JWT Auth Required) ====================
 	protected := api.Group("")

@@ -104,7 +104,10 @@ func main() {
 	cont := container.NewContainer(database, cfg.JWTSecret,
 		container.WithEncryption(cfg.EncryptionKey),
 		container.WithRedisCache(redisCache),
-		container.WithSafeheronPool(bgCtx))
+		container.WithSafeheronPool(bgCtx),
+		// This is intentionally a separate option. Its Airwallex/account-cache
+		// path must remain eligible when the customer Safeheron pool is absent.
+		container.WithCompanyFund(bgCtx))
 
 	// Verify container
 	if err := cont.Verify(); err != nil {
@@ -177,6 +180,7 @@ func main() {
 
 	serverErrCh := make(chan error, 1)
 	go func() {
+		defer utils.ReportPanicTo(serverErrCh)
 		logger.Info("Server starting on port " + cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErrCh <- err
@@ -191,7 +195,7 @@ func main() {
 	select {
 	case err := <-serverErrCh:
 		if err != nil {
-			logger.Fatal("Server failed to start", "error", err.Error())
+			logger.Fatal(utils.FatalLabelForServerErr(err), "error", err.Error())
 		}
 	case sig := <-sigCh:
 		logger.Info("Shutdown signal received", "signal", sig.String())
