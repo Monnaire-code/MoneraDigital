@@ -1,0 +1,114 @@
+name: Deploy Backend to Stage
+
+on:
+  push:
+    branches: [stage]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-backend-stage
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build, Migrate, and Deploy to Stage
+    if: github.ref == 'refs/heads/stage'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: stage
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # v6.0.3
+
+      - name: Verify stage secrets
+        env:
+          STAGE_HOST: ${{ secrets.STAGE_HOST }}
+          STAGE_USER: ${{ secrets.STAGE_USER }}
+          STAGE_SSH_KEY: ${{ secrets.STAGE_SSH_KEY }}
+        run: |
+          if [ -z "$STAGE_HOST" ] || [ -z "$STAGE_USER" ] || [ -z "$STAGE_SSH_KEY" ]; then
+            echo "ERROR: missing stage secrets (STAGE_HOST/STAGE_USER/STAGE_SSH_KEY)"
+            exit 1
+          fi
+
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5  # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build stage release binaries
+        run: |
+          mkdir -p deploy
+          VERSION="${GITHUB_SHA:0:7}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w -X main.version=${VERSION}" -o deploy/monera-server ./cmd/server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w -X main.version=${VERSION}" -o deploy/monera-migrate ./cmd/migrate
+          gzip -f deploy/monera-server deploy/monera-migrate
+
+      - name: Copy stage package
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345  # v1.0.0
+        with:
+          host: ${{ secrets.STAGE_HOST }}
+          username: ${{ secrets.STAGE_USER }}
+          key: ${{ secrets.STAGE_SSH_KEY }}
+          source: "deploy/monera-server.gz,deploy/monera-migrate.gz"
+          target: "/tmp/monera-stage-deploy"
+          strip_components: 1
+
+      - name: Migrate and start stage service
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
+        with:
+          host: ${{ secrets.STAGE_HOST }}
+          username: ${{ secrets.STAGE_USER }}
+          key: ${{ secrets.STAGE_SSH_KEY }}
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            trap 'rm -rf /tmp/monera-stage-deploy' EXIT
+
+            APP_DIR="/opt/monera-digital"
+            DEPLOY_SRC="/tmp/monera-stage-deploy"
+            SERVICE_NAME="monera-digital"
+            PORT="8086"
+
+            if [ ! -f "${APP_DIR}/.env" ]; then
+              echo "ERROR: ${APP_DIR}/.env is missing"
+              exit 1
+            fi
+
+            install_binary() {
+              local name="$1"
+              gunzip -c "${DEPLOY_SRC}/${name}.gz" > "${APP_DIR}/${name}.new"
+              chmod +x "${APP_DIR}/${name}.new"
+              mv -f "${APP_DIR}/${name}.new" "${APP_DIR}/${name}"
+            }
+
+            cp "${APP_DIR}/monera-server" "${APP_DIR}/monera-server.bak"
+            cp "${APP_DIR}/monera-migrate" "${APP_DIR}/monera-migrate.bak"
+            install_binary monera-server
+            install_binary monera-migrate
+
+            if ! bash "${APP_DIR}/deploy-remote.sh" --env test --port "${PORT}"; then
+              echo "ERROR: migration or service startup failed; keeping stage service stopped"
+              sudo systemctl stop "${SERVICE_NAME}" || true
+              exit 1
+            fi
+
+            for attempt in $(seq 1 8); do
+              if curl -fsS --max-time 4 "http://127.0.0.1:${PORT}/api/health" >/dev/null; then
+                echo "Stage deployment completed"
+                exit 0
+              fi
+              sleep 5
+            done
+
+            echo "ERROR: stage health check failed; stopping service"
+            sudo systemctl stop "${SERVICE_NAME}" || true
+            sudo journalctl -u "${SERVICE_NAME}" --no-pager -n 80 || true
+            exit 1
