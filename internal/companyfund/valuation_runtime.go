@@ -20,6 +20,7 @@ type CompanyFundCurrentValuator struct {
 	store         CompanyFundValuationCandidateStore
 	registry      *AccountRegistry
 	cache         *CurrentRateCache
+	defaults      CoinGeckoDefaultRateMappings
 	policyVersion string
 	sweepCursor   companyFundValuationSweepCursor
 }
@@ -46,8 +47,12 @@ func NewCompanyFundCurrentValuator(
 	if err := validateRequiredString("company-fund current valuation policy version", policyVersion, maxValuationPolicyVersionBytes); err != nil {
 		return nil, err
 	}
+	defaultMappings, err := normalizeCoinGeckoDefaultRateMappings(config.DefaultMappings)
+	if err != nil {
+		return nil, fmt.Errorf("validate company-fund default rate mappings: %w", err)
+	}
 	return &CompanyFundCurrentValuator{
-		store: store, registry: registry, cache: cache, policyVersion: policyVersion,
+		store: store, registry: registry, cache: cache, defaults: defaultMappings, policyVersion: policyVersion,
 	}, nil
 }
 
@@ -153,13 +158,13 @@ func (v *CompanyFundCurrentValuator) valueCandidate(ctx context.Context, candida
 		return result
 	}
 
-	valuation, policy, quoteRead, err := v.evaluateCandidate(candidate)
+	valuation, policy, rateKey, quoteRead, err := v.evaluateCandidate(candidate)
 	if err != nil {
 		result.Err = err
 		return result
 	}
 	result.Result = valuation
-	apply, err := v.applyInputForCandidate(candidate, valuation, policy, quoteRead)
+	apply, err := v.applyInputForCandidate(candidate, valuation, policy, rateKey, quoteRead)
 	if err != nil {
 		result.Err = err
 		return result
@@ -175,34 +180,30 @@ func (v *CompanyFundCurrentValuator) valueCandidate(ctx context.Context, candida
 	return result
 }
 
-func (v *CompanyFundCurrentValuator) evaluateCandidate(candidate CompanyFundTransactionValuationCandidate) (USDValuationResult, *AccountAssetPolicy, *CurrentRateCacheRead, error) {
+func (v *CompanyFundCurrentValuator) evaluateCandidate(candidate CompanyFundTransactionValuationCandidate) (USDValuationResult, *AccountAssetPolicy, *CoinGeckoQuoteCacheKey, *CurrentRateCacheRead, error) {
 	input := candidate.usdValuationInput()
 	direct, err := EvaluateUSDValue(input)
 	if err != nil {
-		return USDValuationResult{}, nil, nil, err
+		return USDValuationResult{}, nil, nil, nil, err
 	}
 	if direct.Status == USDValuationStatusFinal {
-		return direct, nil, nil, nil
+		return direct, nil, nil, nil, nil
 	}
 
 	subjectAccountID, err := PolicySubjectAccountID(candidate.Direction, candidate.FromCompanyFundAccountID, candidate.ToCompanyFundAccountID)
 	if err != nil {
-		return companyFundUnpricedMappingResult(direct), nil, nil, nil
+		return companyFundUnpricedMappingResult(direct), nil, nil, nil, nil
 	}
-	policy, configured := v.registry.Snapshot().LookupAssetPolicy(subjectAccountID, candidate.Asset)
-	if !configured {
-		return companyFundUnpricedMappingResult(direct), nil, nil, nil
+	policy, rateKey, configured := v.resolveCurrentRateMapping(candidate, subjectAccountID)
+	if !configured || rateKey == nil {
+		return companyFundUnpricedMappingResult(direct), policy, nil, nil, nil
 	}
-	cacheKey, configured := CoinGeckoQuoteCacheKeyForPolicy(policy)
-	if !configured {
-		return companyFundUnpricedMappingResult(direct), &policy, nil, nil
-	}
-	quoteRead, found := v.cache.Get(cacheKey)
+	quoteRead, found := v.cache.Get(*rateKey)
 	if !found {
-		return direct, &policy, nil, nil
+		return direct, policy, rateKey, nil, nil
 	}
 	if quoteRead.Stale {
-		return companyFundStaleCurrentRateResult(input, direct.ProviderReportedUSD, quoteRead), &policy, &quoteRead, nil
+		return companyFundStaleCurrentRateResult(input, direct.ProviderReportedUSD, quoteRead), policy, rateKey, &quoteRead, nil
 	}
 
 	price := quoteRead.Quote.Price
@@ -214,10 +215,38 @@ func (v *CompanyFundCurrentValuator) evaluateCandidate(candidate CompanyFundTran
 	input.CoinGeckoGranularity = "CURRENT"
 	market, err := EvaluateUSDValue(input)
 	if err != nil {
-		return USDValuationResult{}, nil, nil, err
+		return USDValuationResult{}, nil, nil, nil, err
 	}
 	market.Method = quoteRead.Quote.valuationMethod()
-	return market, &policy, &quoteRead, nil
+	return market, policy, rateKey, &quoteRead, nil
+}
+
+func (v *CompanyFundCurrentValuator) resolveCurrentRateMapping(candidate CompanyFundTransactionValuationCandidate, accountID int64) (*AccountAssetPolicy, *CoinGeckoQuoteCacheKey, bool) {
+	policy, hasPolicy := v.registry.Snapshot().LookupAssetPolicy(accountID, candidate.Asset)
+	var selectedPolicy *AccountAssetPolicy
+	if hasPolicy {
+		selectedPolicy = &policy
+		if key, configured := CoinGeckoQuoteCacheKeyForPolicy(policy); configured {
+			return selectedPolicy, &key, true
+		}
+		if !companyFundPolicyValuationMappingBlank(policy) {
+			return selectedPolicy, nil, false
+		}
+	}
+	if candidate.IsUnrecognizedAsset {
+		return selectedPolicy, nil, false
+	}
+	key, configured := CoinGeckoQuoteCacheKeyForDefault(candidate.Asset, v.defaults)
+	if !configured {
+		return selectedPolicy, nil, false
+	}
+	return selectedPolicy, &key, true
+}
+
+func companyFundPolicyValuationMappingBlank(policy AccountAssetPolicy) bool {
+	return strings.TrimSpace(policy.CoinGeckoID) == "" &&
+		strings.TrimSpace(policy.CoinGeckoPlatformID) == "" &&
+		strings.TrimSpace(policy.CoinGeckoContractAddress) == ""
 }
 
 func companyFundUnpricedMappingResult(previous USDValuationResult) USDValuationResult {
@@ -279,9 +308,10 @@ func (v *CompanyFundCurrentValuator) applyInputForCandidate(
 	candidate CompanyFundTransactionValuationCandidate,
 	valuation USDValuationResult,
 	policy *AccountAssetPolicy,
+	rateKey *CoinGeckoQuoteCacheKey,
 	quoteRead *CurrentRateCacheRead,
 ) (CompanyFundValuationApplyInput, error) {
-	dependencyFingerprint := companyFundCurrentValuationFingerprint(candidate, valuation, policy, quoteRead, v.policyVersion)
+	dependencyFingerprint := companyFundCurrentValuationFingerprint(candidate, valuation, policy, rateKey, quoteRead, v.policyVersion)
 	input := CompanyFundValuationApplyInput{
 		TransactionID:             candidate.ID,
 		Result:                    valuation,
@@ -349,6 +379,7 @@ func companyFundCurrentValuationFingerprint(
 	candidate CompanyFundTransactionValuationCandidate,
 	result USDValuationResult,
 	policy *AccountAssetPolicy,
+	rateKey *CoinGeckoQuoteCacheKey,
 	quoteRead *CurrentRateCacheRead,
 	policyVersion string,
 ) string {
@@ -394,6 +425,9 @@ func companyFundCurrentValuationFingerprint(
 		)
 	} else {
 		values = append(values, "no-policy")
+	}
+	if rateKey != nil && (policy == nil || companyFundPolicyValuationMappingBlank(*policy)) {
+		values = append(values, "rate-mapping", rateKey.identity())
 	}
 	if quoteRead != nil {
 		values = append(values,

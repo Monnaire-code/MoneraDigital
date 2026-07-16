@@ -264,10 +264,17 @@ func (candidate CompanyFundTransactionValuationCandidate) validate() error {
 		}
 		return nil
 	}
-	if *candidate.CurrentValuationHistoryID <= 0 || !isLowerSHA256Hex(candidate.CurrentValuationDependencyFingerprint) || !validUSDValuationStatus(candidate.CurrentValuationStatus) || !validUSDValuationSource(candidate.CurrentValuationSource) {
+	if *candidate.CurrentValuationHistoryID <= 0 || !isLowerSHA256Hex(candidate.CurrentValuationDependencyFingerprint) || !validUSDValuationStatus(candidate.CurrentValuationStatus) || !validCompanyFundValuationCandidateSource(candidate.CurrentValuationStatus, candidate.CurrentValuationSource) {
 		return fmt.Errorf("candidate current valuation state is invalid")
 	}
 	return nil
+}
+
+func validCompanyFundValuationCandidateSource(status USDValuationStatus, source USDValuationSource) bool {
+	if source == "" {
+		return status == USDValuationStatusUnpriced
+	}
+	return validUSDValuationSource(source)
 }
 
 func nullableCompanyFundValuationID(value sql.NullInt64) *int64 {

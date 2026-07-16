@@ -150,14 +150,15 @@ func currentRateBTCLegSnapshotInput(
 	quote CoinGeckoQuote,
 	policyVersion string,
 ) RateSnapshotInput {
-	effectiveAt := quote.FetchedAt.UTC()
+	effectiveAt := quote.ProviderUpdatedAt.UTC()
+	fetchedAt := quote.FetchedAt.UTC()
 	bitcoinIdentity := normalizeAssetIdentity(AssetIdentity{Currency: "BTC", ProviderAssetKey: rateSnapshotBTCProviderAssetID}).canonicalKey()
 	return RateSnapshotInput{
 		Provider: rateSnapshotCoinGeckoProvider, AssetIdentityKey: bitcoinIdentity,
 		ProviderAssetID: rateSnapshotBTCProviderAssetID, BaseCurrency: "BTC",
 		QuoteCurrency: strings.ToUpper(quoteCurrency), Rate: rate,
 		Method: string(USDValuationMethodCoinGeckoDirect), Granularity: currentRateSnapshotGranularity,
-		BucketStart: effectiveAt, EffectiveAt: &effectiveAt, AvailableAt: effectiveAt, FetchedAt: effectiveAt,
+		BucketStart: fetchedAt, EffectiveAt: &effectiveAt, AvailableAt: fetchedAt, FetchedAt: fetchedAt,
 		SnapshotGroupID: quote.ResponseDigest, PolicyVersion: policyVersion,
 		ProviderRevision: effectiveAt.Format(time.RFC3339Nano), SourcePayloadDigest: quote.ResponseDigest,
 		IsFinal: false, PriceKind: MarketPriceKindCurrent,

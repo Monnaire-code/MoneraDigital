@@ -70,7 +70,8 @@ type CompanyFundTransactionValuationCandidate struct {
 // CompanyFundCurrentValuatorConfig pins the calculation/policy contract that
 // participates in every durable valuation dependency fingerprint.
 type CompanyFundCurrentValuatorConfig struct {
-	PolicyVersion string
+	PolicyVersion   string
+	DefaultMappings CoinGeckoDefaultRateMappings
 }
 
 // CompanyFundValuationProcessResult carries an error instead of returning one

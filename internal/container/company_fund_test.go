@@ -18,6 +18,15 @@ import (
 
 type companyFundEventWriterStub struct{}
 
+type companyFundRegistryLoaderStub struct{}
+
+func (companyFundRegistryLoaderStub) LoadCompanyFundAccounts(context.Context) ([]companyfund.CompanyFundAccount, []companyfund.AccountAssetPolicy, error) {
+	return []companyfund.CompanyFundAccount{{
+		ID: 1, Channel: companyfund.ChannelSafeheron, ProviderAccountKey: "safeheron-account",
+		NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true,
+	}}, nil, nil
+}
+
 func (companyFundEventWriterStub) InsertProviderEvent(context.Context, companyfund.ProviderEventInput) (companyfund.ProviderEventInsertResult, error) {
 	return companyfund.ProviderEventInsertResult{ID: 1, Inserted: true}, nil
 }
@@ -28,6 +37,30 @@ func TestCompanyFundCurrentRateDefaultsMatchDemoRefreshBudget(t *testing.T) {
 	require.Equal(t, 5*time.Minute, defaultCompanyFundCurrentRateRefreshInterval)
 	require.Equal(t, 10*time.Minute, defaultCompanyFundCurrentRateCacheTTL)
 	require.Equal(t, 60*time.Minute, defaultCompanyFundCurrentRateCacheMaxAge)
+}
+
+func TestNewCompanyFundCurrentValuationRuntime_ParsesDefaultMappingsBeforeWiring(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	registry := companyfund.NewAccountRegistry(companyFundRegistryLoaderStub{}, time.Hour)
+	require.NoError(t, registry.Load(t.Context()))
+	repository := companyfund.NewDBRepository(db)
+	cont := &Container{DB: db, CompanyFundRepository: repository, CompanyFundAccountRegistry: registry}
+
+	cache, refresher, valuator := newCompanyFundCurrentValuationRuntime(cont, companyFundRuntimeConfig{
+		CurrentRateDefaultMappingsJSON: `{"crypto":{"BTC":"bitcoin","USDT":"tether"},"fiat":["USD","SGD"]}`,
+	})
+	require.NotNil(t, cache)
+	require.NotNil(t, refresher)
+	require.NotNil(t, valuator)
+
+	cache, refresher, valuator = newCompanyFundCurrentValuationRuntime(cont, companyFundRuntimeConfig{
+		CurrentRateDefaultMappingsJSON: `{"crypto":{"USD":"unsafe"},"fiat":["USD"]}`,
+	})
+	require.Nil(t, cache)
+	require.Nil(t, refresher)
+	require.Nil(t, valuator)
 }
 
 func (companyFundHistoryClientStub) CreateAssetWallet(context.Context, string, []string) (*safeheron.Wallet, error) {

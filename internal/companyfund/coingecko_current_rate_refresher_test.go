@@ -3,6 +3,8 @@ package companyfund
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -11,7 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-func TestCoinGeckoCurrentRateRefresher_RefreshesOnlyExplicitPolicyMappings(t *testing.T) {
+func TestCoinGeckoCurrentRateRefresher_RefreshesOnlyExplicitCoinIDPolicyMappings(t *testing.T) {
 	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
 	registry := newCurrentRateRefresherRegistry(t, []AccountAssetPolicy{
 		{
@@ -39,11 +41,6 @@ func TestCoinGeckoCurrentRateRefresher_RefreshesOnlyExplicitPolicyMappings(t *te
 				CoinID: "ethereum", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("2500.123456789012345678", now),
 			}),
 		},
-		tokens: map[string]CoinGeckoPriceBatch{
-			"ethereum|0xabc": fakeCoinGeckoPriceBatch(now, CoinGeckoPrice{
-				PlatformID: "ethereum", ContractAddress: "0xabc", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("0.999876543210987654", now),
-			}),
-		},
 	}
 	refresher, err := NewCoinGeckoCurrentRateRefresher(client, registry, cache, CoinGeckoCurrentRateRefresherConfig{Clock: func() time.Time { return now }})
 	if err != nil {
@@ -51,14 +48,14 @@ func TestCoinGeckoCurrentRateRefresher_RefreshesOnlyExplicitPolicyMappings(t *te
 	}
 
 	result, err := refresher.Refresh(context.Background())
-	if err != nil || result.Skipped || !result.Refreshed || result.MappingCount != 2 || result.QuoteCount != 2 {
-		t.Fatalf("Refresh() = %#v, %v; want two refreshed quotes", result, err)
+	if err != nil || result.Skipped || !result.Refreshed || result.MappingCount != 1 || result.QuoteCount != 1 {
+		t.Fatalf("Refresh() = %#v, %v; want one explicit CoinGecko-ID quote", result, err)
 	}
 	if got := client.simpleRequestKeys(); len(got) != 1 || got[0] != "ethereum" {
 		t.Fatalf("simple requests = %#v, want only explicit ETH mapping", got)
 	}
-	if got := client.tokenRequestKeys(); len(got) != 1 || got[0] != "ethereum|0xabc" {
-		t.Fatalf("token requests = %#v, want only explicit USDT contract mapping", got)
+	if got := client.tokenRequestKeys(); len(got) != 0 {
+		t.Fatalf("scheduled refresh must not call token-price: %#v", got)
 	}
 
 	ethPolicy, _ := registry.Snapshot().LookupAssetPolicy(1, AssetIdentity{Currency: "ETH", ChainCode: "ETHEREUM", ProviderAssetKey: "ETH"})
@@ -72,13 +69,8 @@ func TestCoinGeckoCurrentRateRefresher_RefreshesOnlyExplicitPolicyMappings(t *te
 	}
 
 	tokenPolicy, _ := registry.Snapshot().LookupAssetPolicy(1, AssetIdentity{Currency: "USDT", ChainCode: "ETHEREUM", ProviderAssetKey: "USDT_ERC20", ContractAddress: "0xAbC"})
-	tokenKey, ok := CoinGeckoQuoteCacheKeyForPolicy(tokenPolicy)
-	if !ok {
-		t.Fatal("USDT policy should have an explicit contract cache key")
-	}
-	token, found := cache.Get(tokenKey)
-	if !found || token.Stale || !token.Quote.Price.Equal(decimal.RequireFromString("0.999876543210987654")) {
-		t.Fatalf("USDT cache quote = %#v, found=%v", token, found)
+	if _, ok := CoinGeckoQuoteCacheKeyForPolicy(tokenPolicy); ok {
+		t.Fatal("contract-only policy must fail closed without a CoinGecko coin ID")
 	}
 }
 
@@ -95,6 +87,138 @@ func TestCoinGeckoCurrentRateRefresher_DefaultIntervalMatchesDemoBudget(t *testi
 	}
 	if refresher.RefreshInterval() != 5*time.Minute {
 		t.Fatalf("default refresh interval = %s, want 5m", refresher.RefreshInterval())
+	}
+}
+
+func TestCoinGeckoCurrentRateRefresher_DefaultsUseOneSimplePriceMatrixRequest(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 4, 30, 0, 0, time.UTC)
+	mappings, err := ParseCoinGeckoDefaultRateMappingsJSON(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+		"binancecoin,bitcoin,ethereum,tether,usd-coin": fakeCoinGeckoPriceBatch(now,
+			CoinGeckoPrice{CoinID: "binancecoin", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("580", now)},
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("65000", now)},
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "cny", Quote: fakeCoinGeckoQuote("440000", now)},
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "hkd", Quote: fakeCoinGeckoQuote("510000", now)},
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "sgd", Quote: fakeCoinGeckoQuote("84000", now)},
+			CoinGeckoPrice{CoinID: "ethereum", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("2500", now)},
+			CoinGeckoPrice{CoinID: "tether", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("0.999", now)},
+			CoinGeckoPrice{CoinID: "usd-coin", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("1.001", now)},
+		),
+	}}
+	cache := newTestCurrentRateCache(t, &now, 10*time.Minute)
+	refresher, err := NewCoinGeckoCurrentRateRefresher(
+		client,
+		newCurrentRateRefresherRegistry(t, nil),
+		cache,
+		CoinGeckoCurrentRateRefresherConfig{
+			Clock:           func() time.Time { return now },
+			DefaultMappings: mappings,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := refresher.Refresh(t.Context())
+	if err != nil || !result.Refreshed || result.MappingCount != 8 || result.QuoteCount != 8 {
+		t.Fatalf("Refresh() = %#v, %v; want five crypto plus three fiat quotes", result, err)
+	}
+	if len(client.simpleRequests) != 1 {
+		t.Fatalf("simple requests = %#v, want exactly one", client.simpleRequests)
+	}
+	request := client.simpleRequests[0]
+	if want := []string{"binancecoin", "bitcoin", "ethereum", "tether", "usd-coin"}; !reflect.DeepEqual(request.CoinIDs, want) {
+		t.Fatalf("simple request coin IDs = %#v, want %#v", request.CoinIDs, want)
+	}
+	if want := []string{"cny", "hkd", "sgd", "usd"}; !reflect.DeepEqual(request.QuoteCurrencies, want) {
+		t.Fatalf("simple request quote currencies = %#v, want %#v", request.QuoteCurrencies, want)
+	}
+	if client.exchangeCalls != 0 || len(client.tokenRequests) != 0 {
+		t.Fatalf("default matrix made extra provider calls: exchange=%d token=%#v", client.exchangeCalls, client.tokenRequests)
+	}
+
+	usdtKey, ok := CoinGeckoQuoteCacheKeyForDefault(AssetIdentity{Currency: "USDT", ChainCode: "BINANCE_SMART_CHAIN"}, mappings)
+	if !ok {
+		t.Fatal("USDT default cache key is missing")
+	}
+	usdt, found := cache.Get(usdtKey)
+	if !found || !usdt.Quote.Price.Equal(decimal.RequireFromString("0.999")) || usdt.Quote.Method != "" {
+		t.Fatalf("USDT default quote = %#v, found=%v", usdt, found)
+	}
+	cnyKey, ok := CoinGeckoQuoteCacheKeyForDefault(AssetIdentity{Currency: "CNY"}, mappings)
+	if !ok {
+		t.Fatal("CNY default cache key is missing")
+	}
+	cny, found := cache.Get(cnyKey)
+	if !found || !cny.Quote.Price.Equal(decimal.RequireFromString("0.147727272727272727")) ||
+		cny.Quote.Method != USDValuationMethodCoinGeckoBTCCross ||
+		!cny.Quote.BTCCrossNumerator.Equal(decimal.NewFromInt(65000)) ||
+		!cny.Quote.BTCCrossDenominator.Equal(decimal.NewFromInt(440000)) {
+		t.Fatalf("CNY BTC-cross quote = %#v, found=%v", cny, found)
+	}
+}
+
+func TestBuildCoinGeckoCurrentRatePlan_UnionsAndDeduplicatesDefaultsAndPolicies(t *testing.T) {
+	mappings, err := ParseCoinGeckoDefaultRateMappingsJSON(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policies := []AccountAssetPolicy{
+		{Asset: AssetIdentity{Currency: "ETH", ChainCode: "ETHEREUM", ProviderAssetKey: "ETH"}, CoinGeckoID: "ethereum", Enabled: true},
+		{Asset: AssetIdentity{Currency: "USDT", ChainCode: "BINANCE_SMART_CHAIN", ProviderAssetKey: "USDT_BEP20"}, CoinGeckoID: "bridged-tether", Enabled: true},
+		{Asset: AssetIdentity{Currency: "SGD"}, CoinGeckoID: "fiat:SGD", Enabled: true},
+	}
+
+	plan := buildCoinGeckoCurrentRatePlan(policies, mappings)
+	if plan.mappingCount != 10 {
+		t.Fatalf("mapping count = %d, want 8 defaults plus two distinct policy mappings", plan.mappingCount)
+	}
+	if got := sortedCoinGeckoPlanKeys(plan.simpleKeys); !reflect.DeepEqual(got, []string{"binancecoin", "bitcoin", "bridged-tether", "ethereum", "tether", "usd-coin"}) {
+		t.Fatalf("unioned simple IDs = %#v", got)
+	}
+	if len(plan.simpleKeys["ethereum"]) != 2 {
+		t.Fatalf("ethereum cache targets = %#v, want shared default and policy targets", plan.simpleKeys["ethereum"])
+	}
+	if len(plan.fiatKeys["SGD"]) != 1 {
+		t.Fatalf("SGD cache targets = %#v, want identical default and policy target deduplicated", plan.fiatKeys["SGD"])
+	}
+}
+
+func TestCoinGeckoCurrentRateRefresher_RejectsMoreThanOneSimplePriceBatchBeforeProviderCall(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 4, 30, 0, 0, time.UTC)
+	crypto := make(map[string]string, maxCoinGeckoBatchAssets+1)
+	for index := 0; index <= maxCoinGeckoBatchAssets; index++ {
+		currency := string([]byte{
+			'X',
+			byte('A' + (index/26)%26),
+			byte('A' + index%26),
+		})
+		crypto[currency] = fmt.Sprintf("asset-%03d", index)
+	}
+	client := &fakeCoinGeckoCurrentPriceClient{}
+	cache := newTestCurrentRateCache(t, &now, 10*time.Minute)
+	refresher, err := NewCoinGeckoCurrentRateRefresher(
+		client,
+		newCurrentRateRefresherRegistry(t, nil),
+		cache,
+		CoinGeckoCurrentRateRefresherConfig{
+			Clock:           func() time.Time { return now },
+			DefaultMappings: CoinGeckoDefaultRateMappings{Crypto: crypto},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := refresher.Refresh(t.Context())
+	if err == nil || !result.RefreshFailed || !result.Stale {
+		t.Fatalf("overflow Refresh() = %#v, %v; want stale refresh failure", result, err)
+	}
+	if len(client.simpleRequests) != 0 {
+		t.Fatalf("overflow made provider calls: %#v", client.simpleRequests)
 	}
 }
 
@@ -229,7 +353,7 @@ func TestCoinGeckoCurrentRateRefresher_SkipsWhenNoExplicitMappingsExist(t *testi
 	}
 }
 
-func TestCoinGeckoCurrentRateRefresher_DerivesConfiguredFiatUSDFromOneExchangeRatesSnapshot(t *testing.T) {
+func TestCoinGeckoCurrentRateRefresher_DerivesConfiguredFiatUSDFromOneSimplePriceMatrix(t *testing.T) {
 	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
 	policies := []AccountAssetPolicy{
 		{ID: 21, AccountID: 1, Asset: AssetIdentity{Currency: "JPY"}, CoinGeckoID: "fiat:JPY", Enabled: true},
@@ -239,16 +363,14 @@ func TestCoinGeckoCurrentRateRefresher_DerivesConfiguredFiatUSDFromOneExchangeRa
 	}
 	registry := newCurrentRateRefresherRegistry(t, policies)
 	cache := newTestCurrentRateCache(t, &now, time.Minute)
-	client := &fakeCoinGeckoCurrentPriceClient{exchange: CoinGeckoExchangeRatesBatch{
-		FetchedAt:      now,
-		ResponseDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		Rates: map[string]CoinGeckoExchangeRate{
-			"USD": {Code: "USD", Type: "fiat", Value: decimal.NewFromInt(60000)},
-			"JPY": {Code: "JPY", Type: "fiat", Value: decimal.NewFromInt(9000000)},
-			"SGD": {Code: "SGD", Type: "fiat", Value: decimal.NewFromInt(80000)},
-			"HKD": {Code: "HKD", Type: "fiat", Value: decimal.NewFromInt(480000)},
-			"CNY": {Code: "CNY", Type: "fiat", Value: decimal.NewFromInt(420000)},
-		},
+	client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+		"bitcoin": fakeCoinGeckoPriceBatch(now,
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("60000", now)},
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "jpy", Quote: fakeCoinGeckoQuote("9000000", now)},
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "sgd", Quote: fakeCoinGeckoQuote("80000", now)},
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "hkd", Quote: fakeCoinGeckoQuote("480000", now)},
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "cny", Quote: fakeCoinGeckoQuote("420000", now)},
+		),
 	}}
 	store := &fakeCurrentRateSnapshotStore{nextID: 100}
 	refresher, err := NewCoinGeckoCurrentRateRefresher(client, registry, cache, CoinGeckoCurrentRateRefresherConfig{
@@ -259,8 +381,11 @@ func TestCoinGeckoCurrentRateRefresher_DerivesConfiguredFiatUSDFromOneExchangeRa
 	}
 
 	result, err := refresher.Refresh(context.Background())
-	if err != nil || !result.Refreshed || result.MappingCount != 4 || result.QuoteCount != 4 || client.exchangeCalls != 1 || len(client.simpleRequests) != 0 || len(client.tokenRequests) != 0 {
+	if err != nil || !result.Refreshed || result.MappingCount != 4 || result.QuoteCount != 4 || client.exchangeCalls != 0 || len(client.simpleRequests) != 1 || len(client.tokenRequests) != 0 {
 		t.Fatalf("fiat Refresh() = %#v, %v; client=%#v", result, err, client)
+	}
+	if want := []string{"cny", "hkd", "jpy", "sgd", "usd"}; !reflect.DeepEqual(client.simpleRequests[0].QuoteCurrencies, want) {
+		t.Fatalf("fiat matrix quotes = %#v, want %#v", client.simpleRequests[0].QuoteCurrencies, want)
 	}
 	for _, testCase := range []struct {
 		currency string
@@ -277,7 +402,7 @@ func TestCoinGeckoCurrentRateRefresher_DerivesConfiguredFiatUSDFromOneExchangeRa
 			t.Fatalf("%s fiat policy cache key = %#v, %v", testCase.currency, key, ok)
 		}
 		quote, found := cache.Get(key)
-		if !found || quote.Stale || !quote.Quote.Price.Equal(decimal.RequireFromString(testCase.want)) || !quote.Quote.ProviderUpdatedAt.Equal(now) || quote.Quote.ResponseDigest != client.exchange.ResponseDigest || quote.Quote.Method != USDValuationMethodCoinGeckoBTCCross || quote.Quote.RateSnapshotID <= 0 {
+		if !found || quote.Stale || !quote.Quote.Price.Equal(decimal.RequireFromString(testCase.want)) || !quote.Quote.ProviderUpdatedAt.Equal(now.Add(-time.Second)) || quote.Quote.ResponseDigest != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || quote.Quote.Method != USDValuationMethodCoinGeckoBTCCross || quote.Quote.RateSnapshotID <= 0 {
 			t.Fatalf("%s derived fiat quote = %#v, found=%v", testCase.currency, quote, found)
 		}
 	}
@@ -388,12 +513,10 @@ func TestCoinGeckoCurrentRateRefresher_IncompleteExplicitFiatResponseRetainsStal
 	}); err != nil {
 		t.Fatal(err)
 	}
-	client := &fakeCoinGeckoCurrentPriceClient{exchange: CoinGeckoExchangeRatesBatch{
-		FetchedAt:      now,
-		ResponseDigest: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-		Rates: map[string]CoinGeckoExchangeRate{
-			"USD": {Code: "USD", Type: "fiat", Value: decimal.NewFromInt(60000)},
-		},
+	client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+		"bitcoin": fakeCoinGeckoPriceBatch(now,
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("60000", now)},
+		),
 	}}
 	refresher, err := NewCoinGeckoCurrentRateRefresher(client, registry, cache, CoinGeckoCurrentRateRefresherConfig{Clock: func() time.Time { return now }})
 	if err != nil {
@@ -401,12 +524,107 @@ func TestCoinGeckoCurrentRateRefresher_IncompleteExplicitFiatResponseRetainsStal
 	}
 
 	result, err := refresher.Refresh(context.Background())
-	if err == nil || !result.Stale || !result.RefreshFailed || client.exchangeCalls != 1 {
+	if err == nil || !result.Stale || !result.RefreshFailed || client.exchangeCalls != 0 || len(client.simpleRequests) != 1 {
 		t.Fatalf("incomplete fiat refresh = %#v, %v", result, err)
 	}
 	read, found := cache.Get(key)
 	if !found || !read.Stale || !read.RefreshFailed || !read.Quote.Price.Equal(decimal.RequireFromString("0.006")) {
 		t.Fatalf("incomplete fiat response must retain stale cache quote: %#v found=%v", read, found)
+	}
+}
+
+func TestCoinGeckoCurrentRateRefresher_RejectsIncompleteMatrixAuditMetadata(t *testing.T) {
+	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	policy := AccountAssetPolicy{ID: 1, AccountID: 1, Asset: AssetIdentity{Currency: "ETH"}, CoinGeckoID: "ethereum", Enabled: true}
+	client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+		"ethereum": {
+			Prices: []CoinGeckoPrice{{CoinID: "ethereum", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("2500", now)}},
+		},
+	}}
+	refresher, err := NewCoinGeckoCurrentRateRefresher(
+		client,
+		newCurrentRateRefresherRegistry(t, []AccountAssetPolicy{policy}),
+		newTestCurrentRateCache(t, &now, time.Minute),
+		CoinGeckoCurrentRateRefresherConfig{Clock: func() time.Time { return now }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := refresher.Refresh(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "incomplete audit metadata") || !result.Stale || !result.RefreshFailed || len(client.simpleRequests) != 1 {
+		t.Fatalf("incomplete audit Refresh() = %#v, %v; requests=%#v", result, err, client.simpleRequests)
+	}
+}
+
+func TestCoinGeckoCurrentRateRefresher_RejectsFiatMatrixWithoutBTCUSD(t *testing.T) {
+	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	policy := AccountAssetPolicy{ID: 1, AccountID: 1, Asset: AssetIdentity{Currency: "JPY"}, CoinGeckoID: "fiat:JPY", Enabled: true}
+	client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+		"bitcoin": fakeCoinGeckoPriceBatch(now,
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "jpy", Quote: fakeCoinGeckoQuote("9000000", now)},
+		),
+	}}
+	refresher, err := NewCoinGeckoCurrentRateRefresher(
+		client,
+		newCurrentRateRefresherRegistry(t, []AccountAssetPolicy{policy}),
+		newTestCurrentRateCache(t, &now, time.Minute),
+		CoinGeckoCurrentRateRefresherConfig{Clock: func() time.Time { return now }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := refresher.Refresh(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "missing a positive BTC/USD") || !result.Stale || !result.RefreshFailed || len(client.simpleRequests) != 1 {
+		t.Fatalf("missing BTC/USD Refresh() = %#v, %v; requests=%#v", result, err, client.simpleRequests)
+	}
+}
+
+func TestCoinGeckoCurrentRateRefresher_RejectsFiatLegsFromDifferentResponseMetadata(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*CoinGeckoQuote)
+	}{
+		{
+			name: "response digest",
+			mutate: func(quote *CoinGeckoQuote) {
+				quote.ResponseDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+			},
+		},
+		{
+			name: "fetch time",
+			mutate: func(quote *CoinGeckoQuote) {
+				quote.FetchedAt = quote.FetchedAt.Add(-time.Second)
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+			policy := AccountAssetPolicy{ID: 1, AccountID: 1, Asset: AssetIdentity{Currency: "JPY"}, CoinGeckoID: "fiat:JPY", Enabled: true}
+			fiatQuote := fakeCoinGeckoQuote("9000000", now)
+			testCase.mutate(fiatQuote)
+			client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+				"bitcoin": fakeCoinGeckoPriceBatch(now,
+					CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("60000", now)},
+					CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "jpy", Quote: fiatQuote},
+				),
+			}}
+			refresher, err := NewCoinGeckoCurrentRateRefresher(
+				client,
+				newCurrentRateRefresherRegistry(t, []AccountAssetPolicy{policy}),
+				newTestCurrentRateCache(t, &now, time.Minute),
+				CoinGeckoCurrentRateRefresherConfig{Clock: func() time.Time { return now }},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := refresher.Refresh(t.Context())
+			if err == nil || !strings.Contains(err.Error(), "does not share one response snapshot") || !result.Stale || !result.RefreshFailed {
+				t.Fatalf("mixed metadata Refresh() = %#v, %v", result, err)
+			}
+		})
 	}
 }
 

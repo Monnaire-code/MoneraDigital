@@ -3,6 +3,7 @@ package companyfund
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,12 +12,16 @@ import (
 
 func TestCompanyFundCurrentValuator_ValuesUSDCurrencyAtPar(t *testing.T) {
 	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	mappings, err := ParseCoinGeckoDefaultRateMappingsJSON(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store := &fakeCompanyFundValuationCandidateStore{candidates: map[int64]CompanyFundTransactionValuationCandidate{
 		10: newValuationRuntimeCandidate(10, "USD", decimal.RequireFromString("123.456789012345678")),
 	}}
-	valuator := newTestCompanyFundCurrentValuator(t, now, store, nil, nil)
+	valuator := newTestCompanyFundCurrentValuatorWithConfig(t, now, store, nil, nil, CompanyFundCurrentValuatorConfig{DefaultMappings: mappings})
 
-	result := valuator.ValueTransaction(context.Background(), 10)
+	result := valuator.ValueTransaction(t.Context(), 10)
 	if result.Err != nil || !result.Applied || result.Result.Status != USDValuationStatusFinal || result.Result.Source != USDValuationSourceUSDPar {
 		t.Fatalf("ValueTransaction() = %#v; want final USD-par valuation", result)
 	}
@@ -100,7 +105,161 @@ func TestCompanyFundCurrentValuator_UsesFreshCurrentQuoteAsProvisional(t *testin
 	}
 }
 
-func TestCompanyFundCurrentValuator_UsesExplicitFiatExchangeRateQuoteAsProvisional(t *testing.T) {
+func TestCompanyFundCurrentValuator_UsesConfiguredSystemDefaultForRecognizedPolicylessAsset(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 5, 0, 0, 0, time.UTC)
+	mappings, err := ParseCoinGeckoDefaultRateMappingsJSON(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := newTestCurrentRateCache(t, &now, time.Minute)
+	key, ok := CoinGeckoQuoteCacheKeyForDefault(AssetIdentity{Currency: "USDT"}, mappings)
+	if !ok {
+		t.Fatal("USDT system default should have a cache key")
+	}
+	if _, err := cache.Refresh(t.Context(), func(context.Context) (map[CoinGeckoQuoteCacheKey]CoinGeckoQuote, error) {
+		return map[CoinGeckoQuoteCacheKey]CoinGeckoQuote{key: newCoinGeckoCacheQuote("0.999", now)}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidate := newValuationRuntimeCandidate(17, "USDT", decimal.RequireFromString("0.01"))
+	candidate.ToCompanyFundAccountID = int64Pointer(9)
+	candidate.Asset = AssetIdentity{Currency: "USDT", ChainCode: "BINANCE_SMART_CHAIN", ProviderAssetKey: "USDT_BEP20"}
+	store := &fakeCompanyFundValuationCandidateStore{candidates: map[int64]CompanyFundTransactionValuationCandidate{candidate.ID: candidate}}
+	valuator := newTestCompanyFundCurrentValuatorWithConfig(t, now, store, newCurrentRateRefresherRegistryWithAccount(t, 9, nil), cache, CompanyFundCurrentValuatorConfig{
+		DefaultMappings: mappings,
+	})
+
+	result := valuator.ValueTransaction(t.Context(), candidate.ID)
+	if result.Err != nil || !result.Applied || result.Result.Status != USDValuationStatusProvisional || result.Result.Source != USDValuationSourceCoinGecko || result.Result.Value == nil || !result.Result.Value.Equal(decimal.RequireFromString("0.00999")) {
+		t.Fatalf("policyless default valuation = %#v", result)
+	}
+}
+
+func TestCompanyFundCurrentValuator_AccountPolicyPrecedenceOverSystemDefault(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 5, 0, 0, 0, time.UTC)
+	mappings, err := ParseCoinGeckoDefaultRateMappingsJSON(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := AssetIdentity{Currency: "USDT", ChainCode: "BINANCE_SMART_CHAIN", ProviderAssetKey: "USDT_BEP20"}
+	defaultKey, ok := CoinGeckoQuoteCacheKeyForDefault(asset, mappings)
+	if !ok {
+		t.Fatal("USDT system default should have a cache key")
+	}
+	policy := AccountAssetPolicy{ID: 18, AccountID: 9, Asset: asset, CoinGeckoID: "bridged-tether", Enabled: true}
+	policyKey, ok := CoinGeckoQuoteCacheKeyForPolicy(policy)
+	if !ok {
+		t.Fatal("explicit account policy should have a cache key")
+	}
+	cache := newTestCurrentRateCache(t, &now, time.Minute)
+	if _, err := cache.Refresh(t.Context(), func(context.Context) (map[CoinGeckoQuoteCacheKey]CoinGeckoQuote, error) {
+		return map[CoinGeckoQuoteCacheKey]CoinGeckoQuote{
+			defaultKey: newCoinGeckoCacheQuote("1", now),
+			policyKey:  newCoinGeckoCacheQuote("2", now),
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidate := newValuationRuntimeCandidate(18, "USDT", decimal.NewFromInt(3))
+	candidate.ToCompanyFundAccountID = int64Pointer(policy.AccountID)
+	candidate.Asset = asset
+	store := &fakeCompanyFundValuationCandidateStore{candidates: map[int64]CompanyFundTransactionValuationCandidate{candidate.ID: candidate}}
+	valuator := newTestCompanyFundCurrentValuatorWithConfig(t, now, store, newCurrentRateRefresherRegistryWithAccount(t, policy.AccountID, []AccountAssetPolicy{policy}), cache, CompanyFundCurrentValuatorConfig{
+		DefaultMappings: mappings,
+	})
+
+	result := valuator.ValueTransaction(t.Context(), candidate.ID)
+	if result.Err != nil || result.Result.Value == nil || !result.Result.Value.Equal(decimal.NewFromInt(6)) {
+		t.Fatalf("explicit-policy valuation = %#v; want account policy price", result)
+	}
+}
+
+func TestCompanyFundCurrentValuator_BlankPolicyFallsBackButMalformedMappingFailsClosed(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 5, 0, 0, 0, time.UTC)
+	mappings, err := ParseCoinGeckoDefaultRateMappingsJSON(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := AssetIdentity{Currency: "USDT", ChainCode: "BINANCE_SMART_CHAIN", ProviderAssetKey: "USDT_BEP20"}
+	defaultKey, ok := CoinGeckoQuoteCacheKeyForDefault(asset, mappings)
+	if !ok {
+		t.Fatal("USDT system default should have a cache key")
+	}
+	cache := newTestCurrentRateCache(t, &now, time.Minute)
+	if _, err := cache.Refresh(t.Context(), func(context.Context) (map[CoinGeckoQuoteCacheKey]CoinGeckoQuote, error) {
+		return map[CoinGeckoQuoteCacheKey]CoinGeckoQuote{defaultKey: newCoinGeckoCacheQuote("1", now)}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, testCase := range []struct {
+		name       string
+		policy     AccountAssetPolicy
+		wantStatus USDValuationStatus
+		wantReason USDValuationReason
+	}{
+		{
+			name:       "blank valuation mapping uses default",
+			policy:     AccountAssetPolicy{ID: 19, AccountID: 9, Asset: asset, Enabled: true},
+			wantStatus: USDValuationStatusProvisional,
+		},
+		{
+			name: "malformed explicit mapping does not use default",
+			policy: AccountAssetPolicy{
+				ID: 20, AccountID: 9, Asset: asset, CoinGeckoID: "tether", CoinGeckoPlatformID: "ethereum", Enabled: true,
+			},
+			wantStatus: USDValuationStatusUnpriced,
+			wantReason: USDValuationReasonMappingMissing,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			candidate := newValuationRuntimeCandidate(19, "USDT", decimal.NewFromInt(1))
+			candidate.ToCompanyFundAccountID = int64Pointer(testCase.policy.AccountID)
+			candidate.Asset = asset
+			store := &fakeCompanyFundValuationCandidateStore{candidates: map[int64]CompanyFundTransactionValuationCandidate{candidate.ID: candidate}}
+			valuator := newTestCompanyFundCurrentValuatorWithConfig(t, now, store, newCurrentRateRefresherRegistryWithAccount(t, testCase.policy.AccountID, []AccountAssetPolicy{testCase.policy}), cache, CompanyFundCurrentValuatorConfig{
+				DefaultMappings: mappings,
+			})
+
+			result := valuator.ValueTransaction(t.Context(), candidate.ID)
+			if result.Err != nil || result.Result.Status != testCase.wantStatus || result.Result.Reason != testCase.wantReason {
+				t.Fatalf("ValueTransaction() = %#v", result)
+			}
+		})
+	}
+}
+
+func TestCompanyFundCurrentValuator_UnrecognizedAssetNeverUsesSystemDefault(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 5, 0, 0, 0, time.UTC)
+	mappings, err := ParseCoinGeckoDefaultRateMappingsJSON(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, ok := CoinGeckoQuoteCacheKeyForDefault(AssetIdentity{Currency: "USDT"}, mappings)
+	if !ok {
+		t.Fatal("USDT system default should have a cache key")
+	}
+	cache := newTestCurrentRateCache(t, &now, time.Minute)
+	if _, err := cache.Refresh(t.Context(), func(context.Context) (map[CoinGeckoQuoteCacheKey]CoinGeckoQuote, error) {
+		return map[CoinGeckoQuoteCacheKey]CoinGeckoQuote{key: newCoinGeckoCacheQuote("1", now)}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidate := newValuationRuntimeCandidate(20, "USDT", decimal.NewFromInt(1))
+	candidate.ToCompanyFundAccountID = int64Pointer(9)
+	candidate.IsUnrecognizedAsset = true
+	store := &fakeCompanyFundValuationCandidateStore{candidates: map[int64]CompanyFundTransactionValuationCandidate{candidate.ID: candidate}}
+	valuator := newTestCompanyFundCurrentValuatorWithConfig(t, now, store, newCurrentRateRefresherRegistryWithAccount(t, 9, nil), cache, CompanyFundCurrentValuatorConfig{
+		DefaultMappings: mappings,
+	})
+
+	result := valuator.ValueTransaction(t.Context(), candidate.ID)
+	if result.Err != nil || result.Result.Status != USDValuationStatusUnpriced || result.Result.Reason != USDValuationReasonMappingMissing || result.Result.Source != "" {
+		t.Fatalf("unrecognized default valuation = %#v", result)
+	}
+}
+
+func TestCompanyFundCurrentValuator_UsesExplicitFiatMatrixQuoteAsProvisional(t *testing.T) {
 	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
 	policy := AccountAssetPolicy{
 		ID: 8, AccountID: 9,
@@ -109,13 +268,11 @@ func TestCompanyFundCurrentValuator_UsesExplicitFiatExchangeRateQuoteAsProvision
 	}
 	registry := newCurrentRateRefresherRegistryWithAccount(t, 9, []AccountAssetPolicy{policy})
 	cache := newTestCurrentRateCache(t, &now, time.Minute)
-	client := &fakeCoinGeckoCurrentPriceClient{exchange: CoinGeckoExchangeRatesBatch{
-		FetchedAt:      now,
-		ResponseDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-		Rates: map[string]CoinGeckoExchangeRate{
-			"USD": {Code: "USD", Type: "fiat", Value: decimal.NewFromInt(60000)},
-			"JPY": {Code: "JPY", Type: "fiat", Value: decimal.NewFromInt(6000000)},
-		},
+	client := &fakeCoinGeckoCurrentPriceClient{simple: map[string]CoinGeckoPriceBatch{
+		"bitcoin": fakeCoinGeckoPriceBatch(now,
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "usd", Quote: fakeCoinGeckoQuote("60000", now)},
+			CoinGeckoPrice{CoinID: "bitcoin", QuoteCurrency: "jpy", Quote: fakeCoinGeckoQuote("6000000", now)},
+		),
 	}}
 	storeSnapshots := &fakeCurrentRateSnapshotStore{nextID: 200}
 	refresher, err := NewCoinGeckoCurrentRateRefresher(client, registry, cache, CoinGeckoCurrentRateRefresherConfig{
@@ -126,6 +283,9 @@ func TestCompanyFundCurrentValuator_UsesExplicitFiatExchangeRateQuoteAsProvision
 	}
 	if _, err := refresher.Refresh(context.Background()); err != nil {
 		t.Fatalf("fiat rate refresh error = %v", err)
+	}
+	if len(client.simpleRequests) != 1 {
+		t.Fatalf("fiat refresh requests = %#v, want one matrix request", client.simpleRequests)
 	}
 
 	candidate := newValuationRuntimeCandidate(15, "JPY", decimal.NewFromInt(6000000))
@@ -138,7 +298,7 @@ func TestCompanyFundCurrentValuator_UsesExplicitFiatExchangeRateQuoteAsProvision
 	if result.Err != nil || !result.Applied || result.Result.Status != USDValuationStatusProvisional || result.Result.Source != USDValuationSourceCoinGecko || result.Result.Method != USDValuationMethodCoinGeckoBTCCross || result.Result.Basis != USDValuationBasisIngestionTime {
 		t.Fatalf("fiat ValueTransaction() = %#v", result)
 	}
-	if result.Result.Value == nil || !result.Result.Value.Equal(decimal.NewFromInt(60000)) || result.Result.PriceAt == nil || !result.Result.PriceAt.Equal(now) {
+	if result.Result.Value == nil || !result.Result.Value.Equal(decimal.NewFromInt(60000)) || result.Result.PriceAt == nil || !result.Result.PriceAt.Equal(now.Add(-time.Second)) {
 		t.Fatalf("fiat provisional valuation must preserve derived current quote and fetched timestamp: %#v", result.Result)
 	}
 	if len(store.applies) != 1 || store.applies[0].RateSnapshotID == nil || *store.applies[0].RateSnapshotID <= 0 {
@@ -215,6 +375,51 @@ func TestCompanyFundCurrentValuator_SweepRepairsEligibleCandidatesWithoutFailing
 	}
 }
 
+func TestCompanyFundCurrentValuator_SweepRevaluesExistingUnpricedHistoryAfterRateBecomesAvailable(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 4, 28, 45, 0, time.UTC)
+	policy := AccountAssetPolicy{
+		ID: 17, AccountID: 19,
+		Asset:       AssetIdentity{Currency: "USDT", ChainCode: "BINANCE_SMART_CHAIN", ProviderAssetKey: "USDT_BEP20"},
+		CoinGeckoID: "tether", Enabled: true,
+	}
+	registry := newCurrentRateRefresherRegistryWithAccount(t, policy.AccountID, []AccountAssetPolicy{policy})
+	cache := newTestCurrentRateCache(t, &now, time.Minute)
+	key, ok := CoinGeckoQuoteCacheKeyForPolicy(policy)
+	if !ok {
+		t.Fatal("policy should have cache key")
+	}
+	if _, err := cache.Refresh(context.Background(), func(context.Context) (map[CoinGeckoQuoteCacheKey]CoinGeckoQuote, error) {
+		quote := newCoinGeckoCacheQuote("0.9991545673733531", now)
+		quote.RateSnapshotID = 191
+		return map[CoinGeckoQuoteCacheKey]CoinGeckoQuote{key: quote}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	candidate := newValuationRuntimeCandidate(23, "USDT", decimal.RequireFromString("0.01"))
+	candidate.ToCompanyFundAccountID = int64Pointer(policy.AccountID)
+	candidate.Asset = policy.Asset
+	historyID := int64(73)
+	candidate.CurrentValuationHistoryID = &historyID
+	candidate.CurrentValuationDependencyFingerprint = strings.Repeat("b", 64)
+	candidate.CurrentValuationStatus = USDValuationStatusUnpriced
+	candidate.CurrentValuationSource = ""
+	store := &fakeCompanyFundValuationCandidateStore{sweep: []CompanyFundTransactionValuationCandidate{candidate}}
+	valuator := newTestCompanyFundCurrentValuator(t, now, store, registry, cache)
+
+	result := valuator.Sweep(context.Background(), 10)
+	if result.Err != nil || result.Failed != 0 || result.Applied != 1 || len(store.applies) != 1 {
+		t.Fatalf("Sweep() = %#v, applies=%#v; want repaired valuation", result, store.applies)
+	}
+	apply := store.applies[0]
+	if apply.Result.Status != USDValuationStatusProvisional || apply.Result.Source != USDValuationSourceCoinGecko || apply.Result.Value == nil || !apply.Result.Value.Equal(decimal.RequireFromString("0.009991545673733531")) {
+		t.Fatalf("repaired valuation = %#v", apply.Result)
+	}
+	if apply.ExpectedCurrentHistoryID == nil || *apply.ExpectedCurrentHistoryID != historyID || apply.ExpectedCurrentDependencyFingerprint != candidate.CurrentValuationDependencyFingerprint {
+		t.Fatalf("repair lost current-history compare-and-set guard: %#v", apply)
+	}
+}
+
 func newTestCompanyFundCurrentValuator(
 	t *testing.T,
 	now time.Time,
@@ -223,13 +428,28 @@ func newTestCompanyFundCurrentValuator(
 	cache *CurrentRateCache,
 ) *CompanyFundCurrentValuator {
 	t.Helper()
+	return newTestCompanyFundCurrentValuatorWithConfig(t, now, store, registry, cache, CompanyFundCurrentValuatorConfig{})
+}
+
+func newTestCompanyFundCurrentValuatorWithConfig(
+	t *testing.T,
+	now time.Time,
+	store CompanyFundValuationCandidateStore,
+	registry *AccountRegistry,
+	cache *CurrentRateCache,
+	config CompanyFundCurrentValuatorConfig,
+) *CompanyFundCurrentValuator {
+	t.Helper()
 	if registry == nil {
 		registry = newCurrentRateRefresherRegistryWithAccount(t, 1, nil)
 	}
 	if cache == nil {
 		cache = newTestCurrentRateCache(t, &now, time.Minute)
 	}
-	valuator, err := NewCompanyFundCurrentValuator(store, registry, cache, CompanyFundCurrentValuatorConfig{PolicyVersion: "current-usd-v1"})
+	if config.PolicyVersion == "" {
+		config.PolicyVersion = "current-usd-v1"
+	}
+	valuator, err := NewCompanyFundCurrentValuator(store, registry, cache, config)
 	if err != nil {
 		t.Fatalf("NewCompanyFundCurrentValuator() error = %v", err)
 	}

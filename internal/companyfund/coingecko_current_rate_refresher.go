@@ -18,8 +18,6 @@ const defaultCoinGeckoCurrentRateRefreshInterval = 5 * time.Minute
 // persistence: those have independent durable workflows.
 type CoinGeckoCurrentPriceClient interface {
 	FetchSimplePrices(context.Context, CoinGeckoSimplePriceRequest) (CoinGeckoPriceBatch, error)
-	FetchTokenPrices(context.Context, CoinGeckoTokenPriceRequest) (CoinGeckoPriceBatch, error)
-	FetchExchangeRates(context.Context) (CoinGeckoExchangeRatesBatch, error)
 }
 
 // CoinGeckoCurrentRateRefresherConfig controls only local refresh cadence.
@@ -30,6 +28,7 @@ type CoinGeckoCurrentRateRefresherConfig struct {
 	Clock           func() time.Time
 	SnapshotStore   CurrentRateSnapshotStore
 	PolicyVersion   string
+	DefaultMappings CoinGeckoDefaultRateMappings
 }
 
 // CoinGeckoCurrentRateRefreshResult is intentionally metadata-only. Quote
@@ -57,9 +56,9 @@ type CoinGeckoCurrentRateRefresherStatus struct {
 	Age                     time.Duration
 }
 
-// CoinGeckoCurrentRateRefresher obtains current USD quotes only for explicitly
-// configured CoinGecko mappings, then atomically swaps the complete local
-// cache through CurrentRateCache. It never infers an ID from a display ticker.
+// CoinGeckoCurrentRateRefresher obtains current USD quotes only for explicit
+// system-default and account-policy CoinGecko mappings, then atomically swaps
+// the complete local cache. It never infers an ID from a display ticker.
 type CoinGeckoCurrentRateRefresher struct {
 	client   CoinGeckoCurrentPriceClient
 	registry *AccountRegistry
@@ -68,6 +67,7 @@ type CoinGeckoCurrentRateRefresher struct {
 	policy   string
 	interval time.Duration
 	now      func() time.Time
+	defaults CoinGeckoDefaultRateMappings
 
 	mu                 sync.RWMutex
 	lastSuccessAt      time.Time
@@ -113,9 +113,13 @@ func NewCoinGeckoCurrentRateRefresher(
 	if err := validateRequiredString("CoinGecko current-rate policy version", policyVersion, maxRateSnapshotPolicyVersionBytes); err != nil {
 		return nil, err
 	}
+	defaultMappings, err := normalizeCoinGeckoDefaultRateMappings(config.DefaultMappings)
+	if err != nil {
+		return nil, err
+	}
 	return &CoinGeckoCurrentRateRefresher{
 		client: client, registry: registry, cache: cache, store: config.SnapshotStore,
-		policy: policyVersion, interval: interval, now: now,
+		policy: policyVersion, interval: interval, now: now, defaults: defaultMappings,
 	}, nil
 }
 
@@ -148,9 +152,8 @@ func (r *CoinGeckoCurrentRateRefresher) Status() CoinGeckoCurrentRateRefresherSt
 	return status
 }
 
-// Refresh builds its mapping plan from a single immutable registry snapshot.
-// It does not touch the provider when no enabled asset policy has an explicit
-// valid CoinGecko ID or full platform/contract mapping.
+// Refresh unions system defaults with one immutable registry snapshot. It does
+// not touch the provider when neither source contains a valid CoinGecko ID.
 func (r *CoinGeckoCurrentRateRefresher) Refresh(ctx context.Context) (CoinGeckoCurrentRateRefreshResult, error) {
 	if r == nil || r.client == nil || r.registry == nil || r.cache == nil || r.now == nil {
 		return CoinGeckoCurrentRateRefreshResult{}, fmt.Errorf("CoinGecko current-rate refresher is not configured")
@@ -158,7 +161,7 @@ func (r *CoinGeckoCurrentRateRefresher) Refresh(ctx context.Context) (CoinGeckoC
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	plan := buildCoinGeckoCurrentRatePlan(r.registry.Snapshot().AssetPolicies())
+	plan := buildCoinGeckoCurrentRatePlan(r.registry.Snapshot().AssetPolicies(), r.defaults)
 	result := CoinGeckoCurrentRateRefreshResult{MappingCount: plan.mappingCount}
 	if plan.mappingCount == 0 {
 		result.Skipped = true
@@ -196,56 +199,44 @@ func (r *CoinGeckoCurrentRateRefresher) Refresh(ctx context.Context) (CoinGeckoC
 
 func (r *CoinGeckoCurrentRateRefresher) fetchCurrentUSDQuotes(ctx context.Context, plan coinGeckoCurrentRatePlan) (map[CoinGeckoQuoteCacheKey]CoinGeckoQuote, error) {
 	quotes := make(map[CoinGeckoQuoteCacheKey]CoinGeckoQuote, plan.mappingCount)
-	if len(plan.fiatKeys) > 0 {
-		if err := r.fetchCurrentFiatUSDQuotes(ctx, plan.fiatKeys, quotes); err != nil {
-			return nil, err
-		}
-	}
-
 	simpleIDs := sortedCoinGeckoPlanKeys(plan.simpleKeys)
-	for _, batchIDs := range chunkCoinGeckoValues(simpleIDs, maxCoinGeckoBatchAssets) {
-		batch, err := r.client.FetchSimplePrices(ctx, CoinGeckoSimplePriceRequest{
-			CoinIDs:         batchIDs,
-			QuoteCurrencies: []string{"usd"},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("fetch CoinGecko current simple USD prices: %w", err)
+	if len(plan.fiatKeys) > 0 && !containsCoinGeckoValue(simpleIDs, rateSnapshotBTCProviderAssetID) {
+		simpleIDs = append(simpleIDs, rateSnapshotBTCProviderAssetID)
+		sort.Strings(simpleIDs)
+	}
+	if len(simpleIDs) == 0 {
+		return nil, fmt.Errorf("CoinGecko current rate plan has no explicit coin IDs")
+	}
+	if len(simpleIDs) > maxCoinGeckoBatchAssets {
+		return nil, fmt.Errorf("CoinGecko current rate plan exceeds one simple-price request: got %d IDs, max %d", len(simpleIDs), maxCoinGeckoBatchAssets)
+	}
+	quoteCurrencies := []string{"usd"}
+	for fiatCode := range plan.fiatKeys {
+		quoteCurrencies = append(quoteCurrencies, strings.ToLower(fiatCode))
+	}
+	sort.Strings(quoteCurrencies)
+	batch, err := r.client.FetchSimplePrices(ctx, CoinGeckoSimplePriceRequest{
+		CoinIDs:         simpleIDs,
+		QuoteCurrencies: quoteCurrencies,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch CoinGecko current price matrix: %w", err)
+	}
+	if batch.FetchedAt.IsZero() || !isLowerSHA256Hex(batch.ResponseDigest) {
+		return nil, fmt.Errorf("CoinGecko current price matrix has incomplete audit metadata")
+	}
+	priceMatrix := coinGeckoPriceMatrix(batch)
+	for coinID, keys := range plan.simpleKeys {
+		quote, found := priceMatrix[coinID]["USD"]
+		if !found {
+			continue
 		}
-		for _, price := range batch.Prices {
-			if price.Quote == nil || !strings.EqualFold(price.QuoteCurrency, "USD") {
-				continue
-			}
-			for _, key := range plan.simpleKeys[strings.ToLower(strings.TrimSpace(price.CoinID))] {
-				quotes[key] = *price.Quote
-			}
+		for _, key := range keys {
+			quotes[key] = quote
 		}
 	}
-
-	platforms := make([]string, 0, len(plan.tokenKeys))
-	for platform := range plan.tokenKeys {
-		platforms = append(platforms, platform)
-	}
-	sort.Strings(platforms)
-	for _, platform := range platforms {
-		contracts := sortedCoinGeckoPlanKeys(plan.tokenKeys[platform])
-		for _, batchContracts := range chunkCoinGeckoValues(contracts, maxCoinGeckoBatchAssets) {
-			batch, err := r.client.FetchTokenPrices(ctx, CoinGeckoTokenPriceRequest{
-				PlatformID:        platform,
-				ContractAddresses: batchContracts,
-				QuoteCurrencies:   []string{"usd"},
-			})
-			if err != nil {
-				return nil, fmt.Errorf("fetch CoinGecko current token USD prices: %w", err)
-			}
-			for _, price := range batch.Prices {
-				if price.Quote == nil || !strings.EqualFold(price.QuoteCurrency, "USD") || !strings.EqualFold(price.PlatformID, platform) {
-					continue
-				}
-				for _, key := range plan.tokenKeys[platform][strings.ToLower(strings.TrimSpace(price.ContractAddress))] {
-					quotes[key] = *price.Quote
-				}
-			}
-		}
+	if err := fillCurrentFiatUSDQuotes(plan.fiatKeys, priceMatrix, quotes); err != nil {
+		return nil, err
 	}
 	if len(quotes) != plan.mappingCount {
 		return nil, fmt.Errorf("CoinGecko current USD quote response is incomplete for configured mappings: got %d of %d", len(quotes), plan.mappingCount)
@@ -253,55 +244,76 @@ func (r *CoinGeckoCurrentRateRefresher) fetchCurrentUSDQuotes(ctx context.Contex
 	return quotes, nil
 }
 
-// fetchCurrentFiatUSDQuotes derives USD-per-fiat from one exchange-rate
-// response. CoinGecko expresses both rates as units per BTC, so USD/BTC divided
-// by fiat/BTC yields USD per fiat unit. The endpoint has no usable provider
-// timestamp; FetchedAt is therefore retained as the observation time and the
-// downstream valuation remains CURRENT/PROVISIONAL, never transaction-final.
-func (r *CoinGeckoCurrentRateRefresher) fetchCurrentFiatUSDQuotes(
-	ctx context.Context,
+// fillCurrentFiatUSDQuotes derives USD-per-fiat from the BTC row in the same
+// /simple/price response used for crypto/USD. BTC/USD divided by BTC/fiat
+// yields USD per fiat unit while preserving one response digest for audit.
+func fillCurrentFiatUSDQuotes(
 	fiatKeys map[string][]CoinGeckoQuoteCacheKey,
+	priceMatrix map[string]map[string]CoinGeckoQuote,
 	quotes map[CoinGeckoQuoteCacheKey]CoinGeckoQuote,
 ) error {
-	batch, err := r.client.FetchExchangeRates(ctx)
-	if err != nil {
-		return fmt.Errorf("fetch CoinGecko current exchange rates: %w", err)
+	if len(fiatKeys) == 0 {
+		return nil
 	}
-	if batch.FetchedAt.IsZero() || !isLowerSHA256Hex(batch.ResponseDigest) {
-		return fmt.Errorf("CoinGecko current exchange rates response has incomplete audit metadata")
-	}
-	usdRate, found := batch.Rates["USD"]
-	if !found || !strings.EqualFold(usdRate.Type, "fiat") || !usdRate.Value.GreaterThan(decimal.Zero) {
-		return fmt.Errorf("CoinGecko current exchange rates response is missing a positive fiat USD rate")
+	bitcoinQuotes := priceMatrix[rateSnapshotBTCProviderAssetID]
+	usdQuote, found := bitcoinQuotes["USD"]
+	if !found || !usdQuote.Price.GreaterThan(decimal.Zero) {
+		return fmt.Errorf("CoinGecko current price matrix is missing a positive BTC/USD quote")
 	}
 	for fiatCode, keys := range fiatKeys {
-		fiatRate, found := batch.Rates[fiatCode]
-		if !found || !strings.EqualFold(fiatRate.Type, "fiat") || !fiatRate.Value.GreaterThan(decimal.Zero) {
-			// An unknown/non-fiat provider code is a missing explicit quote, never
-			// a reason to infer an alternate ticker or hard-code a peg.
+		fiatQuote, found := bitcoinQuotes[fiatCode]
+		if !found || !fiatQuote.Price.GreaterThan(decimal.Zero) {
 			continue
 		}
-		usdPerFiat, err := decimalDivideBank(usdRate.Value, fiatRate.Value)
+		if fiatQuote.ResponseDigest != usdQuote.ResponseDigest || !fiatQuote.FetchedAt.Equal(usdQuote.FetchedAt) {
+			return fmt.Errorf("CoinGecko BTC cross for %s does not share one response snapshot", fiatCode)
+		}
+		usdPerFiat, err := decimalDivideBank(usdQuote.Price, fiatQuote.Price)
 		if err != nil {
-			return fmt.Errorf("derive USD per %s from CoinGecko exchange rates: %w", fiatCode, err)
+			return fmt.Errorf("derive USD per %s from CoinGecko price matrix: %w", fiatCode, err)
 		}
 		if !usdPerFiat.GreaterThan(decimal.Zero) {
-			return fmt.Errorf("derive USD per %s from CoinGecko exchange rates: non-positive result", fiatCode)
+			return fmt.Errorf("derive USD per %s from CoinGecko price matrix: non-positive result", fiatCode)
 		}
 		quote := CoinGeckoQuote{
 			Price:               usdPerFiat,
-			ProviderUpdatedAt:   batch.FetchedAt.UTC(),
-			FetchedAt:           batch.FetchedAt.UTC(),
-			ResponseDigest:      batch.ResponseDigest,
+			ProviderUpdatedAt:   usdQuote.ProviderUpdatedAt.UTC(),
+			FetchedAt:           usdQuote.FetchedAt.UTC(),
+			ResponseDigest:      usdQuote.ResponseDigest,
 			Method:              USDValuationMethodCoinGeckoBTCCross,
-			BTCCrossNumerator:   usdRate.Value,
-			BTCCrossDenominator: fiatRate.Value,
+			BTCCrossNumerator:   usdQuote.Price,
+			BTCCrossDenominator: fiatQuote.Price,
 		}
 		for _, key := range keys {
 			quotes[key] = quote
 		}
 	}
 	return nil
+}
+
+func coinGeckoPriceMatrix(batch CoinGeckoPriceBatch) map[string]map[string]CoinGeckoQuote {
+	matrix := make(map[string]map[string]CoinGeckoQuote)
+	for _, price := range batch.Prices {
+		if price.Quote == nil || strings.TrimSpace(price.CoinID) == "" {
+			continue
+		}
+		coinID := strings.ToLower(strings.TrimSpace(price.CoinID))
+		quoteCurrency := strings.ToUpper(strings.TrimSpace(price.QuoteCurrency))
+		if matrix[coinID] == nil {
+			matrix[coinID] = make(map[string]CoinGeckoQuote)
+		}
+		matrix[coinID][quoteCurrency] = *price.Quote
+	}
+	return matrix
+}
+
+func containsCoinGeckoValue(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *CoinGeckoCurrentRateRefresher) recordRefreshSuccess() {
@@ -398,56 +410,71 @@ func (r *CoinGeckoCurrentRateRefresher) Stop() {
 
 type coinGeckoCurrentRatePlan struct {
 	simpleKeys   map[string][]CoinGeckoQuoteCacheKey
-	tokenKeys    map[string]map[string][]CoinGeckoQuoteCacheKey
 	fiatKeys     map[string][]CoinGeckoQuoteCacheKey
 	mappings     map[CoinGeckoQuoteCacheKey]currentRateSnapshotMapping
 	mappingCount int
 }
 
-func buildCoinGeckoCurrentRatePlan(policies []AccountAssetPolicy) coinGeckoCurrentRatePlan {
+func buildCoinGeckoCurrentRatePlan(policies []AccountAssetPolicy, defaults CoinGeckoDefaultRateMappings) coinGeckoCurrentRatePlan {
 	plan := coinGeckoCurrentRatePlan{
 		simpleKeys: make(map[string][]CoinGeckoQuoteCacheKey),
-		tokenKeys:  make(map[string]map[string][]CoinGeckoQuoteCacheKey),
 		fiatKeys:   make(map[string][]CoinGeckoQuoteCacheKey),
 		mappings:   make(map[CoinGeckoQuoteCacheKey]currentRateSnapshotMapping),
 	}
 	seen := make(map[CoinGeckoQuoteCacheKey]struct{})
+	defaultCurrencies := make([]string, 0, len(defaults.Crypto)+len(defaults.Fiat))
+	for currency := range defaults.Crypto {
+		defaultCurrencies = append(defaultCurrencies, currency)
+	}
+	defaultCurrencies = append(defaultCurrencies, defaults.Fiat...)
+	sort.Strings(defaultCurrencies)
+	for _, currency := range defaultCurrencies {
+		key, ok := CoinGeckoQuoteCacheKeyForDefault(AssetIdentity{Currency: currency}, defaults)
+		if !ok {
+			continue
+		}
+		addCoinGeckoCurrentRatePlanMapping(&plan, seen, key, currency)
+	}
 	for _, policy := range policies {
 		key, ok := CoinGeckoQuoteCacheKeyForPolicy(policy)
 		if !ok {
 			continue
 		}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		plan.mappingCount++
-		plan.mappings[key] = currentRateSnapshotMapping{BaseCurrency: strings.ToUpper(strings.TrimSpace(policy.Asset.Currency))}
-		if key.FiatCode != "" {
-			plan.fiatKeys[key.FiatCode] = append(plan.fiatKeys[key.FiatCode], key)
-			continue
-		}
-		if key.CoinID != "" {
-			plan.simpleKeys[key.CoinID] = append(plan.simpleKeys[key.CoinID], key)
-			continue
-		}
-		if plan.tokenKeys[key.PlatformID] == nil {
-			plan.tokenKeys[key.PlatformID] = make(map[string][]CoinGeckoQuoteCacheKey)
-		}
-		plan.tokenKeys[key.PlatformID][key.ContractAddress] = append(plan.tokenKeys[key.PlatformID][key.ContractAddress], key)
+		addCoinGeckoCurrentRatePlanMapping(&plan, seen, key, policy.Asset.Currency)
 	}
 	return plan
+}
+
+func addCoinGeckoCurrentRatePlanMapping(
+	plan *coinGeckoCurrentRatePlan,
+	seen map[CoinGeckoQuoteCacheKey]struct{},
+	key CoinGeckoQuoteCacheKey,
+	baseCurrency string,
+) {
+	if _, exists := seen[key]; exists {
+		return
+	}
+	seen[key] = struct{}{}
+	plan.mappingCount++
+	plan.mappings[key] = currentRateSnapshotMapping{BaseCurrency: strings.ToUpper(strings.TrimSpace(baseCurrency))}
+	if key.FiatCode != "" {
+		plan.fiatKeys[key.FiatCode] = append(plan.fiatKeys[key.FiatCode], key)
+		return
+	}
+	plan.simpleKeys[key.CoinID] = append(plan.simpleKeys[key.CoinID], key)
 }
 
 const coinGeckoFiatMappingPrefix = "fiat:"
 
 // CoinGeckoQuoteCacheKeyForPolicy returns an exact, configured USD cache key.
 // `valuation_provider_asset_id` (represented by CoinGeckoID here) reserves
-// the explicit `fiat:<CODE>` form for CoinGecko /exchange_rates mappings, for
+// the explicit `fiat:<CODE>` form for BTC-cross mappings, for
 // example `fiat:JPY`. The code must exactly equal the policy asset currency;
 // no display-symbol or ordinary coin-ID fallback is attempted for this prefix.
 // A policy with both a coin ID and contract mapping is intentionally skipped:
 // choosing one silently would make configuration drift change asset pricing.
+// A contract-only mapping is also skipped because scheduled refresh is pinned
+// to one /simple/price call and therefore requires an explicit coin ID.
 func CoinGeckoQuoteCacheKeyForPolicy(policy AccountAssetPolicy) (CoinGeckoQuoteCacheKey, bool) {
 	asset := normalizeAssetIdentity(policy.Asset)
 	if asset.empty() {
@@ -468,8 +495,8 @@ func CoinGeckoQuoteCacheKeyForPolicy(policy AccountAssetPolicy) (CoinGeckoQuoteC
 		return key, key.validate() == nil
 	}
 	coinID := strings.ToLower(rawProviderAssetID)
-	platformID := strings.ToLower(strings.TrimSpace(policy.CoinGeckoPlatformID))
-	contractAddress := strings.ToLower(strings.TrimSpace(policy.CoinGeckoContractAddress))
+	platformID := strings.TrimSpace(policy.CoinGeckoPlatformID)
+	contractAddress := strings.TrimSpace(policy.CoinGeckoContractAddress)
 	if coinID != "" && (platformID != "" || contractAddress != "") {
 		return CoinGeckoQuoteCacheKey{}, false
 	}
@@ -485,30 +512,14 @@ func CoinGeckoQuoteCacheKeyForPolicy(policy AccountAssetPolicy) (CoinGeckoQuoteC
 		}
 		return key, key.validate() == nil
 	}
-	if platformID == "" || contractAddress == "" {
-		return CoinGeckoQuoteCacheKey{}, false
-	}
-	if _, err := normalizeCoinGeckoValue("platform ID", platformID, true); err != nil {
-		return CoinGeckoQuoteCacheKey{}, false
-	}
-	if _, err := normalizeCoinGeckoValue("contract address", contractAddress, false); err != nil {
-		return CoinGeckoQuoteCacheKey{}, false
-	}
-	key := CoinGeckoQuoteCacheKey{
-		Provider:         rateSnapshotCoinGeckoProvider,
-		AssetIdentityKey: asset.canonicalKey(),
-		PlatformID:       platformID,
-		ContractAddress:  contractAddress,
-		QuoteCurrency:    "USD",
-	}
-	return key, key.validate() == nil
+	return CoinGeckoQuoteCacheKey{}, false
 }
 
 // CoinGeckoFiatCodeForPolicy returns a configured provider fiat code only
 // when it is deliberately marked with `fiat:` and matches the asset currency.
 // It accepts arbitrary alphabetic provider codes because CoinGecko may add
-// legitimate fiat currencies; fetchCurrentFiatUSDQuotes subsequently requires
-// the returned rate's provider type to be exactly `fiat` before pricing it.
+// legitimate fiat currencies; the single simple-price request subsequently
+// requires an explicit positive BTC quote in that currency before pricing it.
 func CoinGeckoFiatCodeForPolicy(policy AccountAssetPolicy) (string, bool) {
 	asset := normalizeAssetIdentity(policy.Asset)
 	rawProviderAssetID := strings.TrimSpace(policy.CoinGeckoID)
@@ -544,19 +555,4 @@ func sortedCoinGeckoPlanKeys[T any](values map[string]T) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func chunkCoinGeckoValues(values []string, size int) [][]string {
-	if len(values) == 0 || size <= 0 {
-		return nil
-	}
-	chunks := make([][]string, 0, (len(values)+size-1)/size)
-	for start := 0; start < len(values); start += size {
-		end := start + size
-		if end > len(values) {
-			end = len(values)
-		}
-		chunks = append(chunks, values[start:end])
-	}
-	return chunks
 }

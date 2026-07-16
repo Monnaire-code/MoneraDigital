@@ -26,7 +26,8 @@ type CoinGeckoQuoteCacheKey struct {
 	ContractAddress  string
 	// FiatCode is an explicitly configured provider fiat code (for example
 	// JPY). It is mutually exclusive with CoinID and contract mappings and
-	// represents a USD-per-fiat quote derived from one /exchange_rates reply.
+	// represents a USD-per-fiat quote derived from BTC legs in one
+	// /simple/price response.
 	FiatCode      string
 	QuoteCurrency string
 }

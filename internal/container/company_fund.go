@@ -101,14 +101,15 @@ type companyFundRuntimeConfig struct {
 	AirwallexFinancialPageSize int
 	AirwallexFinancialMaxPages int
 
-	CoinGeckoBaseURL              string
-	CoinGeckoDemoAPIKey           string
-	CurrentRateRefreshInterval    time.Duration
-	CurrentRateCacheTTL           time.Duration
-	CurrentRateCacheMaxAge        time.Duration
-	CurrentValuationSweepInterval time.Duration
-	CurrentValuationSweepBatch    int
-	CurrentValuationPolicyVersion string
+	CoinGeckoBaseURL               string
+	CoinGeckoDemoAPIKey            string
+	CurrentRateDefaultMappingsJSON string
+	CurrentRateRefreshInterval     time.Duration
+	CurrentRateCacheTTL            time.Duration
+	CurrentRateCacheMaxAge         time.Duration
+	CurrentValuationSweepInterval  time.Duration
+	CurrentValuationSweepBatch     int
+	CurrentValuationPolicyVersion  string
 }
 
 func companyFundRuntimeConfigFromViper() companyFundRuntimeConfig {
@@ -167,6 +168,7 @@ func companyFundRuntimeConfigFromViper() companyFundRuntimeConfig {
 		AirwallexFinancialMaxPages:          viper.GetInt("AIRWALLEX_FINANCIAL_TRANSACTIONS_MAX_PAGES"),
 		CoinGeckoBaseURL:                    viper.GetString("COINGECKO_BASE_URL"),
 		CoinGeckoDemoAPIKey:                 viper.GetString("COINGECKO_DEMO_API_KEY"),
+		CurrentRateDefaultMappingsJSON:      viper.GetString("COMPANY_FUND_USD_RATE_DEFAULT_MAPPINGS"),
 		CurrentRateRefreshInterval:          viper.GetDuration("COMPANY_FUND_USD_RATE_REFRESH_INTERVAL"),
 		CurrentRateCacheTTL:                 viper.GetDuration("COMPANY_FUND_USD_RATE_CACHE_TTL"),
 		CurrentRateCacheMaxAge:              viper.GetDuration("COMPANY_FUND_USD_RATE_CACHE_MAX_AGE"),
@@ -541,6 +543,11 @@ func newCompanyFundCurrentValuationRuntime(c *Container, config companyFundRunti
 	if c == nil || c.CompanyFundRepository == nil || c.CompanyFundAccountRegistry == nil {
 		return nil, nil, nil
 	}
+	defaultMappings, err := companyfund.ParseCoinGeckoDefaultRateMappingsJSON([]byte(config.CurrentRateDefaultMappingsJSON))
+	if err != nil {
+		log.Printf("company-fund USD valuation disabled: default rate mappings are invalid")
+		return nil, nil, nil
+	}
 	cache, err := companyfund.NewCurrentRateCache(companyfund.CurrentRateCacheConfig{
 		TTL:         companyFundDurationOrDefault(config.CurrentRateCacheTTL, defaultCompanyFundCurrentRateCacheTTL),
 		MaxQuoteAge: companyFundDurationOrDefault(config.CurrentRateCacheMaxAge, defaultCompanyFundCurrentRateCacheMaxAge),
@@ -564,13 +571,15 @@ func newCompanyFundCurrentValuationRuntime(c *Container, config companyFundRunti
 		Clock:           time.Now,
 		SnapshotStore:   c.CompanyFundRepository,
 		PolicyVersion:   config.CurrentValuationPolicyVersion,
+		DefaultMappings: defaultMappings,
 	})
 	if err != nil {
 		log.Printf("company-fund USD valuation disabled: CoinGecko refresher configuration is invalid")
 		return nil, nil, nil
 	}
 	valuator, err := companyfund.NewCompanyFundCurrentValuator(c.CompanyFundRepository, c.CompanyFundAccountRegistry, cache, companyfund.CompanyFundCurrentValuatorConfig{
-		PolicyVersion: config.CurrentValuationPolicyVersion,
+		PolicyVersion:   config.CurrentValuationPolicyVersion,
+		DefaultMappings: defaultMappings,
 	})
 	if err != nil {
 		log.Printf("company-fund USD valuation disabled: valuator configuration is invalid")

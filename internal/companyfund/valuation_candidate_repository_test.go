@@ -52,6 +52,30 @@ func TestListCompanyFundValuationRepairCandidates_SelectsOnlyRepairableCurrentSt
 	}
 }
 
+func TestListCompanyFundValuationRepairCandidates_AcceptsUnpricedHistoryWithoutSource(t *testing.T) {
+	db, mock := newCompanyFundMockDB(t)
+	defer db.Close()
+	candidate := newValuationRuntimeCandidate(82, "USDT", decimal.RequireFromString("0.01"))
+	historyID := int64(72)
+	candidate.CurrentValuationHistoryID = &historyID
+	candidate.CurrentValuationDependencyFingerprint = strings.Repeat("a", 64)
+	candidate.CurrentValuationStatus = USDValuationStatusUnpriced
+	candidate.CurrentValuationSource = ""
+
+	mock.ExpectQuery(regexp.QuoteMeta(selectCompanyFundValuationRepairCandidatesSQL)).
+		WithArgs(25).
+		WillReturnRows(companyFundValuationCandidateRows(candidate))
+
+	result, err := NewDBRepository(db).ListCompanyFundValuationRepairCandidates(context.Background(), 25)
+	if err != nil || len(result) != 1 {
+		t.Fatalf("ListCompanyFundValuationRepairCandidates() = %#v, %v; want legal unpriced candidate", result, err)
+	}
+	if result[0].CurrentValuationSource != "" || result[0].CurrentValuationStatus != USDValuationStatusUnpriced {
+		t.Fatalf("unpriced candidate state = %#v", result[0])
+	}
+	assertCompanyFundMockExpectations(t, mock)
+}
+
 func TestGetCompanyFundTransactionValuationCandidate_ReturnsNilForMissingRow(t *testing.T) {
 	db, mock := newCompanyFundMockDB(t)
 	defer db.Close()
@@ -121,5 +145,33 @@ func TestCompanyFundValuationCandidate_UsesFirstSeenFallbackOnlyWhenProviderTime
 	candidate.OccurredAt = &occurred
 	if target := candidate.transactionValuationTime(); target == nil || !target.Equal(occurred) {
 		t.Fatalf("occurred target = %v, want %v", target, occurred)
+	}
+}
+
+func TestCompanyFundValuationCandidate_ValidatesCurrentSourceByStatus(t *testing.T) {
+	historyID := int64(74)
+	for _, testCase := range []struct {
+		name    string
+		status  USDValuationStatus
+		source  USDValuationSource
+		wantErr bool
+	}{
+		{name: "unpriced without source", status: USDValuationStatusUnpriced},
+		{name: "priced without source", status: USDValuationStatusFinal, wantErr: true},
+		{name: "unpriced with unsupported source", status: USDValuationStatusUnpriced, source: "UNKNOWN", wantErr: true},
+		{name: "priced with supported source", status: USDValuationStatusFinal, source: USDValuationSourceCoinGecko},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			candidate := newValuationRuntimeCandidate(83, "USDT", decimal.RequireFromString("0.01"))
+			candidate.CurrentValuationHistoryID = &historyID
+			candidate.CurrentValuationDependencyFingerprint = strings.Repeat("c", 64)
+			candidate.CurrentValuationStatus = testCase.status
+			candidate.CurrentValuationSource = testCase.source
+
+			err := candidate.validate()
+			if (err != nil) != testCase.wantErr {
+				t.Fatalf("validate() error = %v, wantErr %t", err, testCase.wantErr)
+			}
+		})
 	}
 }
