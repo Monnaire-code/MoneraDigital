@@ -677,18 +677,20 @@ const (
 // classification and manual risk-review fields have no representation here,
 // so webhook/reconciliation processing cannot overwrite them.
 type TransactionUpsertInput struct {
-	MovementKey               string
-	Channel                   Channel
-	IdentityAlgorithmVersion  string
-	ProviderAccountKey        string
-	ProviderTransactionID     string
-	ProviderEventID           string
-	ProviderMovementID        string
-	ProviderTransactionFactID *int64
-	MovementIndex             int
-	MovementKind              MovementKind
-	TransferMode              TransferMode
-	Direction                 Direction
+	MovementKey                        string
+	Channel                            Channel
+	IdentityAlgorithmVersion           string
+	ProviderOccurrenceKey              string
+	ProviderOccurrenceAlgorithmVersion string
+	ProviderAccountKey                 string
+	ProviderTransactionID              string
+	ProviderEventID                    string
+	ProviderMovementID                 string
+	ProviderTransactionFactID          *int64
+	MovementIndex                      int
+	MovementKind                       MovementKind
+	TransferMode                       TransferMode
+	Direction                          Direction
 	// Linkage is provider-owned structural metadata. Keys are resolved inside
 	// the upsert transaction; callers never provide database IDs or derive a
 	// parent from nullable provider account/organization metadata.
@@ -740,6 +742,22 @@ FROM company_fund_transactions
 WHERE movement_key = $1
 FOR UPDATE`
 
+const selectSafeheronCompanyFundTransactionForUpdateSQL = `
+SELECT id, movement_key, channel, identity_algorithm_version,
+	   COALESCE(provider_occurrence_key, ''), COALESCE(provider_occurrence_algorithm_version, ''),
+	   COALESCE(provider_account_key, ''), COALESCE(provider_transaction_id, ''),
+	   COALESCE(provider_event_id, ''), COALESCE(provider_movement_id, ''),
+	   provider_transaction_fact_id, latest_provider_event_id, COALESCE(raw_snapshot_digest, ''),
+	   amount::text, currency,
+	   COALESCE(chain_code, ''), COALESCE(provider_asset_key, ''), COALESCE(asset_contract, ''),
+	   is_unrecognized_asset,
+	   COALESCE(provider_status, ''), provider_status_version, provider_fact_source, status_rank, last_seen_source,
+	   COALESCE(tx_hash, ''), occurred_at, completed_at, provider_updated_at
+FROM company_fund_transactions
+WHERE movement_key = $1 OR provider_occurrence_key = $2
+ORDER BY id
+FOR UPDATE`
+
 const insertCompanyFundTransactionSQL = `
 INSERT INTO company_fund_transactions (
 	channel, provider_account_key, provider_transaction_id, provider_event_id, provider_movement_id,
@@ -761,6 +779,31 @@ INSERT INTO company_fund_transactions (
 	$29, $30, $31
 )
 ON CONFLICT (movement_key) DO NOTHING
+RETURNING id`
+
+const insertSafeheronCompanyFundTransactionSQL = `
+INSERT INTO company_fund_transactions (
+	channel, provider_account_key, provider_transaction_id, provider_event_id, provider_movement_id,
+	movement_index, movement_key, identity_algorithm_version,
+	movement_kind, transfer_mode, transaction_direction,
+	from_company_fund_account_id, to_company_fund_account_id,
+	currency, chain_code, provider_asset_key, asset_contract, amount,
+	tx_hash, provider_status, provider_status_version, provider_updated_at, provider_fact_source, status_rank,
+	occurred_at, completed_at, first_seen_source, last_seen_source,
+	latest_provider_event_id, provider_transaction_fact_id, raw_snapshot_digest,
+	provider_occurrence_key, provider_occurrence_algorithm_version
+) VALUES (
+	$1, $2, $3, $4, $5,
+	$6, $7, $8,
+	$9, $10, $11,
+	$12, $13,
+	$14, $15, $16, $17, $18::numeric,
+	$19, $20, $21, $22, $23, $24,
+	$25, $26, $27, $28,
+	$29, $30, $31,
+	$32, $33
+)
+ON CONFLICT DO NOTHING
 RETURNING id`
 
 // updateCompanyFundTransactionSQL is intentionally enumerated instead of
@@ -888,7 +931,13 @@ func (r *DBRepository) UpsertCompanyFundTransaction(ctx context.Context, input T
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		existing, found, err := loadCompanyFundTransactionForUpdate(ctx, tx, input.MovementKey)
+		var existing persistedCompanyFundTransaction
+		var found bool
+		if input.Channel == ChannelSafeheron && input.IdentityAlgorithmVersion == SafeheronMovementIdentityAlgorithmVersion {
+			existing, found, err = loadSafeheronCompanyFundTransactionForUpdate(ctx, tx, input)
+		} else {
+			existing, found, err = loadCompanyFundTransactionForUpdate(ctx, tx, input.MovementKey)
+		}
 		if err != nil {
 			return TransactionUpsertResult{}, err
 		}
@@ -927,8 +976,15 @@ func (r *DBRepository) UpsertCompanyFundTransaction(ctx context.Context, input T
 		if existing.Channel != input.Channel {
 			return TransactionUpsertResult{ID: existing.ID, Quarantined: true}, &TransactionQuarantineError{MovementKey: input.MovementKey, Reason: fmt.Sprintf("stored transaction channel %q does not match incoming channel %q", existing.Channel, input.Channel)}
 		}
-		if existing.IdentityAlgorithmVersion != input.IdentityAlgorithmVersion {
+		if existing.IdentityAlgorithmVersion != input.IdentityAlgorithmVersion &&
+			!(input.Channel == ChannelSafeheron && input.IdentityAlgorithmVersion == SafeheronMovementIdentityAlgorithmVersion) {
 			return TransactionUpsertResult{ID: existing.ID, Quarantined: true}, &TransactionQuarantineError{MovementKey: input.MovementKey, Reason: fmt.Sprintf("stored identity algorithm %q does not match incoming algorithm %q", existing.IdentityAlgorithmVersion, input.IdentityAlgorithmVersion)}
+		}
+		if input.Channel == ChannelSafeheron && input.IdentityAlgorithmVersion == SafeheronMovementIdentityAlgorithmVersion {
+			incoming, supplement, err = alignSafeheronIncomingRecognitionSnapshot(existing, incoming, supplement)
+			if err != nil {
+				return TransactionUpsertResult{ID: existing.ID, Quarantined: true}, &TransactionQuarantineError{MovementKey: input.MovementKey, Reason: err.Error()}
+			}
 		}
 		if err := existing.Provenance.validatePair(); err != nil {
 			return TransactionUpsertResult{ID: existing.ID, Quarantined: true}, &TransactionQuarantineError{MovementKey: input.MovementKey, Reason: fmt.Sprintf("stored transaction provenance is invalid: %v", err)}
@@ -948,7 +1004,11 @@ func (r *DBRepository) UpsertCompanyFundTransaction(ctx context.Context, input T
 		}
 		providerMetadataWins := compareProviderMetadata(existing.Provider.Metadata, incoming.Metadata) > 0
 		statusRank := effectiveTransactionStatusRank(input.Channel, existing.StatusRank, input.ProviderStatusRank, merged.Provider.Status)
-		id, err := updateCompanyFundTransaction(ctx, tx, existing.ID, input, merged.Provider, statusRank, stableIdentity, provenance, shouldReplaceProviderAssetIdentity(existing.Provider, incoming))
+		replaceAssetIdentity := shouldReplaceProviderAssetIdentity(existing.Provider, incoming)
+		if input.Channel == ChannelSafeheron && input.IdentityAlgorithmVersion == SafeheronMovementIdentityAlgorithmVersion {
+			replaceAssetIdentity = false
+		}
+		id, err := updateCompanyFundTransaction(ctx, tx, existing.ID, input, merged.Provider, statusRank, stableIdentity, provenance, replaceAssetIdentity)
 		if err != nil {
 			return TransactionUpsertResult{}, err
 		}
@@ -969,14 +1029,73 @@ func (r *DBRepository) UpsertCompanyFundTransaction(ctx context.Context, input T
 	return TransactionUpsertResult{}, fmt.Errorf("company-fund transaction %q could not be locked after concurrent insert", input.MovementKey)
 }
 
+func alignSafeheronIncomingRecognitionSnapshot(
+	existing persistedCompanyFundTransaction,
+	incoming ProviderOwnedFields,
+	supplement normalizedTransactionProviderSupplement,
+) (ProviderOwnedFields, normalizedTransactionProviderSupplement, error) {
+	if existing.Provider.Asset == nil || incoming.Asset == nil {
+		return ProviderOwnedFields{}, normalizedTransactionProviderSupplement{}, fmt.Errorf("Safeheron recognition snapshot requires exact provider asset identity")
+	}
+	if existing.Provider.Asset.ProviderAssetKey == "" || existing.Provider.Asset.ProviderAssetKey != incoming.Asset.ProviderAssetKey {
+		return ProviderOwnedFields{}, normalizedTransactionProviderSupplement{}, fmt.Errorf("Safeheron raw CoinKey conflicts with persisted recognition snapshot")
+	}
+	currency := existing.Provider.Asset.Currency
+	asset := *existing.Provider.Asset
+	incoming.Currency = &currency
+	incoming.Asset = &asset
+	unrecognized := existing.IsUnrecognizedAsset
+	supplement.Risk.IsUnrecognizedAsset = &unrecognized
+	return incoming, supplement, nil
+}
+
 type persistedCompanyFundTransaction struct {
-	ID                       int64
-	Channel                  Channel
-	IdentityAlgorithmVersion string
-	StableIdentity           transactionStableIdentity
-	Provenance               transactionProviderProvenance
-	Provider                 ProviderOwnedFields
-	StatusRank               int
+	ID                                 int64
+	MovementKey                        string
+	Channel                            Channel
+	IdentityAlgorithmVersion           string
+	ProviderOccurrenceKey              string
+	ProviderOccurrenceAlgorithmVersion string
+	IsUnrecognizedAsset                bool
+	StableIdentity                     transactionStableIdentity
+	Provenance                         transactionProviderProvenance
+	Provider                           ProviderOwnedFields
+	StatusRank                         int
+}
+
+func resolveSafeheronPersistedIdentityPair(
+	candidates []persistedCompanyFundTransaction,
+	input TransactionUpsertInput,
+) (persistedCompanyFundTransaction, bool, error) {
+	switch len(candidates) {
+	case 0:
+		return persistedCompanyFundTransaction{}, false, nil
+	case 1:
+		candidate := candidates[0]
+		movementMatches := candidate.MovementKey == input.MovementKey
+		occurrenceMatches := candidate.ProviderOccurrenceKey == input.ProviderOccurrenceKey
+		// Runtime ingestion never repairs a missing occurrence alias. Historical
+		// alias-null repair belongs exclusively to the bounded, quiesced G004
+		// scanner so an online replay cannot silently claim the wrong movement.
+		if candidate.ProviderOccurrenceAlgorithmVersion != SafeheronOccurrenceAlgorithmVersion || !occurrenceMatches {
+			return persistedCompanyFundTransaction{}, false, fmt.Errorf("Safeheron identity pair occurrence mismatch")
+		}
+		if candidate.IdentityAlgorithmVersion == SafeheronMovementIdentityAlgorithmVersion {
+			if !movementMatches {
+				return persistedCompanyFundTransaction{}, false, fmt.Errorf("Safeheron occurrence alias points to another v2 movement")
+			}
+		} else {
+			if candidate.IdentityAlgorithmVersion != MovementIdentityAlgorithmVersion {
+				return persistedCompanyFundTransaction{}, false, fmt.Errorf("Safeheron occurrence alias uses unsupported legacy identity algorithm %q", candidate.IdentityAlgorithmVersion)
+			}
+			if movementMatches {
+				return persistedCompanyFundTransaction{}, false, fmt.Errorf("Safeheron v2 movement key is stored with a legacy identity algorithm")
+			}
+		}
+		return candidate, true, nil
+	default:
+		return persistedCompanyFundTransaction{}, false, fmt.Errorf("Safeheron identity pair resolves to %d rows", len(candidates))
+	}
 }
 
 func loadCompanyFundTransactionForUpdate(ctx context.Context, tx *sql.Tx, movementKey string) (persistedCompanyFundTransaction, bool, error) {
@@ -1083,9 +1202,142 @@ func loadCompanyFundTransactionForUpdate(ctx context.Context, tx *sql.Tx, moveme
 	return persisted, true, nil
 }
 
+func loadSafeheronCompanyFundTransactionForUpdate(
+	ctx context.Context,
+	tx *sql.Tx,
+	input TransactionUpsertInput,
+) (persistedCompanyFundTransaction, bool, error) {
+	rows, err := tx.QueryContext(ctx, selectSafeheronCompanyFundTransactionForUpdateSQL, input.MovementKey, input.ProviderOccurrenceKey)
+	if err != nil {
+		return persistedCompanyFundTransaction{}, false, fmt.Errorf("lock Safeheron company-fund identity pair: %w", err)
+	}
+	defer rows.Close()
+	candidates := make([]persistedCompanyFundTransaction, 0, 2)
+	for rows.Next() {
+		persisted, err := scanSafeheronPersistedCompanyFundTransaction(rows)
+		if err != nil {
+			return persistedCompanyFundTransaction{}, false, err
+		}
+		candidates = append(candidates, persisted)
+		if len(candidates) > 2 {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return persistedCompanyFundTransaction{}, false, fmt.Errorf("iterate locked Safeheron company-fund identities: %w", err)
+	}
+	return resolveSafeheronPersistedIdentityPair(candidates, input)
+}
+
+type companyFundTransactionScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSafeheronPersistedCompanyFundTransaction(scanner companyFundTransactionScanner) (persistedCompanyFundTransaction, error) {
+	var (
+		persisted          persistedCompanyFundTransaction
+		channel            string
+		providerFactID     sql.NullInt64
+		latestEventID      sql.NullInt64
+		rawSnapshotDigest  string
+		amountText         string
+		currency           string
+		chainCode          string
+		providerAsset      string
+		assetContract      string
+		providerStatus     string
+		statusVersion      sql.NullInt64
+		providerFactSource string
+		lastSeenSource     string
+		txHash             string
+		occurredAt         sql.NullTime
+		completedAt        sql.NullTime
+		providerUpdatedAt  sql.NullTime
+	)
+	if err := scanner.Scan(
+		&persisted.ID,
+		&persisted.MovementKey,
+		&channel,
+		&persisted.IdentityAlgorithmVersion,
+		&persisted.ProviderOccurrenceKey,
+		&persisted.ProviderOccurrenceAlgorithmVersion,
+		&persisted.StableIdentity.ProviderAccountKey,
+		&persisted.StableIdentity.ProviderTransactionID,
+		&persisted.Provenance.ProviderEventID,
+		&persisted.StableIdentity.ProviderMovementID,
+		&providerFactID,
+		&latestEventID,
+		&rawSnapshotDigest,
+		&amountText,
+		&currency,
+		&chainCode,
+		&providerAsset,
+		&assetContract,
+		&persisted.IsUnrecognizedAsset,
+		&providerStatus,
+		&statusVersion,
+		&providerFactSource,
+		&persisted.StatusRank,
+		&lastSeenSource,
+		&txHash,
+		&occurredAt,
+		&completedAt,
+		&providerUpdatedAt,
+	); err != nil {
+		return persistedCompanyFundTransaction{}, fmt.Errorf("scan locked Safeheron company-fund transaction: %w", err)
+	}
+	persisted.Channel = Channel(channel)
+	persisted.Provenance.RawSnapshotDigest = rawSnapshotDigest
+	if providerFactID.Valid {
+		value := providerFactID.Int64
+		persisted.Provenance.ProviderTransactionFactID = &value
+	}
+	if latestEventID.Valid {
+		value := latestEventID.Int64
+		persisted.Provenance.LatestProviderEventID = &value
+	}
+	amount, err := decimal.NewFromString(amountText)
+	if err != nil {
+		return persistedCompanyFundTransaction{}, fmt.Errorf("parse persisted Safeheron transaction amount: %w", err)
+	}
+	persisted.Provider.Amount = &amount
+	persisted.Provider.Currency = stringValuePointer(currency)
+	asset := AssetIdentity{Currency: currency, ChainCode: chainCode, ProviderAssetKey: providerAsset, ContractAddress: assetContract}
+	persisted.Provider.Asset = &asset
+	if providerStatus != "" {
+		status := LifecycleStatus(providerStatus)
+		persisted.Provider.Status = &status
+	}
+	if statusVersion.Valid {
+		value := statusVersion.Int64
+		persisted.Provider.Metadata.Revision = &value
+	}
+	if providerFactSource != "" {
+		persisted.Provider.Metadata.Source = ProviderFactSource(providerFactSource)
+	} else {
+		persisted.Provider.Metadata.Source = providerSourceFromSeenSource(TransactionSeenSource(lastSeenSource))
+	}
+	if providerUpdatedAt.Valid {
+		value := providerUpdatedAt.Time
+		persisted.Provider.Metadata.UpdatedAt = &value
+	}
+	if txHash != "" {
+		persisted.Provider.TxHash = stringValuePointer(txHash)
+	}
+	if occurredAt.Valid {
+		value := occurredAt.Time
+		persisted.Provider.OccurredAt = &value
+	}
+	if completedAt.Valid {
+		value := completedAt.Time
+		persisted.Provider.CompletedAt = &value
+	}
+	return persisted, nil
+}
+
 func insertCompanyFundTransaction(ctx context.Context, tx *sql.Tx, input TransactionUpsertInput, provider ProviderOwnedFields, statusRank int, stableIdentity transactionStableIdentity, provenance transactionProviderProvenance) (int64, bool, error) {
 	chainCode, providerAssetKey, assetContract := providerAssetColumns(provider.Asset)
-	row := tx.QueryRowContext(ctx, insertCompanyFundTransactionSQL,
+	args := []any{
 		input.Channel,
 		nullableString(stableIdentity.ProviderAccountKey),
 		nullableString(stableIdentity.ProviderTransactionID),
@@ -1117,7 +1369,13 @@ func insertCompanyFundTransaction(ctx context.Context, tx *sql.Tx, input Transac
 		nullableInt64(provenance.LatestProviderEventID),
 		nullableInt64(provenance.ProviderTransactionFactID),
 		nullableString(provenance.RawSnapshotDigest),
-	)
+	}
+	query := insertCompanyFundTransactionSQL
+	if input.Channel == ChannelSafeheron && input.IdentityAlgorithmVersion == SafeheronMovementIdentityAlgorithmVersion {
+		query = insertSafeheronCompanyFundTransactionSQL
+		args = append(args, input.ProviderOccurrenceKey, input.ProviderOccurrenceAlgorithmVersion)
+	}
+	row := tx.QueryRowContext(ctx, query, args...)
 	var id int64
 	if err := row.Scan(&id); err == nil {
 		return id, true, nil
@@ -1221,6 +1479,14 @@ func (input TransactionUpsertInput) validate() error {
 	}
 	if err := validateRequiredString("movement identity algorithm version", input.IdentityAlgorithmVersion, 64); err != nil {
 		return err
+	}
+	if input.Channel == ChannelSafeheron && input.IdentityAlgorithmVersion == SafeheronMovementIdentityAlgorithmVersion {
+		if err := validateRequiredString("Safeheron provider occurrence key", input.ProviderOccurrenceKey, 256); err != nil {
+			return err
+		}
+		if input.ProviderOccurrenceAlgorithmVersion != SafeheronOccurrenceAlgorithmVersion {
+			return fmt.Errorf("unsupported Safeheron provider occurrence algorithm version %q", input.ProviderOccurrenceAlgorithmVersion)
+		}
 	}
 	if !input.MovementKind.Valid() || !input.TransferMode.Valid() || !input.Direction.Valid() {
 		return fmt.Errorf("transaction movement kind, transfer mode, and direction must be supported")

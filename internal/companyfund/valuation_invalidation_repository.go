@@ -35,6 +35,9 @@ func (r *DBRepository) InvalidateAndEnqueueCompanyFundValuation(
 	if err != nil {
 		return CompanyFundValuationInvalidationResult{}, err
 	}
+	if current.Source == USDValuationSourceManual {
+		return CompanyFundValuationInvalidationResult{Superseded: true}, nil
+	}
 	valuation, err := r.applyCompanyFundValuationWithLockedCurrentTx(ctx, tx, input.Valuation, current)
 	if err != nil {
 		return CompanyFundValuationInvalidationResult{}, err

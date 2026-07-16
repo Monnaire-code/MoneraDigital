@@ -192,14 +192,15 @@ func validUSDValuationStatus(status USDValuationStatus) bool {
 
 func validUSDValuationSource(source USDValuationSource) bool {
 	return source == USDValuationSourceUSDPar || source == USDValuationSourceSafeheron ||
-		source == USDValuationSourceAirwallex || source == USDValuationSourceCoinGecko
+		source == USDValuationSourceAirwallex || source == USDValuationSourceCoinGecko ||
+		source == USDValuationSourceManual
 }
 
 func validUSDValuationMethod(method USDValuationMethod) bool {
 	switch method {
 	case USDValuationMethodUSDPar, USDValuationMethodProviderTransaction,
 		USDValuationMethodProviderConversion, USDValuationMethodCoinGeckoDirect,
-		USDValuationMethodCoinGeckoBTCCross:
+		USDValuationMethodCoinGeckoBTCCross, USDValuationMethodManualTotal:
 		return true
 	default:
 		return false

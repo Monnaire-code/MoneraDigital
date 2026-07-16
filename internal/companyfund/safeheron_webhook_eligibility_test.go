@@ -77,13 +77,14 @@ func TestRegistrySafeheronWebhookCandidateEvaluator_RequiresMappedCompanyAddress
 		}
 	})
 
-	t.Run("unmapped coin key fails closed", func(t *testing.T) {
+	t.Run("unmapped coin key still uses company account context", func(t *testing.T) {
 		snapshot := base.Snapshot
 		snapshot.CoinKey = "UNKNOWN_COIN"
+		snapshot.SourceAccountKey = "vault-from"
 		raw := testSafeheronWebhookEligibilityPayload(t, safeheronTransactionStatusChangedEventType, snapshot)
 
 		decision, err := evaluator.EvaluateSafeheronWebhookCandidate(context.Background(), safeheronTransactionStatusChangedEventType, raw)
-		if err != nil || decision.Candidate || decision.ExclusionReason != SafeheronWebhookExclusionUnmappedAsset || !isLowerSHA256Hex(decision.ConfigurationFingerprint) {
+		if err != nil || !decision.Candidate || decision.ExclusionReason != "" || decision.ConfigurationFingerprint != "" {
 			t.Fatalf("unmapped decision = %#v, %v", decision, err)
 		}
 	})
@@ -334,6 +335,20 @@ func TestSafeheronWebhookEligibilityConfigurationFingerprint_IsStableAcrossSameC
 	}
 	if changedFingerprint == before {
 		t.Fatal("Safeheron address change must change eligibility configuration fingerprint")
+	}
+
+	changedPolicies := refreshed.AssetPolicies()
+	changedPolicies[0].Asset.ProviderAssetKey = "ANOTHER_COIN"
+	policyOnlyChange, err := buildAccountRegistrySnapshot(refreshed.Accounts(), changedPolicies, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyFingerprint, err := safeheronWebhookEligibilityConfigurationFingerprint(policyOnlyChange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policyFingerprint != before {
+		t.Fatalf("asset policy change must not alter account-ownership fingerprint: %s != %s", policyFingerprint, before)
 	}
 }
 

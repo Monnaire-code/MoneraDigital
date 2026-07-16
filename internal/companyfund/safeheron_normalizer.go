@@ -14,8 +14,9 @@ import (
 // provider/chain/contract identity. A normalizer must never derive a chain or
 // contract from a display symbol.
 type SafeheronAssetMapping struct {
-	CoinKey string
-	Asset   AssetIdentity
+	CoinKey      string
+	Asset        AssetIdentity
+	Unrecognized bool
 }
 
 // SafeheronNormalizationInput contains only already-verified provider facts
@@ -99,18 +100,27 @@ func NormalizeSafeheronTransaction(input SafeheronNormalizationInput) ([]Safeher
 		}
 		return drafts[left].baseTuple < drafts[right].baseTuple
 	})
-	identityInputs := make([]MovementIdentityInput, 0, len(drafts))
-	for _, draft := range drafts {
-		identityInputs = append(identityInputs, draft.identityInput)
-	}
-	identities, err := AssignBatchMovementIdentities(identityInputs)
-	if err != nil {
-		return nil, fmt.Errorf("assign Safeheron movement identities: %w", err)
-	}
-
 	movements := make([]SafeheronNormalizedMovement, 0, len(drafts))
 	for index, draft := range drafts {
-		movement, err := buildSafeheronPrincipalMovement(input, base, draft, identities[index], transferMode, index)
+		occurrenceInput := SafeheronOccurrenceInput{
+			ProviderTransactionKey: base.txKey,
+			MovementKind:           MovementKindPrincipal,
+			RawCoinKey:             input.Snapshot.CoinKey,
+			NormalizedSource:       normalizeSafeheronAddress(base.networkFamily, base.sourceAddress),
+			NormalizedDestination:  normalizeSafeheronAddress(base.networkFamily, draft.line.DestinationAddress),
+			Amount:                 draft.line.Amount,
+			TransferMode:           transferMode,
+			MovementIndex:          index,
+		}
+		identity, err := BuildSafeheronMovementIdentity(occurrenceInput)
+		if err != nil {
+			return nil, fmt.Errorf("build Safeheron movement identity: %w", err)
+		}
+		occurrence, err := BuildSafeheronOccurrence(occurrenceInput)
+		if err != nil {
+			return nil, fmt.Errorf("build Safeheron provider occurrence: %w", err)
+		}
+		movement, err := buildSafeheronPrincipalMovement(input, base, draft, identity, occurrence, transferMode, index)
 		if err != nil {
 			return nil, err
 		}

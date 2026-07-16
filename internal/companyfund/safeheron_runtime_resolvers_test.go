@@ -56,3 +56,39 @@ func TestRegistrySafeheronTransactionMappingResolver_FailsClosedOnAmbiguousCoinK
 		t.Fatal("different configured network/asset mappings for one coin key must fail closed")
 	}
 }
+
+func TestRegistrySafeheronTransactionMappingResolver_CatalogHitAndPolicylessFallback(t *testing.T) {
+	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
+		{ID: 41, Channel: ChannelSafeheron, ProviderAccountKey: "safe-evm", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
+	}, nil, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeSafeheronCoinLister{coins: []safeheron.Coin{
+		{CoinKey: "ETHEREUM_USDT", Symbol: "USDT", BlockChain: "Ethereum", BlockchainType: "EVM", TokenIdentifier: "0xDaC"},
+	}}
+	catalog, err := NewSafeheronCoinCatalog(client, SafeheronCoinCatalogConfig{})
+	if err != nil || catalog.Refresh(context.Background()) != nil {
+		t.Fatalf("catalog setup: %v", err)
+	}
+	resolver, err := NewRegistrySafeheronTransactionMappingResolver(safeheronRegistrySnapshotProviderStub{snapshot: registry}, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recognized, err := resolver.ResolveSafeheronTransactionMapping(context.Background(), safeheron.TransactionSnapshot{
+		CoinKey: "ETHEREUM_USDT", SourceAccountKey: "safe-evm", SourceAddress: "0xABC",
+	})
+	if err != nil || recognized.PrincipalAsset.Unrecognized || recognized.PrincipalAsset.Asset.Currency != "USDT" ||
+		recognized.PrincipalAsset.Asset.ContractAddress != "0xdac" {
+		t.Fatalf("catalog mapping = %#v, %v", recognized, err)
+	}
+
+	fallback, err := resolver.ResolveSafeheronTransactionMapping(context.Background(), safeheron.TransactionSnapshot{
+		CoinKey: "UNKNOWN_EXACT", FeeCoinKey: "UNKNOWN_FEE", SourceAccountKey: "safe-evm", SourceAddress: "0xABC",
+	})
+	if err != nil || !fallback.PrincipalAsset.Unrecognized || fallback.PrincipalAsset.CoinKey != "UNKNOWN_EXACT" ||
+		fallback.FeeAsset == nil || !fallback.FeeAsset.Unrecognized || fallback.NetworkFamily != "EVM" {
+		t.Fatalf("policyless fallback mapping = %#v, %v", fallback, err)
+	}
+}

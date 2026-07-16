@@ -48,6 +48,7 @@ type CompanyFundTransactionValuationCandidate struct {
 	Currency                  string
 	Amount                    decimal.Decimal
 	Asset                     AssetIdentity
+	IsUnrecognizedAsset       bool
 	FromCompanyFundAccountID  *int64
 	ToCompanyFundAccountID    *int64
 	OccurredAt                *time.Time
@@ -63,6 +64,7 @@ type CompanyFundTransactionValuationCandidate struct {
 	CurrentValuationHistoryID             *int64
 	CurrentValuationDependencyFingerprint string
 	CurrentValuationStatus                USDValuationStatus
+	CurrentValuationSource                USDValuationSource
 }
 
 // CompanyFundCurrentValuatorConfig pins the calculation/policy contract that
@@ -78,6 +80,7 @@ type CompanyFundCurrentValuatorConfig struct {
 type CompanyFundValuationProcessResult struct {
 	TransactionID int64
 	Skipped       bool
+	SkippedManual bool
 	Applied       bool
 	Converged     bool
 	Superseded    bool
@@ -91,6 +94,7 @@ type CompanyFundValuationSweepResult struct {
 	Applied        int
 	Converged      int
 	Superseded     int
+	SkippedManual  int
 	Failed         int
 	Err            error
 }

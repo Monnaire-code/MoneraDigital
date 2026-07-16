@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -173,15 +174,15 @@ func (registry *AccountRegistry) CurrentSafeheronWebhookEligibilityFingerprint()
 
 // safeheronWebhookEligibilityConfigurationFingerprint hashes only the enabled
 // Safeheron configuration that can influence raw-event eligibility: normalized
-// address/network/provider-account identities and their enabled asset mapping
-// policies. The canonical content is sorted and excludes LoadedAt, so a cache
+// address/network/provider-account identities. Asset policies and provider
+// catalog contents cannot change account ownership. The canonical content is
+// sorted and excludes LoadedAt, so a cache
 // refresh with the same settings produces the same value.
 func safeheronWebhookEligibilityConfigurationFingerprint(snapshot *AccountRegistrySnapshot) (string, error) {
 	if snapshot == nil {
 		return "", fmt.Errorf("Safeheron webhook eligibility account registry snapshot is unavailable")
 	}
 
-	accountKeys := make(map[int64]string)
 	records := make([]string, 0)
 	for _, account := range snapshot.Accounts() {
 		if account.Channel != ChannelSafeheron || !account.Enabled {
@@ -197,21 +198,7 @@ func safeheronWebhookEligibilityConfigurationFingerprint(snapshot *AccountRegist
 			return "", fmt.Errorf("invalid enabled Safeheron account in webhook eligibility fingerprint")
 		}
 		accountKey := lengthDelimitedTuple([]string{addressKey, providerAccountKey})
-		accountKeys[account.ID] = accountKey
 		records = append(records, lengthDelimitedTuple([]string{"account", accountKey}))
-	}
-	for _, policy := range snapshot.AssetPolicies() {
-		accountKey, found := accountKeys[policy.AccountID]
-		if !found || !policy.Enabled {
-			continue
-		}
-		asset := normalizeAssetIdentity(policy.Asset)
-		asset.ContractAddress = normalizeAssetContract(asset.ContractAddress)
-		records = append(records, lengthDelimitedTuple([]string{
-			"policy",
-			accountKey,
-			asset.canonicalKey(),
-		}))
 	}
 	sort.Strings(records)
 
@@ -283,20 +270,30 @@ func (service *SafeheronWebhookEligibilityService) AssessAndRecord(
 }
 
 // RegistrySafeheronWebhookCandidateEvaluator checks a transaction-status
-// delivery against one current immutable account-registry snapshot. It first
-// resolves the Safeheron coin key through explicit configured asset policies,
-// then looks up source and every destination address under that exact network.
+// delivery against one current immutable account-registry snapshot. It resolves
+// the exact Safeheron coin key through the provider catalog when available (or
+// configured policy fallback), then independently proves that a source or
+// destination belongs to an enabled company account on that network.
 type RegistrySafeheronWebhookCandidateEvaluator struct {
 	registries SafeheronRegistrySnapshotProvider
+	coins      SafeheronCoinLookup
 }
 
 func NewRegistrySafeheronWebhookCandidateEvaluator(
 	registries SafeheronRegistrySnapshotProvider,
+	catalogs ...SafeheronCoinLookup,
 ) (*RegistrySafeheronWebhookCandidateEvaluator, error) {
 	if registries == nil {
 		return nil, fmt.Errorf("Safeheron webhook account registry snapshot provider is required")
 	}
-	return &RegistrySafeheronWebhookCandidateEvaluator{registries: registries}, nil
+	if len(catalogs) > 1 {
+		return nil, fmt.Errorf("at most one Safeheron coin catalog may be configured")
+	}
+	evaluator := &RegistrySafeheronWebhookCandidateEvaluator{registries: registries}
+	if len(catalogs) == 1 {
+		evaluator.coins = catalogs[0]
+	}
+	return evaluator, nil
 }
 
 func (evaluator *RegistrySafeheronWebhookCandidateEvaluator) EvaluateSafeheronWebhookCandidate(
@@ -333,22 +330,51 @@ func (evaluator *RegistrySafeheronWebhookCandidateEvaluator) EvaluateSafeheronWe
 	if err != nil {
 		return SafeheronWebhookCandidateEvaluation{}, err
 	}
-	mapping, err := safeheronWebhookTransactionMapping(registry, snapshot)
-	if err != nil {
-		return SafeheronWebhookCandidateEvaluation{
-			ExclusionReason:          SafeheronWebhookExclusionUnmappedAsset,
-			ConfigurationFingerprint: configurationFingerprint,
-		}, nil
-	}
-	for _, address := range safeheronWebhookTransactionAddresses(snapshot) {
-		if _, found := registry.LookupSafeheron(mapping.NetworkFamily, address); found {
-			return SafeheronWebhookCandidateEvaluation{Candidate: true}, nil
+	networkFamily := ""
+	if evaluator.coins != nil {
+		if coin, lookupErr := evaluator.coins.Lookup(snapshot.CoinKey); lookupErr == nil {
+			networkFamily = normalizeNetworkFamily(coin.BlockchainType)
+		} else if !errors.Is(lookupErr, ErrSafeheronCoinNotFound) {
+			return SafeheronWebhookCandidateEvaluation{}, lookupErr
 		}
+	} else if mapping, mappingErr := safeheronWebhookTransactionMapping(registry, snapshot); mappingErr == nil {
+		networkFamily = mapping.NetworkFamily
+	}
+	accountContext, err := ResolveSafeheronAccountContext(registry, SafeheronAccountContextInput{
+		NetworkFamily:                 networkFamily,
+		SourceProviderAccountKey:      strings.TrimSpace(snapshot.SourceAccountKey),
+		DestinationProviderAccountKey: strings.TrimSpace(snapshot.DestinationAccountKey),
+		SourceAddresses:               safeheronWebhookSourceAddresses(snapshot),
+		DestinationAddresses:          safeheronWebhookDestinationAddresses(snapshot),
+	})
+	if err != nil {
+		return SafeheronWebhookCandidateEvaluation{}, err
+	}
+	if accountContext.Source != nil || accountContext.Destination != nil {
+		return SafeheronWebhookCandidateEvaluation{Candidate: true}, nil
 	}
 	return SafeheronWebhookCandidateEvaluation{
 		ExclusionReason:          SafeheronWebhookExclusionNoConfiguredAddress,
 		ConfigurationFingerprint: configurationFingerprint,
 	}, nil
+}
+
+func safeheronWebhookSourceAddresses(snapshot safeheron.TransactionSnapshot) []string {
+	addresses := make([]string, 0, 1+len(snapshot.SourceAddressList))
+	addresses = append(addresses, snapshot.SourceAddress)
+	for _, source := range snapshot.SourceAddressList {
+		addresses = append(addresses, source.Address)
+	}
+	return addresses
+}
+
+func safeheronWebhookDestinationAddresses(snapshot safeheron.TransactionSnapshot) []string {
+	addresses := make([]string, 0, 1+len(snapshot.DestinationAddressList))
+	addresses = append(addresses, snapshot.DestinationAddress)
+	for _, destination := range snapshot.DestinationAddressList {
+		addresses = append(addresses, destination.Address)
+	}
+	return addresses
 }
 
 func safeheronWebhookTransactionMapping(

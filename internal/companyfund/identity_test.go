@@ -44,6 +44,19 @@ func TestBuildMovementIdentity_IsVersionedAndStableAcrossSources(t *testing.T) {
 	}
 }
 
+func TestBuildMovementIdentity_DefaultsNonPositiveOccurrence(t *testing.T) {
+	input := batchIdentityInput("to-default", "1")
+	input.Occurrence = 0
+
+	identity, err := BuildMovementIdentity(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Occurrence != 1 || identity.Input.Occurrence != 1 {
+		t.Fatalf("defaulted occurrence = %d / %d, want 1", identity.Occurrence, identity.Input.Occurrence)
+	}
+}
+
 func TestBuildMovementIdentity_DistinguishesMovementTuple(t *testing.T) {
 	base := MovementIdentityInput{
 		Channel:          ChannelSafeheron,

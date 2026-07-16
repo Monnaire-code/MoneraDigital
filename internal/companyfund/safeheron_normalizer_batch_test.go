@@ -90,10 +90,15 @@ func TestNormalizeSafeheronTransaction_UnknownAssetAndInvalidMappingAreVisible(t
 	}
 	unknown := movements[0]
 	if unknown.Movement.Direction != DirectionInflow || unknown.UpsertInput.AutomaticRisk.IsUnrecognizedAsset == nil ||
-		!*unknown.UpsertInput.AutomaticRisk.IsUnrecognizedAsset {
-		t.Fatalf("unknown asset automatic risk = %#v", unknown.UpsertInput.AutomaticRisk)
+		*unknown.UpsertInput.AutomaticRisk.IsUnrecognizedAsset {
+		t.Fatalf("catalog-mapped asset must stay recognized without a finance policy = %#v", unknown.UpsertInput.AutomaticRisk)
 	}
-	testSafeheronRequireRiskFlags(t, unknown.Risk.Flags, RiskFlagUnrecognizedAsset, RiskFlagZeroAmount)
+	testSafeheronRequireRiskFlags(t, unknown.Risk.Flags, RiskFlagZeroAmount)
+	for _, flag := range unknown.Risk.Flags {
+		if flag == RiskFlagUnrecognizedAsset {
+			t.Fatalf("unrecognized asset is display metadata, not an automatic risk flag: %#v", unknown.Risk)
+		}
+	}
 
 	invalid := input
 	invalid.NetworkFamily = ""

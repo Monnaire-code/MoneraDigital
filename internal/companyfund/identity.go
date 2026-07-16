@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const SafeheronMovementIdentityAlgorithmVersion = "safeheron-v2"
+
 // BuildMovementIdentity creates a versioned SHA-256 fallback movement key.
 // Adapters should pass normalized endpoints and a provider/chain/contract asset
 // identity; display symbols alone are intentionally insufficient.
@@ -16,7 +18,10 @@ func BuildMovementIdentity(input MovementIdentityInput) (MovementIdentity, error
 	if err != nil {
 		return MovementIdentity{}, err
 	}
+	return buildMovementIdentity(canonical, normalized), nil
+}
 
+func buildMovementIdentity(canonical string, normalized MovementIdentityInput) MovementIdentity {
 	digest := sha256.Sum256([]byte(canonical))
 	digestHex := hex.EncodeToString(digest[:])
 	return MovementIdentity{
@@ -25,7 +30,52 @@ func BuildMovementIdentity(input MovementIdentityInput) (MovementIdentity, error
 		Key:              MovementIdentityAlgorithmVersion + ":" + digestHex,
 		Occurrence:       normalized.Occurrence,
 		Input:            normalized,
-	}, nil
+	}
+}
+
+// BuildSafeheronMovementIdentity keeps adapter identity independent from
+// mutable catalog display metadata. It deliberately shares the occurrence
+// tuple's exact raw CoinKey and stable movement index, while using its own
+// versioned namespace.
+func BuildSafeheronMovementIdentity(input SafeheronOccurrenceInput) (MovementIdentity, error) {
+	normalized, err := validateSafeheronOccurrenceInput(input)
+	if err != nil {
+		return MovementIdentity{}, err
+	}
+	return buildSafeheronMovementIdentity(normalized), nil
+}
+
+func buildSafeheronMovementIdentity(normalized SafeheronOccurrenceInput) MovementIdentity {
+	canonical := lengthDelimitedTuple([]string{
+		"company-fund-safeheron-movement",
+		SafeheronMovementIdentityAlgorithmVersion,
+		normalized.ProviderTransactionKey,
+		string(normalized.MovementKind),
+		normalized.RawCoinKey,
+		normalized.NormalizedSource,
+		normalized.NormalizedDestination,
+		normalized.Amount.String(),
+		string(normalized.TransferMode),
+		fmt.Sprintf("%d", normalized.MovementIndex),
+	})
+	digest := sha256.Sum256([]byte(canonical))
+	digestHex := hex.EncodeToString(digest[:])
+	return MovementIdentity{
+		AlgorithmVersion: SafeheronMovementIdentityAlgorithmVersion,
+		Digest:           digestHex,
+		Key:              SafeheronMovementIdentityAlgorithmVersion + ":" + digestHex,
+		Occurrence:       normalized.MovementIndex + 1,
+		Input: MovementIdentityInput{
+			Channel:          ChannelSafeheron,
+			ProviderParentID: normalized.ProviderTransactionKey,
+			MovementKind:     normalized.MovementKind,
+			Asset:            AssetIdentity{ProviderAssetKey: normalized.RawCoinKey},
+			NormalizedFrom:   normalized.NormalizedSource,
+			NormalizedTo:     normalized.NormalizedDestination,
+			Amount:           normalized.Amount,
+			Occurrence:       normalized.MovementIndex + 1,
+		},
+	}
 }
 
 // AssignBatchMovementIdentities sorts the complete fallback tuple before it
@@ -65,10 +115,7 @@ func AssignBatchMovementIdentities(inputs []MovementIdentityInput) ([]MovementId
 		}
 		occurrence++
 		item.input.Occurrence = occurrence
-		identity, err := BuildMovementIdentity(item.input)
-		if err != nil {
-			return nil, err
-		}
+		identity := buildMovementIdentity(canonicalNormalizedMovementTuple(item.input, true), item.input)
 		identities = append(identities, identity)
 	}
 
@@ -108,6 +155,10 @@ func canonicalMovementTuple(input MovementIdentityInput, includeOccurrence bool)
 		normalized.Occurrence = 0
 	}
 
+	return canonicalNormalizedMovementTuple(normalized, includeOccurrence), normalized, nil
+}
+
+func canonicalNormalizedMovementTuple(normalized MovementIdentityInput, includeOccurrence bool) string {
 	components := []string{
 		"company-fund-movement",
 		MovementIdentityAlgorithmVersion,
@@ -122,7 +173,7 @@ func canonicalMovementTuple(input MovementIdentityInput, includeOccurrence bool)
 	if includeOccurrence {
 		components = append(components, fmt.Sprintf("%d", normalized.Occurrence))
 	}
-	return lengthDelimitedTuple(components), normalized, nil
+	return lengthDelimitedTuple(components)
 }
 
 func normalizeAssetIdentity(asset AssetIdentity) AssetIdentity {

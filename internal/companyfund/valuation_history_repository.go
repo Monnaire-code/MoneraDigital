@@ -52,6 +52,7 @@ type companyFundValuationCurrentState struct {
 	Expectation           ValuationCurrentStateExpectation
 	HistoryID             *int64
 	DependencyFingerprint string
+	Source                USDValuationSource
 }
 
 func (r *DBRepository) applyCompanyFundValuationTx(
@@ -81,6 +82,7 @@ func lockCompanyFundValuationCurrentState(
 		&current.TransactionID,
 		&currentValuationHistoryID,
 		&currentDependencyFingerprint,
+		&current.Source,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return companyFundValuationCurrentState{}, fmt.Errorf("company-fund transaction %d does not exist", transactionID)
@@ -107,6 +109,9 @@ func (r *DBRepository) applyCompanyFundValuationWithLockedCurrentTx(
 	input CompanyFundValuationApplyInput,
 	current companyFundValuationCurrentState,
 ) (CompanyFundValuationApplyResult, error) {
+	if current.Source == USDValuationSourceManual && input.Result.Source != USDValuationSourceManual {
+		return CompanyFundValuationApplyResult{Superseded: true}, nil
+	}
 	if input.expectedCurrentHistoryDoesNotMatch(current) {
 		return CompanyFundValuationApplyResult{Superseded: true}, nil
 	}

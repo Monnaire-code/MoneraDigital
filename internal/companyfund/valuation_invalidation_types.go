@@ -18,6 +18,7 @@ type CompanyFundValuationInvalidationResult struct {
 	HistoryInserted bool
 	Job             CompanyFundValuationJobRecord
 	JobInserted     bool
+	Superseded      bool
 }
 
 func (input CompanyFundValuationInvalidationInput) validate() error {

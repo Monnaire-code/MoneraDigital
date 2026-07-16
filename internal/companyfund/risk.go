@@ -67,9 +67,6 @@ func EvaluateRisk(input RiskInput) (RiskAssessment, error) {
 	if destinationPhishing {
 		result.Flags = append(result.Flags, RiskFlagDestinationPhishing)
 	}
-	if input.UnrecognizedAsset {
-		result.Flags = append(result.Flags, RiskFlagUnrecognizedAsset)
-	}
 	if input.Amount.IsZero() {
 		result.Flags = append(result.Flags, RiskFlagZeroAmount)
 	}
@@ -86,7 +83,7 @@ func EvaluateRisk(input RiskInput) (RiskAssessment, error) {
 	result.ReviewRequired = sourcePhishing || destinationPhishing || boolTrue(input.AMLLock) ||
 		input.AMLRiskLevel == AMLRiskLevelHigh || input.AMLRiskLevel == AMLRiskLevelCritical
 	result.AutomaticExclusion = result.IsDust || sourcePhishing || destinationPhishing ||
-		input.UnrecognizedAsset || input.Amount.IsZero() || boolTrue(input.AMLLock)
+		input.Amount.IsZero() || boolTrue(input.AMLLock)
 	result.ImmediateAlert = destinationPhishing && input.Direction == DirectionOutflow
 	if input.SummaryOverride != nil {
 		result.EffectiveSummaryIncluded = *input.SummaryOverride
@@ -141,7 +138,7 @@ func EvaluateUSDValue(input USDValuationInput) (USDValuationResult, error) {
 
 	providerReportedUSD := usableStorageDecimal(input.ProviderReportedUSD)
 	result := USDValuationResult{ProviderReportedUSD: providerReportedUSD}
-	if strings.EqualFold(strings.TrimSpace(input.Currency), "USD") {
+	if !input.UnrecognizedAsset && strings.EqualFold(strings.TrimSpace(input.Currency), "USD") {
 		value := quantizeDecimalBank(input.Amount)
 		timing, timed := providerValuationTiming(input)
 		if !timed {

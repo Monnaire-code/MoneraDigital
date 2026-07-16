@@ -23,6 +23,10 @@ type complianceAPIClient interface {
 	KytReport(api.KytReportRequest, *api.KytReportResponse) error
 }
 
+type coinAPIClient interface {
+	ListCoin(*api.CoinResponse) error
+}
+
 type transactionAPIClient interface {
 	CreateTransactionsV3(api.CreateTransactionsRequest, *api.CreateTransactionV3Response) error
 	ListTransactionsV2(api.ListTransactionsV2Request, *api.TransactionsResponseV2) error
@@ -55,6 +59,7 @@ type Config struct {
 type Client struct {
 	account       accountAPIClient
 	compliance    complianceAPIClient
+	coin          coinAPIClient
 	transaction   transactionAPIClient
 	webhookReplay webhookAPIClient
 	webhookConv   webhookConverter
@@ -82,6 +87,7 @@ func NewClient(cfg Config) (*Client, error) {
 	c := &Client{
 		account:       &api.AccountApi{Client: baseClient},
 		compliance:    &api.ComplianceApi{Client: baseClient},
+		coin:          &api.CoinApi{Client: baseClient},
 		transaction:   &api.TransactionApi{Client: baseClient},
 		webhookReplay: &api.WebhookApi{Client: baseClient},
 	}
@@ -104,6 +110,29 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 
 	return c, nil
+}
+
+// ListCoin returns the complete Safeheron coin metadata snapshot. SDK error
+// details are deliberately not propagated because its transport errors may
+// contain request credentials.
+func (c *Client) ListCoin(_ context.Context) ([]Coin, error) {
+	if c == nil || c.coin == nil {
+		return nil, fmt.Errorf("safeheron coin API is not configured")
+	}
+	var response api.CoinResponse
+	if err := c.coin.ListCoin(&response); err != nil {
+		return nil, fmt.Errorf("safeheron ListCoin failed")
+	}
+	coins := make([]Coin, 0, len(response))
+	for _, item := range response {
+		coins = append(coins, Coin{
+			CoinKey: item.CoinKey, CoinName: item.CoinName, Symbol: item.Symbol,
+			CoinDecimal: item.CoinDecimal, FeeCoinKey: item.FeeCoinKey,
+			BlockChain: item.BlockChain, BlockchainType: item.BlockchainType,
+			Network: item.Network, TokenIdentifier: item.TokenIdentifier,
+		})
+	}
+	return coins, nil
 }
 
 // Close is retained as a no-op so existing call sites (signal handlers,

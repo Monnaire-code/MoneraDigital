@@ -38,10 +38,15 @@ func newCompanyFundValuationApplyInput() CompanyFundValuationApplyInput {
 }
 
 func companyFundTransactionForValuationRows(id int64, currentHistoryID *int64, currentFingerprint string) *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"id", "current_valuation_history_id", "dependency_fingerprint"}).AddRow(
+	return companyFundTransactionForValuationRowsWithSource(id, currentHistoryID, currentFingerprint, "")
+}
+
+func companyFundTransactionForValuationRowsWithSource(id int64, currentHistoryID *int64, currentFingerprint string, source USDValuationSource) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"id", "current_valuation_history_id", "dependency_fingerprint", "usd_valuation_source"}).AddRow(
 		id,
 		valuationTestID(currentHistoryID),
 		currentFingerprint,
+		string(source),
 	)
 }
 

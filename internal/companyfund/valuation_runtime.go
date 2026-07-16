@@ -127,6 +127,9 @@ func (v *CompanyFundCurrentValuator) Sweep(ctx context.Context, limit int) Compa
 		if processed.Superseded {
 			result.Superseded++
 		}
+		if processed.SkippedManual {
+			result.SkippedManual++
+		}
 	}
 	if len(candidates) > 0 {
 		v.sweepCursor.afterID = candidates[len(candidates)-1].ID
@@ -136,6 +139,11 @@ func (v *CompanyFundCurrentValuator) Sweep(ctx context.Context, limit int) Compa
 
 func (v *CompanyFundCurrentValuator) valueCandidate(ctx context.Context, candidate CompanyFundTransactionValuationCandidate) CompanyFundValuationProcessResult {
 	result := CompanyFundValuationProcessResult{TransactionID: candidate.ID}
+	if candidate.CurrentValuationSource == USDValuationSourceManual {
+		result.Skipped = true
+		result.SkippedManual = true
+		return result
+	}
 	if v == nil || v.store == nil || v.registry == nil || v.cache == nil {
 		result.Err = fmt.Errorf("company-fund current valuator is not configured")
 		return result
@@ -245,6 +253,7 @@ func (candidate CompanyFundTransactionValuationCandidate) usdValuationInput() US
 		Channel:                 candidate.Channel,
 		MovementKind:            candidate.MovementKind,
 		Currency:                candidate.Currency,
+		UnrecognizedAsset:       candidate.IsUnrecognizedAsset,
 		Amount:                  candidate.Amount,
 		ProviderReportedUSD:     cloneValuationDecimal(candidate.ProviderReportedUSD),
 		ProviderValueScope:      candidate.ProviderValueScope,
@@ -352,6 +361,7 @@ func companyFundCurrentValuationFingerprint(
 		strings.ToUpper(strings.TrimSpace(candidate.Currency)),
 		candidate.Amount.String(),
 		normalizeAssetIdentity(candidate.Asset).canonicalKey(),
+		fmt.Sprintf("unrecognized=%t", candidate.IsUnrecognizedAsset),
 		companyFundValuationFingerprintTime(candidate.OccurredAt),
 		companyFundValuationFingerprintTime(candidate.CompletedAt),
 		candidate.FirstSeenAt.UTC().Format(time.RFC3339Nano),

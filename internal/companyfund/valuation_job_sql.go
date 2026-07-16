@@ -53,9 +53,20 @@ FOR KEY SHARE`
 const claimNextCompanyFundValuationJobSQL = `
 SELECT ` + companyFundValuationJobColumns + `
 FROM company_fund_valuation_jobs
-WHERE job_state = 'PENDING'
-   OR (job_state = 'RETRY_WAIT' AND next_attempt_at <= clock_timestamp())
-   OR (job_state = 'LEASED' AND lease_expires_at <= clock_timestamp())
+WHERE (
+	job_state = 'PENDING'
+	OR (job_state = 'RETRY_WAIT' AND next_attempt_at <= clock_timestamp())
+	OR (job_state = 'LEASED' AND lease_expires_at <= clock_timestamp())
+)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM company_fund_transactions AS movement
+		JOIN company_fund_transaction_valuation_history AS current_history
+			ON current_history.transaction_id = movement.id
+			AND current_history.id = movement.current_valuation_history_id
+		WHERE movement.id = company_fund_valuation_jobs.transaction_id
+			AND current_history.usd_valuation_source = 'MANUAL'
+	)
 ORDER BY COALESCE(next_attempt_at, created_at), id
 FOR UPDATE SKIP LOCKED
 LIMIT 1`

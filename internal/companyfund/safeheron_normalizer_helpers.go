@@ -47,9 +47,20 @@ func normalizeSafeheronBase(input SafeheronNormalizationInput) (safeheronNormali
 	if networkFamily == "" {
 		return safeheronNormalizationBase{}, fmt.Errorf("Safeheron network family must be explicit")
 	}
-	asset, err := normalizeSafeheronAssetMapping(input.Snapshot.CoinKey, input.PrincipalAsset, "principal")
-	if err != nil {
-		return safeheronNormalizationBase{}, err
+	var (
+		asset AssetIdentity
+		err   error
+	)
+	if input.PrincipalAsset.Unrecognized {
+		if input.PrincipalAsset.CoinKey != input.Snapshot.CoinKey || strings.TrimSpace(input.Snapshot.CoinKey) == "" {
+			return safeheronNormalizationBase{}, fmt.Errorf("Safeheron unrecognized principal mapping requires the exact raw CoinKey")
+		}
+		asset = AssetIdentity{Currency: input.Snapshot.CoinKey, ProviderAssetKey: input.Snapshot.CoinKey}
+	} else {
+		asset, err = normalizeSafeheronAssetMapping(input.Snapshot.CoinKey, input.PrincipalAsset, "principal")
+		if err != nil {
+			return safeheronNormalizationBase{}, err
+		}
 	}
 	status := normalizedLifecycleStatus(LifecycleStatus(input.Snapshot.TransactionStatus))
 	statusRank, supported := safeheronStatusRank(status)
@@ -126,15 +137,16 @@ func safeheronPrincipalDraftFor(registry *AccountRegistrySnapshot, base safehero
 	}, true, nil
 }
 
-func buildSafeheronPrincipalMovement(input SafeheronNormalizationInput, base safeheronNormalizationBase, draft safeheronPrincipalDraft, identity MovementIdentity, transferMode TransferMode, index int) (SafeheronNormalizedMovement, error) {
-	return buildSafeheronMovement(input, base, draft, identity, transferMode, index)
+func buildSafeheronPrincipalMovement(input SafeheronNormalizationInput, base safeheronNormalizationBase, draft safeheronPrincipalDraft, identity MovementIdentity, occurrence SafeheronOccurrence, transferMode TransferMode, index int) (SafeheronNormalizedMovement, error) {
+	return buildSafeheronMovement(input, base, draft, identity, occurrence, transferMode, index)
 }
 
-func buildSafeheronMovement(input SafeheronNormalizationInput, base safeheronNormalizationBase, draft safeheronPrincipalDraft, identity MovementIdentity, transferMode TransferMode, index int) (SafeheronNormalizedMovement, error) {
+func buildSafeheronMovement(input SafeheronNormalizationInput, base safeheronNormalizationBase, draft safeheronPrincipalDraft, identity MovementIdentity, occurrence SafeheronOccurrence, transferMode TransferMode, index int) (SafeheronNormalizedMovement, error) {
 	asset := base.asset
 	amount := draft.line.Amount
 	fromID, toID := safeheronAccountIDs(draft.fromAccount, draft.toAccount)
-	policy, recognized := safeheronRiskPolicy(input.Registry, draft.direction, fromID, toID, asset)
+	policy, _ := safeheronRiskPolicy(input.Registry, draft.direction, fromID, toID, asset)
+	recognized := !input.PrincipalAsset.Unrecognized
 	amlRiskLevel, amlRiskKnown := safeheronAMLRiskLevel(input.Snapshot.AMLList)
 	risk, err := EvaluateRisk(RiskInput{
 		Channel:             ChannelSafeheron,
@@ -181,30 +193,32 @@ func buildSafeheronMovement(input SafeheronNormalizationInput, base safeheronNor
 		return SafeheronNormalizedMovement{}, fmt.Errorf("validate Safeheron movement relation: %w", err)
 	}
 	upsert := TransactionUpsertInput{
-		MovementKey:              identity.Key,
-		Channel:                  ChannelSafeheron,
-		IdentityAlgorithmVersion: identity.AlgorithmVersion,
-		ProviderAccountKey:       safeheronProviderAccountKey(input.ProviderAccountKey, input.Snapshot, draft.fromAccount, draft.toAccount),
-		ProviderTransactionID:    strings.TrimSpace(input.Snapshot.TxKey),
-		ProviderEventID:          strings.TrimSpace(input.ProviderEventID),
-		MovementIndex:            index,
-		MovementKind:             MovementKindPrincipal,
-		TransferMode:             transferMode,
-		Direction:                draft.direction,
-		ParentMovementKey:        "",
-		FromCompanyFundAccountID: fromID,
-		ToCompanyFundAccountID:   toID,
-		Currency:                 asset.Currency,
-		Asset:                    asset,
-		Amount:                   amount,
-		OccurredAt:               copyTime(base.occurredAt),
-		LatestProviderEventID:    safeheronCopyInt64(input.LatestProviderEventID),
-		RawSnapshotDigest:        input.SourcePayloadDigest,
-		FirstSeenSource:          input.FirstSeenSource,
-		Provider:                 provider,
-		ProviderStatusRank:       base.statusRank,
-		ProviderDisplay:          display,
-		AutomaticRisk:            automaticRisk,
+		MovementKey:                        identity.Key,
+		Channel:                            ChannelSafeheron,
+		IdentityAlgorithmVersion:           identity.AlgorithmVersion,
+		ProviderOccurrenceKey:              occurrence.Key,
+		ProviderOccurrenceAlgorithmVersion: occurrence.AlgorithmVersion,
+		ProviderAccountKey:                 safeheronProviderAccountKey(input.ProviderAccountKey, input.Snapshot, draft.fromAccount, draft.toAccount),
+		ProviderTransactionID:              strings.TrimSpace(input.Snapshot.TxKey),
+		ProviderEventID:                    strings.TrimSpace(input.ProviderEventID),
+		MovementIndex:                      index,
+		MovementKind:                       MovementKindPrincipal,
+		TransferMode:                       transferMode,
+		Direction:                          draft.direction,
+		ParentMovementKey:                  "",
+		FromCompanyFundAccountID:           fromID,
+		ToCompanyFundAccountID:             toID,
+		Currency:                           asset.Currency,
+		Asset:                              asset,
+		Amount:                             amount,
+		OccurredAt:                         copyTime(base.occurredAt),
+		LatestProviderEventID:              safeheronCopyInt64(input.LatestProviderEventID),
+		RawSnapshotDigest:                  input.SourcePayloadDigest,
+		FirstSeenSource:                    input.FirstSeenSource,
+		Provider:                           provider,
+		ProviderStatusRank:                 base.statusRank,
+		ProviderDisplay:                    display,
+		AutomaticRisk:                      automaticRisk,
 	}
 	if err := upsert.validate(); err != nil {
 		return SafeheronNormalizedMovement{}, fmt.Errorf("validate normalized Safeheron upsert: %w", err)

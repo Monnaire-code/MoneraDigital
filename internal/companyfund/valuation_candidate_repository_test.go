@@ -68,10 +68,10 @@ func TestGetCompanyFundTransactionValuationCandidate_ReturnsNilForMissingRow(t *
 
 func companyFundValuationCandidateColumnNames() []string {
 	return []string{
-		"id", "channel", "movement_kind", "transaction_direction", "currency", "amount", "chain_code", "provider_asset_key", "asset_contract",
+		"id", "channel", "movement_kind", "transaction_direction", "currency", "amount", "chain_code", "provider_asset_key", "asset_contract", "is_unrecognized_asset",
 		"from_company_fund_account_id", "to_company_fund_account_id", "occurred_at", "completed_at", "first_seen_at", "provider_transaction_fact_id",
 		"provider_reported_usd_value", "value_scope", "allocation_state", "conversion_from_currency", "conversion_to_currency",
-		"current_valuation_history_id", "dependency_fingerprint", "usd_valuation_status",
+		"current_valuation_history_id", "dependency_fingerprint", "usd_valuation_status", "usd_valuation_source",
 	}
 }
 
@@ -86,6 +86,7 @@ func companyFundValuationCandidateRows(candidate CompanyFundTransactionValuation
 		candidate.Asset.ChainCode,
 		candidate.Asset.ProviderAssetKey,
 		candidate.Asset.ContractAddress,
+		candidate.IsUnrecognizedAsset,
 		valuationTestID(candidate.FromCompanyFundAccountID),
 		valuationTestID(candidate.ToCompanyFundAccountID),
 		valuationTestTime(candidate.OccurredAt),
@@ -100,6 +101,7 @@ func companyFundValuationCandidateRows(candidate CompanyFundTransactionValuation
 		valuationTestID(candidate.CurrentValuationHistoryID),
 		candidate.CurrentValuationDependencyFingerprint,
 		candidate.CurrentValuationStatus,
+		candidate.CurrentValuationSource,
 	)
 }
 

@@ -2,6 +2,7 @@ package companyfund
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -40,19 +41,27 @@ func (resolver *RegistrySafeheronHistoryAccountContextResolver) ResolveSafeheron
 	return SafeheronHistoryAccountContext{ProviderAccountKey: providerAccountKey}, nil
 }
 
-// RegistrySafeheronTransactionMappingResolver derives a mapping only from
-// enabled Safeheron account asset-policy records. Coin keys must match the
-// provider_asset_key exactly; symbols and ticker-like substrings are never
-// consulted. Ambiguous network/asset mappings fail closed.
+// RegistrySafeheronTransactionMappingResolver resolves exact Safeheron coin
+// keys from the provider coin catalog when available, with enabled account
+// asset policies as the legacy fallback. Symbols and ticker-like substrings
+// are never consulted. Ambiguous network/asset mappings fail closed.
 type RegistrySafeheronTransactionMappingResolver struct {
 	registries SafeheronRegistrySnapshotProvider
+	coins      SafeheronCoinLookup
 }
 
-func NewRegistrySafeheronTransactionMappingResolver(registries SafeheronRegistrySnapshotProvider) (*RegistrySafeheronTransactionMappingResolver, error) {
+func NewRegistrySafeheronTransactionMappingResolver(registries SafeheronRegistrySnapshotProvider, catalogs ...SafeheronCoinLookup) (*RegistrySafeheronTransactionMappingResolver, error) {
 	if registries == nil {
 		return nil, fmt.Errorf("Safeheron transaction mapping registry snapshot provider is required")
 	}
-	return &RegistrySafeheronTransactionMappingResolver{registries: registries}, nil
+	if len(catalogs) > 1 {
+		return nil, fmt.Errorf("at most one Safeheron coin catalog may be configured")
+	}
+	resolver := &RegistrySafeheronTransactionMappingResolver{registries: registries}
+	if len(catalogs) == 1 {
+		resolver.coins = catalogs[0]
+	}
+	return resolver, nil
 }
 
 func (resolver *RegistrySafeheronTransactionMappingResolver) ResolveSafeheronTransactionMapping(ctx context.Context, snapshot safeheron.TransactionSnapshot) (SafeheronTransactionMapping, error) {
@@ -65,6 +74,9 @@ func (resolver *RegistrySafeheronTransactionMappingResolver) ResolveSafeheronTra
 	registry := resolver.registries.Snapshot()
 	if registry == nil {
 		return SafeheronTransactionMapping{}, fmt.Errorf("Safeheron transaction mapping registry snapshot is unavailable")
+	}
+	if resolver.coins != nil {
+		return resolver.resolveCatalogSafeheronTransactionMapping(registry, snapshot)
 	}
 	networkFamily, principal, err := registrySafeheronAssetMapping(registry, snapshot.CoinKey)
 	if err != nil {
@@ -82,6 +94,110 @@ func (resolver *RegistrySafeheronTransactionMappingResolver) ResolveSafeheronTra
 		result.FeeAsset = &fee
 	}
 	return result, nil
+}
+
+func (resolver *RegistrySafeheronTransactionMappingResolver) resolveCatalogSafeheronTransactionMapping(
+	registry *AccountRegistrySnapshot,
+	snapshot safeheron.TransactionSnapshot,
+) (SafeheronTransactionMapping, error) {
+	coin, lookupErr := resolver.coins.Lookup(snapshot.CoinKey)
+	networkFamily := ""
+	if lookupErr == nil {
+		networkFamily = normalizeNetworkFamily(coin.BlockchainType)
+		if networkFamily == "" {
+			return SafeheronTransactionMapping{}, fmt.Errorf("Safeheron catalog coin has no blockchain type")
+		}
+	} else if !errors.Is(lookupErr, ErrSafeheronCoinNotFound) {
+		return SafeheronTransactionMapping{}, lookupErr
+	}
+	accountContext, err := ResolveSafeheronAccountContext(registry, SafeheronAccountContextInput{
+		NetworkFamily:                 networkFamily,
+		SourceProviderAccountKey:      strings.TrimSpace(snapshot.SourceAccountKey),
+		DestinationProviderAccountKey: strings.TrimSpace(snapshot.DestinationAccountKey),
+		SourceAddresses:               safeheronWebhookSourceAddresses(snapshot),
+		DestinationAddresses:          safeheronWebhookDestinationAddresses(snapshot),
+	})
+	if err != nil {
+		return SafeheronTransactionMapping{}, err
+	}
+	if accountContext.Source == nil && accountContext.Destination == nil {
+		return SafeheronTransactionMapping{}, fmt.Errorf("Safeheron transaction does not belong to an enabled company account")
+	}
+	if networkFamily == "" {
+		networkFamily, err = safeheronAccountContextNetworkFamily(accountContext)
+		if err != nil {
+			return SafeheronTransactionMapping{}, err
+		}
+	}
+	principal := SafeheronAssetMapping{CoinKey: snapshot.CoinKey, Unrecognized: lookupErr != nil}
+	if lookupErr == nil {
+		principal.Asset, err = safeheronCatalogAssetIdentity(coin)
+		if err != nil {
+			return SafeheronTransactionMapping{}, err
+		}
+	}
+	result := SafeheronTransactionMapping{NetworkFamily: networkFamily, PrincipalAsset: principal}
+	feeCoinKey := strings.TrimSpace(snapshot.FeeCoinKey)
+	if feeCoinKey == "" {
+		return result, nil
+	}
+	feeCoin, feeErr := resolver.coins.Lookup(feeCoinKey)
+	fee := SafeheronAssetMapping{CoinKey: feeCoinKey, Unrecognized: feeErr != nil}
+	if feeErr == nil {
+		feeNetwork := normalizeNetworkFamily(feeCoin.BlockchainType)
+		if feeNetwork != networkFamily {
+			return SafeheronTransactionMapping{}, fmt.Errorf("Safeheron fee asset network family conflicts with principal account context")
+		}
+		fee.Asset, err = safeheronCatalogAssetIdentity(feeCoin)
+		if err != nil {
+			return SafeheronTransactionMapping{}, err
+		}
+	} else if !errors.Is(feeErr, ErrSafeheronCoinNotFound) {
+		return SafeheronTransactionMapping{}, feeErr
+	}
+	result.FeeAsset = &fee
+	return result, nil
+}
+
+func safeheronCatalogAssetIdentity(coin safeheron.Coin) (AssetIdentity, error) {
+	currency := strings.TrimSpace(coin.Symbol)
+	if currency == "" {
+		currency = strings.TrimSpace(coin.CoinName)
+	}
+	if strings.TrimSpace(coin.CoinKey) == "" || currency == "" {
+		return AssetIdentity{}, fmt.Errorf("Safeheron catalog coin identity is incomplete")
+	}
+	contract := strings.TrimSpace(coin.TokenIdentifier)
+	if strings.EqualFold(contract, "NATIVE") {
+		contract = ""
+	}
+	if normalizeNetworkFamily(coin.BlockchainType) == "EVM" {
+		contract = strings.ToLower(contract)
+	}
+	return AssetIdentity{
+		Currency:         currency,
+		ChainCode:        strings.TrimSpace(coin.BlockChain),
+		ProviderAssetKey: coin.CoinKey,
+		ContractAddress:  contract,
+	}, nil
+}
+
+func safeheronAccountContextNetworkFamily(context SafeheronAccountContext) (string, error) {
+	family := ""
+	for _, account := range []*CompanyFundAccount{context.Source, context.Destination} {
+		if account == nil {
+			continue
+		}
+		candidate := normalizeNetworkFamily(account.NetworkFamily)
+		if family != "" && family != candidate {
+			return "", safeheronAccountContextError("source and destination accounts use different network families")
+		}
+		family = candidate
+	}
+	if family == "" {
+		return "", fmt.Errorf("Safeheron company account context has no network family")
+	}
+	return family, nil
 }
 
 func registrySafeheronAssetMapping(registry *AccountRegistrySnapshot, coinKey string) (string, SafeheronAssetMapping, error) {

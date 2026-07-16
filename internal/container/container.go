@@ -283,6 +283,7 @@ type Container struct {
 	CompanyFundProviderEventWorker     *companyfund.ProviderEventWorker
 	CompanyFundRuntime                 *companyfund.CompanyFundRuntime
 	CompanyFundSafeheronNormalizer     *companyfund.SafeheronProviderEventNormalizer
+	CompanyFundSafeheronCoinCatalog    *companyfund.SafeheronCoinCatalog
 	CompanyFundSafeheronReconciler     *companyfund.SafeheronTransactionHistoryReconciler
 	CompanyFundSafeheronCollector      *companyfund.SafeheronProviderEventCollector
 	CompanyFundAirwallexRuntimeBundle  *companyfund.AirwallexFinancialTransactionsRuntimeBundle
@@ -427,6 +428,9 @@ func (c *Container) Close() error {
 	stopCompanyFundAuxiliaryLoops(c)
 	if c.CompanyFundRuntime != nil {
 		c.CompanyFundRuntime.Stop()
+	}
+	if c.CompanyFundSafeheronCoinCatalog != nil {
+		c.CompanyFundSafeheronCoinCatalog.Stop()
 	}
 	if c.CompanyFundAccountRegistry != nil {
 		c.CompanyFundAccountRegistry.Stop()

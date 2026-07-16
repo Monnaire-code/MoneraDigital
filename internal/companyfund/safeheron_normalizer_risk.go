@@ -147,12 +147,20 @@ func safeheronTransactionFeeDisplay(snapshot safeheron.TransactionSnapshot, mapp
 		}
 		return result, nil
 	}
-	asset, err := normalizeSafeheronAssetMapping(feeCoinKey, *mapping, "fee")
-	if err != nil {
-		if companyPaysFee && !amount.IsZero() {
-			return nil, err
+	var asset AssetIdentity
+	if mapping.Unrecognized {
+		if mapping.CoinKey != feeCoinKey {
+			return nil, fmt.Errorf("Safeheron unrecognized fee mapping requires the exact raw CoinKey")
 		}
-		return result, nil
+		asset = AssetIdentity{Currency: feeCoinKey, ProviderAssetKey: feeCoinKey}
+	} else {
+		asset, err = normalizeSafeheronAssetMapping(feeCoinKey, *mapping, "fee")
+		if err != nil {
+			if companyPaysFee && !amount.IsZero() {
+				return nil, err
+			}
+			return result, nil
+		}
 	}
 	result.asset = &asset
 	return result, nil

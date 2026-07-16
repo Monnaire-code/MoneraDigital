@@ -73,7 +73,7 @@ func main() {
 	}
 
 	// Initialize database
-	database, err := db.InitDB(cfg.DatabaseURL)
+	database, err := db.InitDBWithProvenance(cfg.DatabaseURL, version, os.Getenv("INVOCATION_ID"))
 	if err != nil {
 		logger.Fatal("Failed to initialize database",
 			"error", err.Error())

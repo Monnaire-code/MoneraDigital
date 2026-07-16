@@ -29,7 +29,8 @@ applied_at`
 const selectCompanyFundTransactionForValuationSQL = `
 SELECT transaction.id,
 	transaction.current_valuation_history_id,
-	COALESCE(history.dependency_fingerprint, '')
+	COALESCE(history.dependency_fingerprint, ''),
+	COALESCE(history.usd_valuation_source, '')
 FROM company_fund_transactions AS transaction
 LEFT JOIN company_fund_transaction_valuation_history AS history
 	ON history.transaction_id = transaction.id

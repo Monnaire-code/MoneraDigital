@@ -409,6 +409,7 @@ const (
 	USDValuationSourceSafeheron USDValuationSource = "SAFEHERON"
 	USDValuationSourceAirwallex USDValuationSource = "AIRWALLEX"
 	USDValuationSourceCoinGecko USDValuationSource = "COINGECKO"
+	USDValuationSourceManual    USDValuationSource = "MANUAL"
 )
 
 type USDValuationMethod string
@@ -419,6 +420,7 @@ const (
 	USDValuationMethodProviderConversion  USDValuationMethod = "PROVIDER_CONVERSION"
 	USDValuationMethodCoinGeckoDirect     USDValuationMethod = "COINGECKO_DIRECT"
 	USDValuationMethodCoinGeckoBTCCross   USDValuationMethod = "COINGECKO_BTC_CROSS"
+	USDValuationMethodManualTotal         USDValuationMethod = "MANUAL_TOTAL"
 )
 
 type USDValuationStatus string
@@ -469,6 +471,12 @@ const (
 	USDValuationReasonZeroAmount            USDValuationReason = "ZERO_AMOUNT"
 	USDValuationReasonMissingValuationTime  USDValuationReason = "MISSING_VALUATION_TIME"
 	USDValuationReasonRevaluationPending    USDValuationReason = "REVALUATION_PENDING"
+	USDValuationReasonManualOverride        USDValuationReason = "MANUAL_OVERRIDE"
+)
+
+const (
+	ManualValuationPolicyVersion     = "MANUAL_V1"
+	ManualValuationTransitionTrigger = "MANUAL_ADMIN"
 )
 
 // USDValuationInput separates provider reported value from market pricing. All
@@ -478,6 +486,7 @@ type USDValuationInput struct {
 	Channel                 Channel
 	MovementKind            MovementKind
 	Currency                string
+	UnrecognizedAsset       bool
 	Amount                  decimal.Decimal
 	ProviderReportedUSD     *decimal.Decimal
 	ProviderValueScope      ProviderValueScope

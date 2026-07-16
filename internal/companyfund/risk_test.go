@@ -81,6 +81,56 @@ func TestEvaluateRisk_NoExplicitPolicyDoesNotClassifyDustAndOutboundPhishingAler
 	}
 }
 
+func TestEvaluateRisk_UnrecognizedAssetIsInformationalNotAutomaticRisk(t *testing.T) {
+	assessment, err := EvaluateRisk(RiskInput{
+		Channel:           ChannelSafeheron,
+		Direction:         DirectionInflow,
+		Amount:            decimal.RequireFromString("1"),
+		Asset:             AssetIdentity{Currency: "UNKNOWN_COIN", ProviderAssetKey: "UNKNOWN_COIN"},
+		UnrecognizedAsset: true,
+		ConfiguredToID:    int64Pointer(9),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.IsDust || assessment.AutomaticExclusion || assessment.ReviewRequired || len(assessment.Flags) != 0 {
+		t.Fatalf("unknown asset without an explicit policy must remain an included non-risk movement: %#v", assessment)
+	}
+}
+
+func TestEvaluateUSDValue_UnrecognizedUSDDoesNotGuessParButKeepsDirectProviderValue(t *testing.T) {
+	amount := decimal.RequireFromString("2")
+	unpriced, err := EvaluateUSDValue(USDValuationInput{
+		Channel:           ChannelSafeheron,
+		MovementKind:      MovementKindPrincipal,
+		Currency:          "USD",
+		UnrecognizedAsset: true,
+		Amount:            amount,
+		IngestionAt:       testValuationIngestionAt(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unpriced.Value != nil || unpriced.Source == USDValuationSourceUSDPar || unpriced.Status != USDValuationStatusUnpriced {
+		t.Fatalf("unknown raw CoinKey USD must not be assigned hardcoded par: %#v", unpriced)
+	}
+
+	providerValue := decimal.RequireFromString("3.5")
+	provider, err := EvaluateUSDValue(USDValuationInput{
+		Channel:             ChannelSafeheron,
+		MovementKind:        MovementKindPrincipal,
+		Currency:            "USD",
+		UnrecognizedAsset:   true,
+		Amount:              amount,
+		ProviderReportedUSD: &providerValue,
+		ProviderValueScope:  ProviderValueScopeDirectItem,
+		IngestionAt:         testValuationIngestionAt(),
+	})
+	if err != nil || provider.Value == nil || !provider.Value.Equal(providerValue) || provider.Source != USDValuationSourceSafeheron {
+		t.Fatalf("unknown asset direct provider USD = %#v, %v", provider, err)
+	}
+}
+
 func TestEvaluateUSDValue_PrecedenceAndProviderScope(t *testing.T) {
 	amount := decimal.RequireFromString("2")
 	usd, err := EvaluateUSDValue(USDValuationInput{

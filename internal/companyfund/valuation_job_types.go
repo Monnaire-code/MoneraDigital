@@ -69,8 +69,9 @@ type CompanyFundValuationJobRecord struct {
 }
 
 type CompanyFundValuationJobEnqueueResult struct {
-	Job      CompanyFundValuationJobRecord
-	Inserted bool
+	Job        CompanyFundValuationJobRecord
+	Inserted   bool
+	Superseded bool
 }
 
 type CompanyFundValuationJobLease struct {

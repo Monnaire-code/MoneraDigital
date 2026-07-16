@@ -34,6 +34,9 @@ func (r *DBRepository) EnqueueCompanyFundValuationJob(ctx context.Context, input
 	if err != nil {
 		return CompanyFundValuationJobEnqueueResult{}, err
 	}
+	if current.Source == USDValuationSourceManual {
+		return CompanyFundValuationJobEnqueueResult{Superseded: true}, nil
+	}
 	result, err := r.enqueueCompanyFundValuationJobWithLockedCurrentTx(ctx, tx, input, current)
 	if err != nil {
 		return CompanyFundValuationJobEnqueueResult{}, err

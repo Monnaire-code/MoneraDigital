@@ -20,6 +20,7 @@ movement.amount::TEXT,
 COALESCE(movement.chain_code, ''),
 COALESCE(movement.provider_asset_key, ''),
 COALESCE(movement.asset_contract, ''),
+movement.is_unrecognized_asset,
 movement.from_company_fund_account_id,
 movement.to_company_fund_account_id,
 movement.occurred_at,
@@ -33,7 +34,8 @@ COALESCE(fact.conversion_from_currency, ''),
 COALESCE(fact.conversion_to_currency, ''),
 movement.current_valuation_history_id,
 COALESCE(current_history.dependency_fingerprint, ''),
-COALESCE(current_history.usd_valuation_status, '')`
+COALESCE(current_history.usd_valuation_status, ''),
+COALESCE(current_history.usd_valuation_source, '')`
 
 const companyFundValuationCandidateFromSQL = `
 FROM company_fund_transactions AS movement
@@ -45,7 +47,8 @@ LEFT JOIN company_fund_transaction_valuation_history AS current_history
 
 const selectCompanyFundTransactionValuationCandidateSQL = `
 SELECT ` + companyFundValuationCandidateColumns + companyFundValuationCandidateFromSQL + `
-WHERE movement.id = $1`
+WHERE movement.id = $1
+	AND current_history.usd_valuation_source IS DISTINCT FROM 'MANUAL'`
 
 // Repair candidates are precisely rows that have never received a valuation
 // history or whose latest durable state says a retry can improve it. Completed
@@ -53,8 +56,11 @@ WHERE movement.id = $1`
 // cannot churn history just because a new current quote arrives.
 const selectCompanyFundValuationRepairCandidatesSQL = `
 SELECT ` + companyFundValuationCandidateColumns + companyFundValuationCandidateFromSQL + `
-WHERE movement.current_valuation_history_id IS NULL
+WHERE (
+	movement.current_valuation_history_id IS NULL
 	OR current_history.usd_valuation_status IN ('UNPRICED', 'STALE')
+)
+	AND current_history.usd_valuation_source IS DISTINCT FROM 'MANUAL'
 ORDER BY movement.first_seen_at, movement.id
 LIMIT $1`
 
@@ -64,6 +70,7 @@ WHERE (
 	movement.current_valuation_history_id IS NULL
 	OR current_history.usd_valuation_status IN ('UNPRICED', 'STALE')
 )
+	AND current_history.usd_valuation_source IS DISTINCT FROM 'MANUAL'
 	AND movement.id > $1
 ORDER BY movement.id
 LIMIT $2`
@@ -170,6 +177,7 @@ func scanCompanyFundTransactionValuationCandidate(scanner companyFundValuationCa
 		currentHistoryID        sql.NullInt64
 		currentDependency       string
 		currentStatus           string
+		currentSource           string
 	)
 	if err := scanner.Scan(
 		&candidate.ID,
@@ -181,6 +189,7 @@ func scanCompanyFundTransactionValuationCandidate(scanner companyFundValuationCa
 		&candidate.Asset.ChainCode,
 		&candidate.Asset.ProviderAssetKey,
 		&candidate.Asset.ContractAddress,
+		&candidate.IsUnrecognizedAsset,
 		&fromAccountID,
 		&toAccountID,
 		&occurredAt,
@@ -195,6 +204,7 @@ func scanCompanyFundTransactionValuationCandidate(scanner companyFundValuationCa
 		&currentHistoryID,
 		&currentDependency,
 		&currentStatus,
+		&currentSource,
 	); err != nil {
 		return CompanyFundTransactionValuationCandidate{}, err
 	}
@@ -222,6 +232,7 @@ func scanCompanyFundTransactionValuationCandidate(scanner companyFundValuationCa
 	candidate.CurrentValuationHistoryID = nullableCompanyFundValuationID(currentHistoryID)
 	candidate.CurrentValuationDependencyFingerprint = currentDependency
 	candidate.CurrentValuationStatus = USDValuationStatus(currentStatus)
+	candidate.CurrentValuationSource = USDValuationSource(currentSource)
 	if err := candidate.validate(); err != nil {
 		return CompanyFundTransactionValuationCandidate{}, fmt.Errorf("invalid persisted company-fund valuation candidate: %w", err)
 	}
@@ -248,12 +259,12 @@ func (candidate CompanyFundTransactionValuationCandidate) validate() error {
 		return fmt.Errorf("candidate provider-reported USD must be non-negative")
 	}
 	if candidate.CurrentValuationHistoryID == nil {
-		if candidate.CurrentValuationDependencyFingerprint != "" || candidate.CurrentValuationStatus != "" {
+		if candidate.CurrentValuationDependencyFingerprint != "" || candidate.CurrentValuationStatus != "" || candidate.CurrentValuationSource != "" {
 			return fmt.Errorf("candidate has a current valuation field without current history")
 		}
 		return nil
 	}
-	if *candidate.CurrentValuationHistoryID <= 0 || !isLowerSHA256Hex(candidate.CurrentValuationDependencyFingerprint) || !validUSDValuationStatus(candidate.CurrentValuationStatus) {
+	if *candidate.CurrentValuationHistoryID <= 0 || !isLowerSHA256Hex(candidate.CurrentValuationDependencyFingerprint) || !validUSDValuationStatus(candidate.CurrentValuationStatus) || !validUSDValuationSource(candidate.CurrentValuationSource) {
 		return fmt.Errorf("candidate current valuation state is invalid")
 	}
 	return nil

@@ -191,6 +191,7 @@ type AccountRegistrySnapshot struct {
 	accountsByID                 map[int64]CompanyFundAccount
 	safeheronByAddress           map[string]CompanyFundAccount
 	safeheronProviderAccountKeys map[string]struct{}
+	safeheronByProviderKey       map[string][]CompanyFundAccount
 	airwallexByAccountKey        map[string]CompanyFundAccount
 	policiesByAccount            map[int64][]AccountAssetPolicy
 }
@@ -201,6 +202,7 @@ func newEmptyAccountRegistrySnapshot(loadedAt time.Time) *AccountRegistrySnapsho
 		accountsByID:                 make(map[int64]CompanyFundAccount),
 		safeheronByAddress:           make(map[string]CompanyFundAccount),
 		safeheronProviderAccountKeys: make(map[string]struct{}),
+		safeheronByProviderKey:       make(map[string][]CompanyFundAccount),
 		airwallexByAccountKey:        make(map[string]CompanyFundAccount),
 		policiesByAccount:            make(map[int64][]AccountAssetPolicy),
 	}
@@ -572,6 +574,9 @@ func buildAccountRegistrySnapshot(accounts []CompanyFundAccount, policies []Acco
 					return nil, fmt.Errorf("enabled Safeheron account %d provider account key must not have surrounding whitespace", account.ID)
 				}
 				snapshot.safeheronProviderAccountKeys[providerAccountKey] = struct{}{}
+				snapshot.safeheronByProviderKey[providerAccountKey] = append(
+					snapshot.safeheronByProviderKey[providerAccountKey], account,
+				)
 			}
 		case ChannelAirwallex:
 			key := strings.TrimSpace(account.ProviderAccountKey)

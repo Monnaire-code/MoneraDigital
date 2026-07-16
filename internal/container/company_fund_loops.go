@@ -58,6 +58,9 @@ func startCompanyFundCoreLoops(
 	if c.CompanyFundAccountRegistry != nil {
 		c.CompanyFundAccountRegistry.Start(ctx)
 	}
+	if c.CompanyFundSafeheronCoinCatalog != nil {
+		c.CompanyFundSafeheronCoinCatalog.Start(ctx)
+	}
 	if runtime != nil {
 		runtime.Start(ctx)
 	}

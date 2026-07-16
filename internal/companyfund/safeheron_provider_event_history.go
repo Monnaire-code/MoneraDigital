@@ -61,6 +61,10 @@ func (normalizer *SafeheronProviderEventNormalizer) normalizeTransactionHistoryS
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return ProviderEventNormalizationResult{}, err
 		}
+		var configurationError *SafeheronAccountContextConfigurationError
+		if errors.As(err, &configurationError) {
+			return ProviderEventNormalizationResult{}, err
+		}
 		return ProviderEventNormalizationResult{}, safeheronPermanentNormalizationError("Safeheron transaction mapping is unavailable")
 	}
 	registry := normalizer.registries.Snapshot()

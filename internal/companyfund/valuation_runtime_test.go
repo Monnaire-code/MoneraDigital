@@ -28,6 +28,19 @@ func TestCompanyFundCurrentValuator_ValuesUSDCurrencyAtPar(t *testing.T) {
 	}
 }
 
+func TestCompanyFundCurrentValuator_UnrecognizedUSDWithoutProviderValueStaysMappingMissing(t *testing.T) {
+	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
+	candidate := newValuationRuntimeCandidate(16, "USD", decimal.NewFromInt(2))
+	candidate.IsUnrecognizedAsset = true
+	store := &fakeCompanyFundValuationCandidateStore{candidates: map[int64]CompanyFundTransactionValuationCandidate{16: candidate}}
+	valuator := newTestCompanyFundCurrentValuator(t, now, store, nil, nil)
+
+	result := valuator.ValueTransaction(context.Background(), 16)
+	if result.Err != nil || !result.Applied || result.Result.Value != nil || result.Result.Status != USDValuationStatusUnpriced || result.Result.Reason != USDValuationReasonMappingMissing {
+		t.Fatalf("unrecognized policyless USD valuation = %#v", result)
+	}
+}
+
 func TestCompanyFundCurrentValuator_PrefersEligibleProviderTransactionUSD(t *testing.T) {
 	now := time.Date(2026, time.July, 11, 3, 0, 0, 0, time.UTC)
 	candidate := newValuationRuntimeCandidate(14, "ETH", decimal.NewFromInt(2))

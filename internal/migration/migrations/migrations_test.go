@@ -77,6 +77,21 @@ func TestWidenAmountPrecision_InterfaceAndVersion(t *testing.T) {
 	}
 }
 
+func TestExpandCompanyFundOccurrenceAndManualValuationInterfaceAndVersion(t *testing.T) {
+	var _ migration.Migration = (*ExpandCompanyFundOccurrenceAndManualValuation)(nil)
+	if version := (&ExpandCompanyFundOccurrenceAndManualValuation{}).Version(); version != "052" {
+		t.Fatalf("Version() = %q, want 052", version)
+	}
+}
+
+func TestEnforceSafeheronOccurrenceInterfaceAndVersion(t *testing.T) {
+	var _ migration.Migration = (*EnforceSafeheronOccurrence)(nil)
+	var _ migration.ControlledMigration = (*EnforceSafeheronOccurrence)(nil)
+	if version := (&EnforceSafeheronOccurrence{}).Version(); version != "053" {
+		t.Fatalf("Version() = %q, want 053", version)
+	}
+}
+
 // TestAddTwoFactorColumnsMigration_Interface verifies the migration implements the interface
 func TestAddTwoFactorColumnsMigration_Interface(t *testing.T) {
 	var _ migration.Migration = (*AddTwoFactorColumnsMigration)(nil)
@@ -149,6 +164,8 @@ func TestMigrationOrder(t *testing.T) {
 		{"CreateFundReports", "049"},
 		{"CreateCompanyFundLedger", "050"},
 		{"WidenAmountPrecision", "051"},
+		{"ExpandCompanyFundOccurrenceAndManualValuation", "052"},
+		{"EnforceSafeheronOccurrence", "053"},
 	}
 
 	seen := make(map[string]bool, len(migrations))
@@ -191,6 +208,8 @@ func TestMigrationRunnerRegistersVersionsInOrder(t *testing.T) {
 		"m.Register(&migrations.CreateFundReports{})",
 		"m.Register(&migrations.CreateCompanyFundLedger{})",
 		"m.Register(&migrations.WidenAmountPrecision{})",
+		"m.Register(&migrations.ExpandCompanyFundOccurrenceAndManualValuation{})",
+		"m.Register(&migrations.EnforceSafeheronOccurrence{})",
 	} {
 		position := strings.Index(string(source), registration)
 		if position < 0 {

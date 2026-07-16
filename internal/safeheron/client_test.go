@@ -154,7 +154,7 @@ func TestNewClient_FilePathsHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if c.account == nil || c.compliance == nil || c.transaction == nil || c.webhookReplay == nil {
+	if c.account == nil || c.compliance == nil || c.coin == nil || c.transaction == nil || c.webhookReplay == nil {
 		t.Fatal("expected all SDK API clients to be wired")
 	}
 	if c.webhookConv == nil {
