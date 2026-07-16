@@ -30,7 +30,7 @@ import (
 )
 
 var version = "dev"
-var artifactMigrationCeiling = "052"
+var artifactMigrationCeiling = "053"
 
 const controlledCommitOutcomeIndeterminateExitCode = 75
 

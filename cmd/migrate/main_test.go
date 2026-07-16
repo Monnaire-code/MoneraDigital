@@ -11,12 +11,12 @@ import (
 	"monera-digital/internal/migration"
 )
 
-func TestMigrationAArtifactCeilingIs052(t *testing.T) {
+func TestMigrationBArtifactCeilingIs053(t *testing.T) {
 	t.Parallel()
 	migrator := migration.NewMigrator(nil)
 	registerMigrations(migrator)
-	if got := migrator.Ceiling(); got != "052" {
-		t.Fatalf("registered migration ceiling = %q, want 052", got)
+	if got := migrator.Ceiling(); got != "053" {
+		t.Fatalf("registered migration ceiling = %q, want 053", got)
 	}
 }
 
@@ -40,8 +40,8 @@ func TestArtifactMigrationCeilingControlsRegistrationAndCannotBeRuntimeExpanded(
 	if err := registerMigrationsForArtifact(migration.NewMigrator(nil), "051"); err == nil {
 		t.Fatal("unsupported artifact migration ceiling accepted")
 	}
-	if artifactMigrationCeiling != "052" {
-		t.Fatalf("current checkpoint A tree compiled ceiling = %q", artifactMigrationCeiling)
+	if artifactMigrationCeiling != "053" {
+		t.Fatalf("current checkpoint B tree compiled ceiling = %q", artifactMigrationCeiling)
 	}
 }
 
