@@ -74,3 +74,32 @@ func TestAppendRateSnapshot_CurrentBTCCrossUsesProviderTimeForRawLegs(t *testing
 	}
 	assertCompanyFundMockExpectations(t, mock)
 }
+
+func TestCurrentRateSnapshotInputsNormalizePostgresTimestampPrecision(t *testing.T) {
+	providerUpdatedAt := time.Date(2026, time.July, 16, 7, 16, 42, 123456789, time.UTC)
+	fetchedAt := time.Date(2026, time.July, 16, 7, 16, 43, 987654321, time.UTC)
+	quote := CoinGeckoQuote{
+		Price:             decimal.RequireFromString("0.147738856796726142"),
+		ProviderUpdatedAt: providerUpdatedAt,
+		FetchedAt:         fetchedAt,
+		ResponseDigest:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Method:            USDValuationMethodCoinGeckoBTCCross,
+	}
+	key := CoinGeckoQuoteCacheKey{
+		Provider: rateSnapshotCoinGeckoProvider, AssetIdentityKey: "3:CNY0:0:0:", FiatCode: "CNY", QuoteCurrency: "USD",
+	}
+
+	for _, input := range []RateSnapshotInput{
+		currentRateSnapshotInput(key, currentRateSnapshotMapping{BaseCurrency: "CNY"}, quote, "current-usd-v1"),
+		currentRateBTCLegSnapshotInput("USD", decimal.RequireFromString("64671.59609988316"), quote, "current-usd-v1"),
+	} {
+		if input.EffectiveAt == nil || !input.EffectiveAt.Equal(providerUpdatedAt.Truncate(time.Microsecond)) {
+			t.Fatalf("effective time = %v, want PostgreSQL microsecond precision", input.EffectiveAt)
+		}
+		if !input.BucketStart.Equal(fetchedAt.Truncate(time.Microsecond)) ||
+			!input.AvailableAt.Equal(fetchedAt.Truncate(time.Microsecond)) ||
+			!input.FetchedAt.Equal(fetchedAt.Truncate(time.Microsecond)) {
+			t.Fatalf("persisted current-rate times were not normalized: %#v", input)
+		}
+	}
+}

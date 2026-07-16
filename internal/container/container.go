@@ -164,6 +164,7 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 		depRepo := deposit.NewRepository(c.DB)
 		c.DepositEventRepo = depRepo
 		c.DepositPipeline = deposit.NewService(depRepo, registry, c.AlertService.Send)
+		wireDepositCompanyFundRouting(c)
 		c.DepositPipeline.SetKYTDeps(client, kytEnabled, kytOrphanMaxRetry, kytTimeout)
 		amlFirstPollDelay := viper.GetDuration("AML_FIRST_POLL_DELAY")
 		if amlFirstPollDelay <= 0 || amlFirstPollDelay >= kytTimeout {

@@ -232,4 +232,17 @@ func TestHistoricalAndBTCCrossInvalidPaths(t *testing.T) {
 	}
 }
 
+func TestDecimalDivideBank_MatchesStageBTCCrossPrecision(t *testing.T) {
+	numerator := decimal.RequireFromString("64671.596099883160000000")
+	denominator := decimal.RequireFromString("437742.632521279040000000")
+
+	actual, err := decimalDivideBank(numerator, denominator)
+	if err != nil {
+		t.Fatalf("decimalDivideBank() error = %v", err)
+	}
+	if expected := decimal.RequireFromString("0.147738856796726142"); !actual.Equal(expected) {
+		t.Fatalf("decimalDivideBank() = %s, want %s", actual, expected)
+	}
+}
+
 func lifecycleStatusPointer(value LifecycleStatus) *LifecycleStatus { return &value }

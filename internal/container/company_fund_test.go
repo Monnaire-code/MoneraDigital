@@ -14,6 +14,7 @@ import (
 	"monera-digital/internal/handlers"
 	"monera-digital/internal/middleware"
 	"monera-digital/internal/safeheron"
+	"monera-digital/internal/wallet/deposit"
 )
 
 type companyFundEventWriterStub struct{}
@@ -37,6 +38,19 @@ func TestCompanyFundCurrentRateDefaultsMatchDemoRefreshBudget(t *testing.T) {
 	require.Equal(t, 5*time.Minute, defaultCompanyFundCurrentRateRefreshInterval)
 	require.Equal(t, 10*time.Minute, defaultCompanyFundCurrentRateCacheTTL)
 	require.Equal(t, 60*time.Minute, defaultCompanyFundCurrentRateCacheMaxAge)
+}
+
+func TestWireDepositCompanyFundRoutingAcceptsEitherOptionOrder(t *testing.T) {
+	registry := companyfund.NewAccountRegistry(companyFundRegistryLoaderStub{}, time.Hour)
+	require.NoError(t, registry.Load(t.Context()))
+	pipeline := deposit.NewService(nil, nil, nil)
+
+	require.NotPanics(t, func() {
+		wireDepositCompanyFundRouting(nil)
+		wireDepositCompanyFundRouting(&Container{DepositPipeline: pipeline})
+		wireDepositCompanyFundRouting(&Container{CompanyFundAccountRegistry: registry})
+		wireDepositCompanyFundRouting(&Container{DepositPipeline: pipeline, CompanyFundAccountRegistry: registry})
+	})
 }
 
 func TestNewCompanyFundCurrentValuationRuntime_ParsesDefaultMappingsBeforeWiring(t *testing.T) {

@@ -190,6 +190,8 @@ type AccountRegistrySnapshot struct {
 	loadedAt                     time.Time
 	accountsByID                 map[int64]CompanyFundAccount
 	safeheronByAddress           map[string]CompanyFundAccount
+	safeheronEVMAddresses        map[string]struct{}
+	safeheronExactAddresses      map[string]struct{}
 	safeheronProviderAccountKeys map[string]struct{}
 	safeheronByProviderKey       map[string][]CompanyFundAccount
 	airwallexByAccountKey        map[string]CompanyFundAccount
@@ -201,6 +203,8 @@ func newEmptyAccountRegistrySnapshot(loadedAt time.Time) *AccountRegistrySnapsho
 		loadedAt:                     loadedAt,
 		accountsByID:                 make(map[int64]CompanyFundAccount),
 		safeheronByAddress:           make(map[string]CompanyFundAccount),
+		safeheronEVMAddresses:        make(map[string]struct{}),
+		safeheronExactAddresses:      make(map[string]struct{}),
 		safeheronProviderAccountKeys: make(map[string]struct{}),
 		safeheronByProviderKey:       make(map[string][]CompanyFundAccount),
 		airwallexByAccountKey:        make(map[string]CompanyFundAccount),
@@ -244,6 +248,24 @@ func (s *AccountRegistrySnapshot) LookupSafeheron(networkFamily, address string)
 	}
 	account, ok := s.safeheronByAddress[safeheronAddressKey(networkFamily, address)]
 	return account, ok
+}
+
+// IsCompanyFundDestination recognizes enabled Safeheron wallet addresses when
+// the legacy deposit payload does not provide a reliable network-family hint.
+// EVM addresses are case-insensitive; other families preserve exact casing.
+func (s *AccountRegistrySnapshot) IsCompanyFundDestination(address string) bool {
+	if s == nil {
+		return false
+	}
+	trimmed := strings.TrimSpace(address)
+	if trimmed == "" {
+		return false
+	}
+	if _, ok := s.safeheronExactAddresses[trimmed]; ok {
+		return true
+	}
+	_, ok := s.safeheronEVMAddresses[strings.ToLower(trimmed)]
+	return ok
 }
 
 // HasSafeheronProviderAccountKey is an exact, case-sensitive membership
@@ -404,6 +426,10 @@ func (r *AccountRegistry) Status() AccountRegistryStatus {
 
 func (r *AccountRegistry) LookupSafeheron(networkFamily, address string) (CompanyFundAccount, bool) {
 	return r.Snapshot().LookupSafeheron(networkFamily, address)
+}
+
+func (r *AccountRegistry) IsCompanyFundDestination(address string) bool {
+	return r.Snapshot().IsCompanyFundDestination(address)
 }
 
 func (r *AccountRegistry) HasSafeheronProviderAccountKey(providerAccountKey string) bool {
@@ -568,6 +594,11 @@ func buildAccountRegistrySnapshot(accounts []CompanyFundAccount, policies []Acco
 				return nil, fmt.Errorf("duplicate enabled Safeheron account identity %q", key)
 			}
 			snapshot.safeheronByAddress[key] = account
+			if normalizeNetworkFamily(account.NetworkFamily) == "EVM" {
+				snapshot.safeheronEVMAddresses[normalizeSafeheronAddress("EVM", address)] = struct{}{}
+			} else {
+				snapshot.safeheronExactAddresses[normalizeSafeheronAddress(account.NetworkFamily, address)] = struct{}{}
+			}
 			providerAccountKey := strings.TrimSpace(account.ProviderAccountKey)
 			if providerAccountKey != "" {
 				if providerAccountKey != account.ProviderAccountKey {

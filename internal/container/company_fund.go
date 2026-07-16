@@ -235,6 +235,7 @@ func withCompanyFund(ctx context.Context, config companyFundRuntimeConfig) Conta
 
 		c.CompanyFundRepository = repository
 		c.CompanyFundAccountRegistry = registry
+		wireDepositCompanyFundRouting(c)
 		c.CompanyFundOwnedPayloadService = payloadService
 		c.CompanyFundFinanceHandler = financeHandler
 		c.companyFundRuntimeConfig = config
@@ -244,6 +245,13 @@ func withCompanyFund(ctx context.Context, config companyFundRuntimeConfig) Conta
 		log.Printf("company-fund core enabled: account_refresh_interval=%s finance_management=%t",
 			registry.RefreshInterval(), financeHandler != nil)
 	}
+}
+
+func wireDepositCompanyFundRouting(c *Container) {
+	if c == nil || c.DepositPipeline == nil || c.CompanyFundAccountRegistry == nil {
+		return
+	}
+	c.DepositPipeline.SetCompanyFundDestinationMatcher(c.CompanyFundAccountRegistry)
 }
 
 // finalizeCompanyFundRuntime runs only after NewContainer has applied every

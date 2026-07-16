@@ -129,8 +129,8 @@ func currentRateSnapshotInput(
 	quote CoinGeckoQuote,
 	policyVersion string,
 ) RateSnapshotInput {
-	effectiveAt := quote.ProviderUpdatedAt.UTC()
-	fetchedAt := quote.FetchedAt.UTC()
+	effectiveAt := currentRateSnapshotTimestamp(quote.ProviderUpdatedAt)
+	fetchedAt := currentRateSnapshotTimestamp(quote.FetchedAt)
 	return RateSnapshotInput{
 		Provider: key.Provider, AssetIdentityKey: key.AssetIdentityKey,
 		ProviderAssetID: currentRateProviderAssetID(key), ProviderPlatformID: key.PlatformID,
@@ -150,8 +150,8 @@ func currentRateBTCLegSnapshotInput(
 	quote CoinGeckoQuote,
 	policyVersion string,
 ) RateSnapshotInput {
-	effectiveAt := quote.ProviderUpdatedAt.UTC()
-	fetchedAt := quote.FetchedAt.UTC()
+	effectiveAt := currentRateSnapshotTimestamp(quote.ProviderUpdatedAt)
+	fetchedAt := currentRateSnapshotTimestamp(quote.FetchedAt)
 	bitcoinIdentity := normalizeAssetIdentity(AssetIdentity{Currency: "BTC", ProviderAssetKey: rateSnapshotBTCProviderAssetID}).canonicalKey()
 	return RateSnapshotInput{
 		Provider: rateSnapshotCoinGeckoProvider, AssetIdentityKey: bitcoinIdentity,
@@ -163,6 +163,12 @@ func currentRateBTCLegSnapshotInput(
 		ProviderRevision: effectiveAt.Format(time.RFC3339Nano), SourcePayloadDigest: quote.ResponseDigest,
 		IsFinal: false, PriceKind: MarketPriceKindCurrent,
 	}
+}
+
+// PostgreSQL stores timestamptz values at microsecond precision. Normalizing
+// before persisting keeps derived inputs equal to their database-read legs.
+func currentRateSnapshotTimestamp(value time.Time) time.Time {
+	return value.UTC().Truncate(time.Microsecond)
 }
 
 func currentRateProviderAssetID(key CoinGeckoQuoteCacheKey) string {

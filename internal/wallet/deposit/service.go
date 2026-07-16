@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -33,12 +34,21 @@ type ChainsRegistry interface {
 	GetCoinChainBySafeheronKey(key string) (*walletconfig.CoinChain, bool)
 }
 
+// CompanyFundDestinationMatcher identifies destinations owned by the company
+// treasury. Those events belong exclusively to the company-fund pipeline and
+// must never enter the legacy customer-deposit review flow.
+type CompanyFundDestinationMatcher interface {
+	IsCompanyFundDestination(address string) bool
+}
+
 // Service runs the SPEC §6.4 + §6.5 state machine.
 type Service struct {
-	repo     Repository
-	registry ChainsRegistry
-	alertFn  AlertFunc
-	serialFn SerialNoFunc
+	repo                          Repository
+	registry                      ChainsRegistry
+	matcherMu                     sync.RWMutex
+	companyFundDestinationMatcher CompanyFundDestinationMatcher
+	alertFn                       AlertFunc
+	serialFn                      SerialNoFunc
 	// KYT fields (v1.5 T10)
 	kytEnabled        bool
 	safeheronClient   KYTClient
@@ -64,6 +74,21 @@ func (s *Service) SetSerialFunc(fn SerialNoFunc) {
 	if fn != nil {
 		s.serialFn = fn
 	}
+}
+
+// SetCompanyFundDestinationMatcher routes company-owned destinations away
+// from the customer-deposit state machine before coin and user resolution.
+func (s *Service) SetCompanyFundDestinationMatcher(matcher CompanyFundDestinationMatcher) {
+	s.matcherMu.Lock()
+	defer s.matcherMu.Unlock()
+	s.companyFundDestinationMatcher = matcher
+}
+
+func (s *Service) isCompanyFundDestination(address string) bool {
+	s.matcherMu.RLock()
+	matcher := s.companyFundDestinationMatcher
+	s.matcherMu.RUnlock()
+	return matcher != nil && matcher.IsCompanyFundDestination(address)
 }
 
 // SetKYTDeps injects KYT dependencies (called by container after NewService, before Worker.Run).
@@ -180,6 +205,17 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		}
 		tx1Closed = true
 		log.Printf("deposit worker: skipping direction=%s eventID=%s", d.TransactionDirection, evt.EventID)
+		return true, nil
+	}
+	if s.isCompanyFundDestination(d.DestinationAddress) {
+		if err := s.repo.MarkEventDone(ctx, tx1, evt.ID); err != nil {
+			return true, fmt.Errorf("mark company-fund event done: %w", err)
+		}
+		if err := tx1.Commit(); err != nil {
+			return true, fmt.Errorf("commit company-fund event routing: %w", err)
+		}
+		tx1Closed = true
+		log.Printf("deposit worker: routed company-fund destination eventID=%s", evt.EventID)
 		return true, nil
 	}
 

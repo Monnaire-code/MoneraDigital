@@ -15,6 +15,9 @@ func TestAccountRegistry_ConvenienceSurfacesAndNilFallbacks(t *testing.T) {
 	if _, found := nilSnapshot.LookupSafeheron("EVM", "0xabc"); found {
 		t.Fatal("nil snapshot must not resolve Safeheron accounts")
 	}
+	if nilSnapshot.IsCompanyFundDestination("0xabc") {
+		t.Fatal("nil snapshot must not resolve company-fund destinations")
+	}
 	if _, found := nilSnapshot.LookupAirwallex("awx-main"); found {
 		t.Fatal("nil snapshot must not resolve Airwallex accounts")
 	}
@@ -35,6 +38,9 @@ func TestAccountRegistry_ConvenienceSurfacesAndNilFallbacks(t *testing.T) {
 	if _, found := nilRegistry.LookupAssetPolicyFields(1, "USDT", "", "", ""); found {
 		t.Fatal("nil registry must not resolve asset policies")
 	}
+	if nilRegistry.IsCompanyFundDestination("0xabc") {
+		t.Fatal("nil registry must not resolve company-fund destinations")
+	}
 	nilRegistry.Start(nil)
 	nilRegistry.Stop()
 
@@ -46,6 +52,9 @@ func TestAccountRegistry_ConvenienceSurfacesAndNilFallbacks(t *testing.T) {
 	}
 	if registry.Snapshot().LoadedAt().IsZero() {
 		t.Fatal("successful Load alias must publish a timestamped snapshot")
+	}
+	if registry.IsCompanyFundDestination("   ") {
+		t.Fatal("blank address must not resolve a company-fund destination")
 	}
 	policy, found := registry.LookupAssetPolicyFields(1, "usdt", "ethereum", "USDT_ERC20", "0xDac17F958D2ee523a2206206994597C13D831ec7")
 	if !found || policy.ID != 12 {

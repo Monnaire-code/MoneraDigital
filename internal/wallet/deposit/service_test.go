@@ -711,6 +711,71 @@ func TestProcessOne_AddressUnassigned_FlagsManualReview(t *testing.T) {
 	}
 }
 
+type companyFundDestinationMatcherStub map[string]bool
+
+func (stub companyFundDestinationMatcherStub) IsCompanyFundDestination(address string) bool {
+	return stub[strings.ToLower(strings.TrimSpace(address))]
+}
+
+func TestProcessOne_CompanyFundDestination_SkipsLegacyDepositReview(t *testing.T) {
+	for _, coinKey := range []string{"USDT_BEP20", testUnknownCoinKey64} {
+		t.Run(coinKey, func(t *testing.T) {
+			repo := newMockRepo()
+			reg := newTestRegistry("USDT", "BINANCE_SMART_CHAIN", "USDT_BEP20", "0.0001", 11)
+			alertFn, alerts := newAlertCollector()
+			svc := newSvc(t, repo, reg, alertFn)
+			svc.SetCompanyFundDestinationMatcher(companyFundDestinationMatcherStub{
+				"0x4b55422a3c2df278433bfd53cce029c8e6ce652e": true,
+			})
+
+			enqueueRaw(t, repo, PayloadEnvelope{
+				EventType: "TRANSACTION_CREATED",
+				EventDetail: PayloadEventDetail{
+					TxKey:                "company-fund-tx",
+					CoinKey:              coinKey,
+					TxAmount:             "0.011",
+					TransactionStatus:    "COMPLETED",
+					TransactionSubStatus: "CONFIRMED",
+					TransactionDirection: "INFLOW",
+					DestinationAddress:   "0x4B55422A3c2DF278433Bfd53CcE029C8E6cE652E",
+				},
+			})
+
+			processed, err := svc.ProcessOne(context.Background())
+			if err != nil || !processed {
+				t.Fatalf("ProcessOne() = %v, %v; want company-fund event finalized", processed, err)
+			}
+			if len(repo.deposits) != 0 || len(repo.manualUpdates) != 0 || len(*alerts) != 0 {
+				t.Fatalf("company-fund destination reached legacy deposit review: deposits=%v manual=%v alerts=%v", repo.deposits, repo.manualUpdates, *alerts)
+			}
+			if len(repo.doneIDs) != 1 || repo.doneIDs[0] != 1 {
+				t.Fatalf("company-fund raw event finalization = %v, want DONE once", repo.doneIDs)
+			}
+		})
+	}
+}
+
+func TestCompanyFundDestinationMatcherCanBeWiredWhileWorkerReads(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+	matcher := companyFundDestinationMatcherStub{"0xcompany": true}
+	var wait sync.WaitGroup
+	for range 10 {
+		wait.Add(2)
+		go func() {
+			defer wait.Done()
+			svc.SetCompanyFundDestinationMatcher(matcher)
+		}()
+		go func() {
+			defer wait.Done()
+			_ = svc.isCompanyFundDestination("0xcompany")
+		}()
+	}
+	wait.Wait()
+	if !svc.isCompanyFundDestination("0xcompany") {
+		t.Fatal("latest matcher must remain visible after concurrent wiring")
+	}
+}
+
 func TestProcessOne_CoinUnsupported_FlagsManualReview(t *testing.T) {
 	if got := len(testUnknownCoinKey64); got != 64 {
 		t.Fatalf("test fixture CoinKey length = %d, want 64", got)

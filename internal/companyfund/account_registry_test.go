@@ -31,8 +31,14 @@ func TestAccountRegistry_RefreshLoadsOnlyEnabledAccountsAndPolicies(t *testing.T
 	if account, ok := registry.LookupSafeheron("EVM", "0xABCD"); !ok || account.ID != 1 {
 		t.Fatalf("LookupSafeheron EVM normalization = %#v, %v", account, ok)
 	}
+	if !registry.IsCompanyFundDestination("0xABCD") {
+		t.Fatal("enabled Safeheron wallet must be recognized as a company-fund destination without a network hint")
+	}
 	if _, ok := registry.LookupSafeheron("EVM", "0xdead"); ok {
 		t.Fatal("disabled Safeheron account must not be loaded")
+	}
+	if registry.IsCompanyFundDestination("0xdead") {
+		t.Fatal("disabled Safeheron wallet must not be recognized as a company-fund destination")
 	}
 	if account, ok := registry.LookupAirwallex("awx-main"); !ok || account.ID != 2 {
 		t.Fatalf("LookupAirwallex = %#v, %v", account, ok)
@@ -65,8 +71,14 @@ func TestAccountRegistry_SafeheronPreservesCaseSensitiveAddresses(t *testing.T) 
 	if account, ok := registry.LookupSafeheron("TRON", "TAbC123"); !ok || account.ID != 3 {
 		t.Fatalf("case-sensitive lookup = %#v, %v", account, ok)
 	}
+	if !registry.IsCompanyFundDestination("TAbC123") {
+		t.Fatal("enabled case-sensitive Safeheron wallet must be recognized")
+	}
 	if _, ok := registry.LookupSafeheron("TRON", "tabc123"); ok {
 		t.Fatal("non-EVM case-sensitive address must not be lowercased")
+	}
+	if registry.IsCompanyFundDestination("tabc123") {
+		t.Fatal("case-sensitive company-fund destination matching must preserve case")
 	}
 }
 
