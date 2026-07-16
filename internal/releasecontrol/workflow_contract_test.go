@@ -22,7 +22,7 @@ func TestStageWorkflowStructure(t *testing.T) {
 	assertScalarSequence(t, mappingValue(t, push, "branches"), []string{"stage"})
 	dispatch := mappingValue(t, on, "workflow_dispatch")
 	inputs := mappingValue(t, dispatch, "inputs")
-	assertMappingKeys(t, inputs, []string{"artifact_ref", "expected_migration_ceiling", "mode", "run_id"})
+	assertMappingKeys(t, inputs, []string{"artifact_ref", "expected_migration_ceiling", "installed_server_sha", "mode", "run_id"})
 	mode := mappingValue(t, inputs, "mode")
 	assertScalarSequence(t, mappingValue(t, mode, "options"), []string{
 		"migration-only", "workers-off-current", "server-dark", "workers-on-installed", "standard",
@@ -32,7 +32,7 @@ func TestStageWorkflowStructure(t *testing.T) {
 	assertMappingKeys(t, jobs, []string{"control-preflight", "deploy-stage"})
 	control := mappingValue(t, jobs, "control-preflight")
 	assertMappingKeys(t, mappingValue(t, control, "outputs"), []string{
-		"artifact_ref", "baseline_digest", "control_token", "expected_migration_ceiling", "mode", "run_id",
+		"artifact_ref", "baseline_digest", "control_token", "expected_migration_ceiling", "installed_server_sha", "mode", "run_id",
 	})
 	if mappingValueOptional(control, "environment") != nil {
 		t.Fatal("control-preflight must not declare an environment")
@@ -40,7 +40,7 @@ func TestStageWorkflowStructure(t *testing.T) {
 	assertControlHasNoSideEffects(t, mappingValue(t, control, "steps"))
 	_, controlStep := namedStep(t, mappingValue(t, control, "steps"), "Validate event, ref, inputs, and repository lock")
 	controlScript := scalarValue(t, mappingValue(t, controlStep, "run"))
-	for _, required := range []string{"repository control token must be run_id@64hex", "baseline_digest=", "control_token="} {
+	for _, required := range []string{"repository control token must be run_id@64hex", "workers-off-current requires installed_server_sha", "baseline_digest=", "control_token=", "installed_server_sha="} {
 		if !strings.Contains(controlScript, required) {
 			t.Errorf("control-preflight missing %q", required)
 		}

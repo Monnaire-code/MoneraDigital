@@ -46,7 +46,7 @@ func ParseWorkflowContract(data []byte) (WorkflowContract, error) {
 	if err != nil {
 		return WorkflowContract{}, err
 	}
-	if err := requireWorkflowMappingKeys(inputs, []string{"artifact_ref", "expected_migration_ceiling", "mode", "run_id"}); err != nil {
+	if err := requireWorkflowMappingKeys(inputs, []string{"artifact_ref", "expected_migration_ceiling", "installed_server_sha", "mode", "run_id"}); err != nil {
 		return WorkflowContract{}, fmt.Errorf("workflow_dispatch inputs: %w", err)
 	}
 	mode := workflowMappingValueOptional(inputs, "mode")
@@ -62,6 +62,7 @@ func ParseWorkflowContract(data []byte) (WorkflowContract, error) {
 		{"mode", "true", "choice"},
 		{"artifact_ref", "true", "string"},
 		{"run_id", "true", "string"},
+		{"installed_server_sha", "false", "string"},
 		{"expected_migration_ceiling", "false", "string"},
 	} {
 		definition := workflowMappingValueOptional(inputs, input.name)

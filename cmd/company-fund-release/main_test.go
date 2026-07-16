@@ -110,6 +110,7 @@ on:
       mode: {required: true, type: choice, options: [migration-only, workers-off-current, server-dark, workers-on-installed, standard]}
       artifact_ref: {required: true, type: string}
       run_id: {required: true, type: string}
+      installed_server_sha: {required: false, type: string}
       expected_migration_ceiling: {required: false, type: string}
 jobs:
   control-preflight:

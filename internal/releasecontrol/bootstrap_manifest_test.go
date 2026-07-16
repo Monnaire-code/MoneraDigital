@@ -228,6 +228,9 @@ on:
       run_id:
         required: true
         type: string
+      installed_server_sha:
+        required: false
+        type: string
       expected_migration_ceiling:
         required: false
         type: string

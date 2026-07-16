@@ -7,6 +7,7 @@ ENV="test"
 PORT=""
 RELEASE_MODE="standard"
 ARTIFACT_SHA=""
+INSTALLED_SERVER_SHA=""
 EXPECTED_MIGRATION_CEILING=""
 VERCEL_TOKEN="${VERCEL_TOKEN:-}"
 VERCEL_ORG="${VERCEL_ORG:-team_CrV6muN0s3QNDJ3vrabttjLR}"
@@ -20,6 +21,7 @@ while [[ $# -gt 0 ]]; do
         --port) PORT="$2"; shift 2 ;;
         --release-mode) RELEASE_MODE="$2"; shift 2 ;;
         --artifact-sha) ARTIFACT_SHA="$2"; shift 2 ;;
+        --installed-server-sha) INSTALLED_SERVER_SHA="$2"; shift 2 ;;
         --expected-migration-ceiling) EXPECTED_MIGRATION_CEILING="$2"; shift 2 ;;
         --frontend) MODE="frontend"; shift ;;
         --token) VERCEL_TOKEN="$2"; shift 2 ;;
@@ -49,6 +51,12 @@ validate_release_input() {
     [[ "$ENV" == "test" ]] || { echo "ERROR: backend supports only --env test" >&2; return 1; }
     [[ "$RELEASE_MODE" =~ ^(migration-only|workers-off-current|server-dark|workers-on-installed|standard)$ ]] || { echo "ERROR: invalid release mode" >&2; return 1; }
     [[ "$ARTIFACT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: artifact SHA must be 40 lowercase hexadecimal characters" >&2; return 1; }
+    if [[ -n "$INSTALLED_SERVER_SHA" ]]; then
+        [[ "$RELEASE_MODE" == "workers-off-current" && "$INSTALLED_SERVER_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "ERROR: installed server SHA is valid only for workers-off-current and must be 40 lowercase hexadecimal characters" >&2
+            return 1
+        }
+    fi
     if [[ "$RELEASE_MODE" == "migration-only" ]]; then
         [[ "$EXPECTED_MIGRATION_CEILING" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo "ERROR: migration-only requires an expected ceiling" >&2; return 1; }
     fi
@@ -122,14 +130,15 @@ installed_sha() {
 }
 
 verify_installed_sha() {
+    local expected_sha="${INSTALLED_SERVER_SHA:-$ARTIFACT_SHA}"
     trace "verify-installed-sha"
     if [[ -f "$MANIFEST_FILE" ]]; then
-        [[ "$(installed_sha)" == "$ARTIFACT_SHA" ]] || { echo "ERROR: installed server SHA does not match artifact SHA" >&2; return 1; }
+        [[ "$(installed_sha)" == "$expected_sha" ]] || { echo "ERROR: installed server SHA does not match approved current SHA" >&2; return 1; }
         return 0
     fi
     [[ "$RELEASE_MODE" == "workers-off-current" ]] || { echo "ERROR: release manifest is missing" >&2; return 1; }
     trace "verify-legacy-embedded-sha"
-    if [[ ! -f "$APP_DIR/monera-server" ]] || ! grep -aFq "$ARTIFACT_SHA" "$APP_DIR/monera-server"; then
+    if [[ ! -f "$APP_DIR/monera-server" ]] || ! grep -aFq "$expected_sha" "$APP_DIR/monera-server"; then
         echo "ERROR: legacy installed server does not contain the approved artifact SHA" >&2
         return 1
     fi

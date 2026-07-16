@@ -25,6 +25,10 @@ on:
         description: Cutover run id matching the configured lock
         required: true
         type: string
+      installed_server_sha:
+        description: Exact currently installed SHA; required only for workers-off-current
+        required: false
+        type: string
       expected_migration_ceiling:
         description: Required for migration-only; ignored by other modes
         required: false
@@ -46,6 +50,7 @@ jobs:
       mode: ${{ steps.control.outputs.mode }}
       artifact_ref: ${{ steps.control.outputs.artifact_ref }}
       run_id: ${{ steps.control.outputs.run_id }}
+      installed_server_sha: ${{ steps.control.outputs.installed_server_sha }}
       expected_migration_ceiling: ${{ steps.control.outputs.expected_migration_ceiling }}
       control_token: ${{ steps.control.outputs.control_token }}
       baseline_digest: ${{ steps.control.outputs.baseline_digest }}
@@ -60,6 +65,7 @@ jobs:
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_ARTIFACT_REF: ${{ inputs.artifact_ref }}
           INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_INSTALLED_SERVER_SHA: ${{ inputs.installed_server_sha }}
           INPUT_MIGRATION_CEILING: ${{ inputs.expected_migration_ceiling }}
           CONTROL_LOCK: ${{ vars.COMPANY_FUND_STAGE_CUTOVER_LOCK_CONTROL }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -72,6 +78,7 @@ jobs:
             mode="standard"
             artifact_ref="$EVENT_SHA"
             run_id="push-${GITHUB_RUN_ID}"
+            installed_server_sha=""
             migration_ceiling=""
             control_token=""
             baseline_digest=""
@@ -79,6 +86,7 @@ jobs:
             mode="$INPUT_MODE"
             artifact_ref="$INPUT_ARTIFACT_REF"
             run_id="$INPUT_RUN_ID"
+            installed_server_sha="$INPUT_INSTALLED_SERVER_SHA"
             migration_ceiling="$INPUT_MIGRATION_CEILING"
             [[ "$mode" =~ ^(migration-only|workers-off-current|server-dark|workers-on-installed|standard)$ ]] || { echo "ERROR: invalid mode"; exit 1; }
             [[ "$artifact_ref" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: artifact_ref must be a full lowercase SHA"; exit 1; }
@@ -89,6 +97,11 @@ jobs:
             baseline_digest="${BASH_REMATCH[2]}"
             if [[ "$mode" == "migration-only" ]]; then
               [[ "$migration_ceiling" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo "ERROR: migration-only requires a ceiling"; exit 1; }
+            fi
+            if [[ "$mode" == "workers-off-current" ]]; then
+              [[ "$installed_server_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: workers-off-current requires installed_server_sha"; exit 1; }
+            else
+              [[ -z "$installed_server_sha" ]] || { echo "ERROR: installed_server_sha is valid only for workers-off-current"; exit 1; }
             fi
 
             stage_head="$EVENT_SHA"
@@ -114,6 +127,7 @@ jobs:
             echo "mode=$mode"
             echo "artifact_ref=$artifact_ref"
             echo "run_id=$run_id"
+            echo "installed_server_sha=$installed_server_sha"
             echo "expected_migration_ceiling=$migration_ceiling"
             echo "control_token=$control_token"
             echo "baseline_digest=$baseline_digest"
@@ -130,6 +144,7 @@ jobs:
       RELEASE_MODE: ${{ needs.control-preflight.outputs.mode }}
       ARTIFACT_REF: ${{ needs.control-preflight.outputs.artifact_ref }}
       RELEASE_RUN_ID: ${{ needs.control-preflight.outputs.run_id }}
+      INSTALLED_SERVER_SHA: ${{ needs.control-preflight.outputs.installed_server_sha }}
       EXPECTED_MIGRATION_CEILING: ${{ needs.control-preflight.outputs.expected_migration_ceiling }}
 
     steps:
@@ -250,6 +265,7 @@ jobs:
         env:
           RELEASE_MODE: ${{ env.RELEASE_MODE }}
           ARTIFACT_REF: ${{ env.ARTIFACT_REF }}
+          INSTALLED_SERVER_SHA: ${{ env.INSTALLED_SERVER_SHA }}
           EXPECTED_MIGRATION_CEILING: ${{ env.EXPECTED_MIGRATION_CEILING }}
           DEPLOY_ROOT: /tmp/monera-stage-deploy-${{ github.run_id }}-${{ github.run_attempt }}
         with:
@@ -257,7 +273,7 @@ jobs:
           username: ${{ secrets.STAGE_USER }}
           key: ${{ secrets.STAGE_SSH_KEY }}
           command_timeout: 20m
-          envs: RELEASE_MODE,ARTIFACT_REF,EXPECTED_MIGRATION_CEILING,DEPLOY_ROOT
+          envs: RELEASE_MODE,ARTIFACT_REF,INSTALLED_SERVER_SHA,EXPECTED_MIGRATION_CEILING,DEPLOY_ROOT
           script: |
             set -euo pipefail
             APP_DIR=/opt/monera-digital
@@ -283,6 +299,13 @@ jobs:
                 exit 1
                 ;;
             esac
-            MONERA_DEPLOY_SRC="$DEPLOY_SRC" bash "$runner" --env test \
-              --release-mode "$RELEASE_MODE" --artifact-sha "$ARTIFACT_REF" \
+            release_args=(
+              --env test
+              --release-mode "$RELEASE_MODE"
+              --artifact-sha "$ARTIFACT_REF"
               --expected-migration-ceiling "$EXPECTED_MIGRATION_CEILING"
+            )
+            if [[ -n "$INSTALLED_SERVER_SHA" ]]; then
+              release_args+=(--installed-server-sha "$INSTALLED_SERVER_SHA")
+            fi
+            MONERA_DEPLOY_SRC="$DEPLOY_SRC" bash "$runner" "${release_args[@]}"

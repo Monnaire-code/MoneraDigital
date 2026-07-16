@@ -168,6 +168,7 @@ runner left by an interrupted or stale deployment.
 - `mode`
 - `artifact_ref`
 - `run_id`
+- `installed_server_sha` (required only by `workers-off-current`)
 - `expected_migration_ceiling` (required only by `migration-only`)
 
 Manual dispatch remains disabled until an operator deliberately sets matching

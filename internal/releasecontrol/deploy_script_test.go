@@ -133,6 +133,7 @@ func TestDeployRemoteWorkersOffAcceptsLegacyEmbeddedSHAWithoutManifest(t *testin
 	t.Parallel()
 	root := repositoryRoot(t)
 	sha := "0123456789abcdef0123456789abcdef01234567"
+	packageSHA := "89abcdef0123456789abcdef0123456789abcdef"
 	tmp := t.TempDir()
 	appDir := filepath.Join(tmp, "app")
 	tracePath := filepath.Join(tmp, "trace")
@@ -145,7 +146,7 @@ func TestDeployRemoteWorkersOffAcceptsLegacyEmbeddedSHAWithoutManifest(t *testin
 	if err := os.WriteFile(filepath.Join(appDir, "monera-server"), []byte("legacy-binary-version="+sha+"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", filepath.Join(root, "scripts", "deploy-remote.sh"), "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", sha)
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "deploy-remote.sh"), "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", packageSHA, "--installed-server-sha", sha)
 	cmd.Env = append(os.Environ(),
 		"MONERA_DEPLOY_FAKE=1",
 		"MONERA_DEPLOY_APP_DIR="+appDir,
