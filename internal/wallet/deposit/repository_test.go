@@ -10,6 +10,11 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+const (
+	testUnknownCoinKey64               = "UNKNOWN_COIN_KEY_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijk"
+	testLegacyUnsupportedChainIdentity = "UNSUPPORTED"
+)
+
 func TestInsertEventOrSkip_NewRow(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -176,6 +181,25 @@ func TestMarkEventError(t *testing.T) {
 	_ = tx.Commit()
 }
 
+func TestMarkEventErrorNoTx_OnlyFinalizesPendingEvent(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	mock.ExpectExec(`UPDATE safeheron_webhook_events(?s).*process_status = 'PENDING'`).
+		WithArgs(int64(5), "boom").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	updated, err := NewRepository(db).MarkEventErrorNoTx(context.Background(), 5, "boom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated {
+		t.Fatal("concurrent DONE owner must not be overwritten by ERROR")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMarkDepositCreditedFailedManualReview(t *testing.T) {
 	cases := []struct {
 		name string
@@ -314,6 +338,12 @@ func TestUpsertDeposit_NewRow(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO deposits").
+		WithArgs(
+			42, "sh:tk-1", "1.5", "ETH", "ETHEREUM",
+			"tk-1", "USDT_ERC20", "ETHEREUM", 11,
+			"COMPLETED", "CONFIRMED", 100,
+			int64(0), "", "PENDING", "", "",
+		).
 		WillReturnRows(sqlmock.NewRows(cols).
 			AddRow(1, 42, "tk-1", "USDT_ERC20", "1.5", "ETH", "ETHEREUM", 11,
 				"COMPLETED", "CONFIRMED", 100, 0, "", "PENDING"))
@@ -335,6 +365,93 @@ func TestUpsertDeposit_NewRow(t *testing.T) {
 		t.Errorf("expected SafeheronCoinKey to round-trip through Scan, got %q", out.SafeheronCoinKey)
 	}
 	_ = tx.Commit()
+}
+
+func TestUpsertDeposit_UnsupportedMappingUsesNullOptionalFKs(t *testing.T) {
+	if got := len(testUnknownCoinKey64); got != 64 {
+		t.Fatalf("test fixture CoinKey length = %d, want 64", got)
+	}
+
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	cols := []string{"id", "user_id", "safeheron_tx_key", "safeheron_coin_key",
+		"amount", "asset", "chain_code", "coin_chain_id", "safeheron_status",
+		"safeheron_sub_status", "status_rank", "block_height", "block_hash", "status"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("INSERT INTO deposits").
+		WithArgs(
+			0, "sh:tx-unknown", "1", "", testLegacyUnsupportedChainIdentity,
+			"tx-unknown", testUnknownCoinKey64, nil, nil,
+			"COMPLETED", "CONFIRMED", 100,
+			int64(0), "", DepositStatusManualReview, "0xfrom", "0xto",
+		).
+		WillReturnRows(sqlmock.NewRows(cols).
+			AddRow(7, 0, "tx-unknown", testUnknownCoinKey64, "1", "", "", 0,
+				"COMPLETED", "CONFIRMED", 100, 0, "", DepositStatusManualReview))
+	mock.ExpectCommit()
+
+	r := NewRepository(db)
+	tx, _ := r.BeginTx(context.Background())
+	out, err := r.UpsertDeposit(context.Background(), tx, &DepositRow{
+		SafeheronTxKey:     "tx-unknown",
+		SafeheronCoinKey:   testUnknownCoinKey64,
+		Amount:             "1",
+		SafeheronStatus:    "COMPLETED",
+		SafeheronSubStatus: "CONFIRMED",
+		StatusRank:         100,
+		Status:             DepositStatusManualReview,
+		FromAddress:        "0xfrom",
+		ToAddress:          "0xto",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.SafeheronCoinKey != testUnknownCoinKey64 || out.ChainCode != "" || out.CoinChainID != 0 {
+		t.Fatalf("unexpected unsupported evidence row: %+v", out)
+	}
+	_ = tx.Commit()
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpsertDeposit_RejectsInvalidOptionalFKMapping(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		chainCode   string
+		coinChainID int
+		status      string
+	}{
+		{name: "chain without coin chain", chainCode: "ETHEREUM", status: DepositStatusPending},
+		{name: "coin chain without chain", coinChainID: 11, status: DepositStatusPending},
+		{name: "negative coin chain id", chainCode: "ETHEREUM", coinChainID: -1, status: DepositStatusManualReview},
+		{name: "pending without either mapping", status: DepositStatusPending},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, mock, _ := sqlmock.New()
+			defer db.Close()
+			mock.ExpectBegin()
+			mock.ExpectRollback()
+
+			r := NewRepository(db)
+			tx, _ := r.BeginTx(context.Background())
+			_, err := r.UpsertDeposit(context.Background(), tx, &DepositRow{
+				SafeheronTxKey: "tx-partial",
+				Amount:         "1",
+				ChainCode:      testCase.chainCode,
+				CoinChainID:    testCase.coinChainID,
+				Status:         testCase.status,
+			})
+			if err == nil || !strings.Contains(err.Error(), "optional FK mapping") {
+				t.Fatalf("expected partial mapping rejection, got %v", err)
+			}
+			_ = tx.Rollback()
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestNullableTxHash(t *testing.T) {

@@ -106,9 +106,9 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("begin tx: %w", err)
 	}
-	committed1 := false
+	tx1Closed := false
 	defer func() {
-		if !committed1 {
+		if !tx1Closed {
 			_ = tx1.Rollback()
 		}
 	}()
@@ -129,7 +129,7 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		if cErr := tx1.Commit(); cErr != nil {
 			return true, fmt.Errorf("commit error state: %w", cErr)
 		}
-		committed1 = true
+		tx1Closed = true
 		return true, fmt.Errorf("unmarshal raw_payload: %w", err)
 	}
 
@@ -146,11 +146,11 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 			if cErr := tx1.Commit(); cErr != nil {
 				return true, fmt.Errorf("commit error state: %w", cErr)
 			}
-			committed1 = true
+			tx1Closed = true
 			return true, fmt.Errorf("unmarshal AML_KYT_ALERT: %w", err)
 		}
 		processed, pErr := s.processKYTAlert(ctx, tx1, evt, &w.EventDetail)
-		committed1 = true // processKYTAlert owns tx1 lifecycle (commit or rollback)
+		tx1Closed = true // processKYTAlert owns tx1 lifecycle (commit or rollback)
 		return processed, pErr
 
 	case "TRANSACTION_CREATED", "TRANSACTION_STATUS_CHANGED":
@@ -163,7 +163,7 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		if err := tx1.Commit(); err != nil {
 			return true, fmt.Errorf("commit: %w", err)
 		}
-		committed1 = true
+		tx1Closed = true
 		log.Printf("deposit worker: skipping eventType=%s eventID=%s", env.EventType, evt.EventID)
 		return true, nil
 	}
@@ -178,7 +178,7 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		if err := tx1.Commit(); err != nil {
 			return true, fmt.Errorf("commit: %w", err)
 		}
-		committed1 = true
+		tx1Closed = true
 		log.Printf("deposit worker: skipping direction=%s eventID=%s", d.TransactionDirection, evt.EventID)
 		return true, nil
 	}
@@ -192,10 +192,10 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		}
 	}
 	if coinChain == nil {
-		procErr, cErr := s.flagAndFinalize(ctx, tx1, evt, &d, 0, "", "", 0, ReasonCoinUnsupported, &alerts)
-		committed1 = cErr == nil
-		if cErr != nil {
-			return true, cErr
+		procErr, finalizeErr, txClosed := s.flagAndFinalize(ctx, tx1, evt, &d, 0, "", "", 0, ReasonCoinUnsupported, &alerts)
+		tx1Closed = txClosed
+		if finalizeErr != nil {
+			return true, finalizeErr
 		}
 		s.fireAlerts(alerts)
 		return true, procErr
@@ -214,10 +214,10 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		return true, fmt.Errorf("lookup address owner: %w", err)
 	}
 	if !found {
-		procErr, cErr := s.flagAndFinalize(ctx, tx1, evt, &d, 0, coinChain.ChainCode, symbol, coinChain.ID, ReasonAddressUnassigned, &alerts)
-		committed1 = cErr == nil
-		if cErr != nil {
-			return true, cErr
+		procErr, finalizeErr, txClosed := s.flagAndFinalize(ctx, tx1, evt, &d, 0, coinChain.ChainCode, symbol, coinChain.ID, ReasonAddressUnassigned, &alerts)
+		tx1Closed = txClosed
+		if finalizeErr != nil {
+			return true, finalizeErr
 		}
 		s.fireAlerts(alerts)
 		return true, procErr
@@ -229,19 +229,19 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 	}
 	minAmount, err := decimal.NewFromString(coinChain.MinDepositAmount)
 	if err != nil {
-		procErr, cErr := s.flagAndFinalize(ctx, tx1, evt, &d, userID, coinChain.ChainCode, symbol, coinChain.ID, ReasonInvalidCoinConfig, &alerts)
-		committed1 = cErr == nil
-		if cErr != nil {
-			return true, cErr
+		procErr, finalizeErr, txClosed := s.flagAndFinalize(ctx, tx1, evt, &d, userID, coinChain.ChainCode, symbol, coinChain.ID, ReasonInvalidCoinConfig, &alerts)
+		tx1Closed = txClosed
+		if finalizeErr != nil {
+			return true, finalizeErr
 		}
 		s.fireAlerts(alerts)
 		return true, procErr
 	}
 	if amount.LessThan(minAmount) {
-		procErr, cErr := s.flagAndFinalize(ctx, tx1, evt, &d, userID, coinChain.ChainCode, symbol, coinChain.ID, ReasonBelowMinAmount, &alerts)
-		committed1 = cErr == nil
-		if cErr != nil {
-			return true, cErr
+		procErr, finalizeErr, txClosed := s.flagAndFinalize(ctx, tx1, evt, &d, userID, coinChain.ChainCode, symbol, coinChain.ID, ReasonBelowMinAmount, &alerts)
+		tx1Closed = txClosed
+		if finalizeErr != nil {
+			return true, finalizeErr
 		}
 		s.fireAlerts(alerts)
 		return true, procErr
@@ -269,13 +269,11 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 	dep, err := s.repo.UpsertDeposit(ctx, tx1, row)
 	if err != nil {
 		upsertErr := fmt.Errorf("upsert deposit: %w", err)
-		if markErr := s.repo.MarkEventError(ctx, tx1, evt.ID, upsertErr.Error()); markErr != nil {
-			return true, fmt.Errorf("%w: mark-error=%v procErr=%v", ErrMarkErrorFailed, markErr, upsertErr)
+		txClosed, markErr := s.finalizeEventErrorAfterRollback(ctx, tx1, evt.ID, upsertErr)
+		tx1Closed = txClosed
+		if markErr != nil {
+			return true, markErr
 		}
-		if cErr := tx1.Commit(); cErr != nil {
-			return true, fmt.Errorf("commit error state: %w", cErr)
-		}
-		committed1 = true
 		return true, upsertErr
 	}
 
@@ -318,7 +316,7 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		if err := tx1.Commit(); err != nil {
 			return true, fmt.Errorf("commit: %w", err)
 		}
-		committed1 = true
+		tx1Closed = true
 		s.fireAlerts(alerts)
 		return true, nil
 	}
@@ -334,7 +332,7 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		if err := tx1.Commit(); err != nil {
 			return true, fmt.Errorf("commit: %w", err)
 		}
-		committed1 = true
+		tx1Closed = true
 		return true, nil
 	}
 
@@ -351,7 +349,7 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 			if err := tx1.Commit(); err != nil {
 				return true, fmt.Errorf("commit after ErrDepositNotPending: %w", err)
 			}
-			committed1 = true
+			tx1Closed = true
 			return true, nil
 		}
 		return true, fmt.Errorf("move to KYT_PENDING: %w", err)
@@ -362,7 +360,7 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 	if err := tx1.Commit(); err != nil {
 		return true, fmt.Errorf("commit T-α: %w", err)
 	}
-	committed1 = true
+	tx1Closed = true
 	return true, nil
 }
 
@@ -637,10 +635,9 @@ func (s *Service) flagManualReview(
 	return nil
 }
 
-// flagAndFinalize calls flagManualReview, marks the event done/error, and commits.
-// Returns (procErr, commitOrMarkErr). procErr is the flagManualReview result (nil on
-// success). commitOrMarkErr is non-nil only when a DB mark/commit operation itself fails,
-// meaning the caller must not set committed=true.
+// flagAndFinalize calls flagManualReview, marks the event done/error, and closes
+// the transaction. On a row-specific failure it rolls back before conditionally
+// finalizing the still-PENDING raw event through the repository's no-tx path.
 func (s *Service) flagAndFinalize(
 	ctx context.Context,
 	tx Tx,
@@ -652,21 +649,37 @@ func (s *Service) flagAndFinalize(
 	coinChainID int,
 	reason string,
 	alerts *[]alertPayload,
-) (procErr error, commitOrMarkErr error) {
+) (procErr error, finalizeErr error, txClosed bool) {
 	procErr = s.flagManualReview(ctx, tx, evt, d, userID, chainCode, symbol, coinChainID, reason, alerts)
 	if procErr != nil {
-		if markErr := s.repo.MarkEventError(ctx, tx, evt.ID, procErr.Error()); markErr != nil {
-			return procErr, fmt.Errorf("%w: mark-error=%v procErr=%v", ErrMarkErrorFailed, markErr, procErr)
+		txClosed, markErr := s.finalizeEventErrorAfterRollback(ctx, tx, evt.ID, procErr)
+		if markErr != nil {
+			return procErr, markErr, txClosed
 		}
-	} else {
-		if err := s.repo.MarkEventDone(ctx, tx, evt.ID); err != nil {
-			return nil, fmt.Errorf("mark event done: %w", err)
-		}
+		return procErr, nil, txClosed
+	}
+	if err := s.repo.MarkEventDone(ctx, tx, evt.ID); err != nil {
+		return nil, fmt.Errorf("mark event done: %w", err), false
 	}
 	if err := tx.Commit(); err != nil {
-		return procErr, fmt.Errorf("commit: %w", err)
+		return nil, fmt.Errorf("commit: %w", err), false
 	}
-	return procErr, nil
+	return nil, nil, true
+}
+
+func (s *Service) finalizeEventErrorAfterRollback(
+	ctx context.Context,
+	tx Tx,
+	eventID int64,
+	procErr error,
+) (bool, error) {
+	if rollbackErr := tx.Rollback(); rollbackErr != nil {
+		return false, fmt.Errorf("%w: rollback=%v procErr=%v", ErrMarkErrorFailed, rollbackErr, procErr)
+	}
+	if _, markErr := s.repo.MarkEventErrorNoTx(ctx, eventID, procErr.Error()); markErr != nil {
+		return true, fmt.Errorf("%w: mark-error=%v procErr=%v", ErrMarkErrorFailed, markErr, procErr)
+	}
+	return true, nil
 }
 
 // ScanKYTTimeouts scans KYT_PENDING deposits that exceeded the timeout threshold (T10.5).
