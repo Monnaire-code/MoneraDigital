@@ -80,6 +80,10 @@ func TestStageWorkflowStructure(t *testing.T) {
 	}
 
 	_, copyPackage := namedStep(t, steps, "Copy approved stage package")
+	copyCondition := scalarValue(t, mappingValue(t, copyPackage, "if"))
+	if !strings.Contains(copyCondition, "workers-off-current") {
+		t.Fatal("workers-off-current must receive the exact approved package runner for legacy stage bootstrap")
+	}
 	copyTarget := scalarValue(t, mappingValue(t, mappingValue(t, copyPackage, "with"), "target"))
 	if !strings.Contains(copyTarget, "${{ github.run_id }}") || !strings.Contains(copyTarget, "${{ github.run_attempt }}") {
 		t.Fatalf("stage package target is not unique to the exact workflow attempt: %q", copyTarget)
@@ -92,6 +96,8 @@ func TestStageWorkflowStructure(t *testing.T) {
 		`rm -rf "$DEPLOY_SRC"`,
 		`runner="$DEPLOY_SRC/deploy-remote.sh"`,
 		`runner="$APP_DIR/deploy-remote.sh"`,
+		`standard|migration-only|server-dark|workers-off-current)`,
+		`workers-on-installed)`,
 	} {
 		if !strings.Contains(executeScript, required) {
 			t.Errorf("stage execution does not fail closed on stale artifacts; missing %q", required)

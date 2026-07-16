@@ -129,6 +129,41 @@ func TestDeployRemoteRejectsStalePackageIdentityBeforeSideEffects(t *testing.T) 
 	}
 }
 
+func TestDeployRemoteWorkersOffAcceptsLegacyEmbeddedSHAWithoutManifest(t *testing.T) {
+	t.Parallel()
+	root := repositoryRoot(t)
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	tmp := t.TempDir()
+	appDir := filepath.Join(tmp, "app")
+	tracePath := filepath.Join(tmp, "trace")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "monera-server"), []byte("legacy-binary-version="+sha+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "deploy-remote.sh"), "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", sha)
+	cmd.Env = append(os.Environ(),
+		"MONERA_DEPLOY_FAKE=1",
+		"MONERA_DEPLOY_APP_DIR="+appDir,
+		"MONERA_DEPLOY_TRACE="+tracePath,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("legacy workers-off failed: %v\n%s", err, output)
+	}
+	assertFileContent(t, filepath.Join(appDir, ".env"), "COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=false\n")
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(trace), "verify-legacy-embedded-sha") {
+		t.Fatalf("legacy provenance verification was not traced:\n%s", trace)
+	}
+}
+
 func TestDeployRemoteFailureContracts(t *testing.T) {
 	t.Parallel()
 	_, filename, _, _ := runtime.Caller(0)

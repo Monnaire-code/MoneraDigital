@@ -56,7 +56,7 @@ validate_release_input() {
 
 verify_approved_release_source() {
     case "$RELEASE_MODE" in
-        standard|migration-only|server-dark) ;;
+        standard|migration-only|server-dark|workers-off-current) ;;
         *) return 0 ;;
     esac
     if [[ "${MONERA_DEPLOY_FAKE:-0}" == "1" && "${MONERA_DEPLOY_TEST_REQUIRE_APPROVED_SOURCE:-0}" != "1" ]]; then
@@ -123,8 +123,16 @@ installed_sha() {
 
 verify_installed_sha() {
     trace "verify-installed-sha"
-    [[ -f "$MANIFEST_FILE" ]] || { echo "ERROR: release manifest is missing" >&2; return 1; }
-    [[ "$(installed_sha)" == "$ARTIFACT_SHA" ]] || { echo "ERROR: installed server SHA does not match artifact SHA" >&2; return 1; }
+    if [[ -f "$MANIFEST_FILE" ]]; then
+        [[ "$(installed_sha)" == "$ARTIFACT_SHA" ]] || { echo "ERROR: installed server SHA does not match artifact SHA" >&2; return 1; }
+        return 0
+    fi
+    [[ "$RELEASE_MODE" == "workers-off-current" ]] || { echo "ERROR: release manifest is missing" >&2; return 1; }
+    trace "verify-legacy-embedded-sha"
+    if [[ ! -f "$APP_DIR/monera-server" ]] || ! grep -aFq "$ARTIFACT_SHA" "$APP_DIR/monera-server"; then
+        echo "ERROR: legacy installed server does not contain the approved artifact SHA" >&2
+        return 1
+    fi
 }
 
 install_binary() {

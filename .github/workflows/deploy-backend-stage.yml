@@ -209,7 +209,7 @@ jobs:
           cache: true
 
       - name: Build exact release package
-        if: env.RELEASE_MODE == 'standard' || env.RELEASE_MODE == 'migration-only' || env.RELEASE_MODE == 'server-dark'
+        if: env.RELEASE_MODE == 'standard' || env.RELEASE_MODE == 'migration-only' || env.RELEASE_MODE == 'server-dark' || env.RELEASE_MODE == 'workers-off-current'
         shell: bash
         run: |
           set -euo pipefail
@@ -235,7 +235,7 @@ jobs:
           tar -czf deploy/release.tgz -C deploy/package .
 
       - name: Copy approved stage package
-        if: env.RELEASE_MODE == 'standard' || env.RELEASE_MODE == 'migration-only' || env.RELEASE_MODE == 'server-dark'
+        if: env.RELEASE_MODE == 'standard' || env.RELEASE_MODE == 'migration-only' || env.RELEASE_MODE == 'server-dark' || env.RELEASE_MODE == 'workers-off-current'
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345  # v1.0.0
         with:
           host: ${{ secrets.STAGE_HOST }}
@@ -258,14 +258,13 @@ jobs:
           key: ${{ secrets.STAGE_SSH_KEY }}
           command_timeout: 20m
           envs: RELEASE_MODE,ARTIFACT_REF,EXPECTED_MIGRATION_CEILING,DEPLOY_ROOT
-          script_stop: true
           script: |
             set -euo pipefail
             APP_DIR=/opt/monera-digital
             DEPLOY_SRC="$DEPLOY_ROOT/package"
             trap 'rm -rf "$DEPLOY_ROOT"' EXIT
             case "$RELEASE_MODE" in
-              standard|migration-only|server-dark)
+              standard|migration-only|server-dark|workers-off-current)
                 [[ -f "$DEPLOY_ROOT/release.tgz" ]] || { echo "ERROR: exact approved release archive is missing"; exit 1; }
                 rm -rf "$DEPLOY_SRC"
                 mkdir -p "$DEPLOY_SRC"
@@ -273,7 +272,7 @@ jobs:
                 runner="$DEPLOY_SRC/deploy-remote.sh"
                 [[ -f "$runner" ]] || { echo "ERROR: exact approved release runner is missing"; exit 1; }
                 ;;
-              workers-off-current|workers-on-installed)
+              workers-on-installed)
                 rm -rf "$DEPLOY_SRC"
                 mkdir -p "$DEPLOY_SRC"
                 runner="$APP_DIR/deploy-remote.sh"

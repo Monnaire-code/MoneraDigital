@@ -155,9 +155,13 @@ harness. Real releases always execute the installed
 Package-based modes also require `artifact-sha` inside the extracted package to
 equal the approved 40-character SHA before any installation or migration.
 Each workflow attempt uploads to a unique run-id/run-attempt directory and
-cleans it on exit. Installed-only modes use only the trusted installed deploy
-runner; they never fall back to an arbitrary fixed `/tmp` runner left by an
-interrupted or stale deployment.
+cleans it on exit. `workers-off-current` receives the exact approved package
+runner so a legacy stage install can enter the controlled release protocol. If
+that install predates `release-manifest.json`, the mode accepts only a server
+binary containing the exact approved 40-character build SHA before changing
+the worker flag. `workers-on-installed` continues to use only the trusted
+installed deploy runner; neither mode falls back to an arbitrary fixed `/tmp`
+runner left by an interrupted or stale deployment.
 
 ## Manual workflow inputs
 
