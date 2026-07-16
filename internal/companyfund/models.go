@@ -28,10 +28,11 @@ type Channel string
 const (
 	ChannelSafeheron Channel = "SAFEHERON"
 	ChannelAirwallex Channel = "AIRWALLEX"
+	ChannelManual    Channel = "MANUAL"
 )
 
 func (c Channel) Valid() bool {
-	return c == ChannelSafeheron || c == ChannelAirwallex
+	return c == ChannelSafeheron || c == ChannelAirwallex || c == ChannelManual
 }
 
 // TransferMode describes the provider shape, separate from the accounting
