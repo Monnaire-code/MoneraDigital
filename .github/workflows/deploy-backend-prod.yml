@@ -2,6 +2,21 @@ name: Deploy Backend to Production
 
 on:
   workflow_dispatch:
+    inputs:
+      release_phase:
+        description: "受控发布阶段（按 056 → 057 → workers-off → server-dark → workers-on 顺序执行）"
+        required: true
+        type: choice
+        options:
+          - migration-056
+          - migration-057
+          - workers-off-current
+          - server-dark
+          - workers-on-installed
+      installed_server_sha:
+        description: "仅 workers-off/current 时填写当前已安装 server 的完整 40 位 SHA"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -11,130 +26,90 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
-    name: Build & Deploy to Production
+  controlled-production-phase:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     environment: production
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # v6.0.3
+      - name: Checkout approved main
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
 
-      - name: Verify production secrets
+      - name: Validate phase inputs and production secrets
         env:
+          PHASE: ${{ inputs.release_phase }}
+          INSTALLED_SHA: ${{ inputs.installed_server_sha }}
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_USER: ${{ secrets.PROD_USER }}
           PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
         run: |
-          if [ -z "$PROD_HOST" ] || [ -z "$PROD_USER" ] || [ -z "$PROD_SSH_KEY" ]; then
-            echo "ERROR: 缺少生产 secrets（PROD_HOST/PROD_USER/PROD_SSH_KEY）—— 检查 GitHub repo Secrets"
-            exit 1
+          set -euo pipefail
+          [[ -n "$PROD_HOST" && -n "$PROD_USER" && -n "$PROD_SSH_KEY" ]]
+          if [[ "$PHASE" == "workers-off-current" ]]; then
+            [[ "$INSTALLED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "ERROR: $PHASE requires the installed 40-character server SHA" >&2
+              exit 1
+            }
           fi
-          echo "Production secrets present"
 
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5  # v5.5.0
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build Backend (Release)
+      - name: Build immutable release package
         run: |
-          mkdir -p deploy
-          VERSION="${GITHUB_SHA:0:7}"
-          # CGO_ENABLED=0 静态交叉编译 linux/amd64；-X 注入 commit short-sha 便于生产 binary 追溯
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -ldflags="-s -w -X main.version=${VERSION}" -o deploy/server ./cmd/server
-          # gzip 压缩传输（~39MB → ~13MB），remote 解压后替换
-          gzip -f deploy/server
+          set -euo pipefail
+          mkdir -p deploy/package
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.version=${GITHUB_SHA}" -o deploy/package/monera-server ./cmd/server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o deploy/package/monera-migrate ./cmd/migrate
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o deploy/package/company-fund-release ./cmd/company-fund-release
+          gzip -f deploy/package/monera-server deploy/package/monera-migrate deploy/package/company-fund-release
+          install -m 0755 scripts/deploy-remote.sh deploy/package/deploy-remote.sh
+          printf '%s\n' "$GITHUB_SHA" > deploy/package/artifact-sha
 
-      - name: Copy package to production server
-        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345  # v1.0.0
+      - name: Upload controlled package
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ secrets.PROD_HOST }}
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
-          source: "deploy/server.gz"
-          target: "/tmp/monera-deploy"
-          strip_components: 1
+          source: "deploy/package/*"
+          target: "/tmp/monera-production-deploy/package"
+          strip_components: 2
 
-      - name: Deploy and restart service
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
+      - name: Execute exactly one controlled production phase
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          PHASE: ${{ inputs.release_phase }}
+          INSTALLED_SHA: ${{ inputs.installed_server_sha }}
+          RELEASE_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.PROD_HOST }}
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
-          command_timeout: 20m
+          command_timeout: 25m
+          envs: PHASE,INSTALLED_SHA,RELEASE_SHA
           script: |
-            set -e
-            # trap MUST be first — 覆盖所有 exit 路径（PORT 缺失、gunzip 失败等），
-            # 确保 /tmp/monera-deploy 始终被清理，避免磁盘残留
-            trap 'rm -rf /tmp/monera-deploy' EXIT
-
-            APP_DIR="/home/ec2-user/monera"
-            DEPLOY_SRC="/tmp/monera-deploy"
-            BIN="${APP_DIR}/server"
-            ENV_FILE="${APP_DIR}/.env"
-
-            # health 端口：从 .env 读 PORT（strip 包裹引号 + 行内注释 + 两端空白；
-            # 缺则 fail-fast，避免健康检查打错端口 → 假阴性回滚）
-            PORT=$(grep -E "^PORT=" "$ENV_FILE" | head -1 | cut -d= -f2-)
-            PORT="${PORT%\"}"; PORT="${PORT%\'}"; PORT="${PORT#\"}"; PORT="${PORT#\'}"
-            PORT="$(printf '%s' "$PORT" | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//')"
-            if [ -z "$PORT" ]; then
-              echo "ERROR: PORT 未在 $ENV_FILE 中找到 —— 拒绝猜测，避免健康检查打错端口"
-              exit 1
-            fi
-
-            # 原子替换：cp 到 .new + mv（直接 cp 覆盖运行中 binary 会触发 ETXTBSY；
-            # mv 是 rename，旧进程持旧 inode 继续跑直到 restart）
-            replace_binary() {
-              cp "$1" "${2}.new"
-              chmod +x "${2}.new"
-              mv -f "${2}.new" "$2"
-            }
-
-            # 解压 gzip 压缩传输的 binary
-            gunzip -c "${DEPLOY_SRC}/server.gz" > "${DEPLOY_SRC}/server"
-
-            # Backup current binary
-            if [ -f "${BIN}" ]; then
-              cp "${BIN}" "${BIN}.bak"
-              echo "Backup created"
-            fi
-
-            # Install new binary
-            replace_binary "${DEPLOY_SRC}/server" "${BIN}"
-
-            # Restart（失败则回滚 binary + 再次 restart；旧进程仍持旧 inode）
-            if ! sudo systemctl restart monera-digital; then
-              echo "ERROR: systemctl restart 失败"
-              if [ -f "${BIN}.bak" ]; then
-                replace_binary "${BIN}.bak" "${BIN}"
-                sudo systemctl restart monera-digital || echo "WARN: rollback restart also failed"
-              fi
-              exit 1
-            fi
-
-            # Health check（8 × 5s = 40s 窗口；--max-time 4 防端口被绑但不响应时挂死）
-            for i in $(seq 1 8); do
-              sleep 5
-              if curl -sf --max-time 4 "http://localhost:${PORT}/api/health" > /dev/null; then
-                echo "Health check passed"
-                echo "Production deploy completed"
-                exit 0
-              fi
-              echo "Waiting for service... ($i/8)"
-            done
-
-            echo "Health check FAILED — rolling back"
-            if [ -f "${BIN}.bak" ]; then
-              replace_binary "${BIN}.bak" "${BIN}"
-              sudo systemctl restart monera-digital || echo "WARN: rollback restart failed"
-              echo "Rolled back to backup"
-            else
-              echo "No backup (first deploy?) — new binary retained at ${BIN}, service may be down"
-            fi
-            exit 1
+            set -euo pipefail
+            PACKAGE=/tmp/monera-production-deploy/package
+            trap 'rm -rf /tmp/monera-production-deploy' EXIT
+            case "$PHASE" in
+              migration-056)
+                "$PACKAGE/deploy-remote.sh" --env production --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 056
+                ;;
+              migration-057)
+                "$PACKAGE/deploy-remote.sh" --env production --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 057
+                ;;
+              workers-off-current)
+                "$PACKAGE/deploy-remote.sh" --env production --release-mode workers-off-current --artifact-sha "$RELEASE_SHA" --installed-server-sha "$INSTALLED_SHA"
+                ;;
+              server-dark)
+                "$PACKAGE/deploy-remote.sh" --env production --release-mode server-dark --artifact-sha "$RELEASE_SHA"
+                ;;
+              workers-on-installed)
+                "$PACKAGE/deploy-remote.sh" --env production --release-mode workers-on-installed --artifact-sha "$RELEASE_SHA"
+                ;;
+              *) echo "ERROR: unsupported phase $PHASE" >&2; exit 1 ;;
+            esac

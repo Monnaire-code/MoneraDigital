@@ -337,6 +337,20 @@ func TestSafeheronWebhookEligibilityConfigurationFingerprint_IsStableAcrossSameC
 		t.Fatal("Safeheron address change must change eligibility configuration fingerprint")
 	}
 
+	monitoringChangedAccounts := refreshed.Accounts()
+	monitoringChangedAccounts[0].MonitoringStartedAt = time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	monitoringChanged, err := buildAccountRegistrySnapshot(monitoringChangedAccounts, refreshed.AssetPolicies(), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitoringFingerprint, err := safeheronWebhookEligibilityConfigurationFingerprint(monitoringChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if monitoringFingerprint == before {
+		t.Fatal("Safeheron monitoring boundary change must change eligibility configuration fingerprint")
+	}
+
 	changedPolicies := refreshed.AssetPolicies()
 	changedPolicies[0].Asset.ProviderAssetKey = "ANOTHER_COIN"
 	policyOnlyChange, err := buildAccountRegistrySnapshot(refreshed.Accounts(), changedPolicies, time.Now().UTC())

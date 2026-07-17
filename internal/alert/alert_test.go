@@ -315,3 +315,22 @@ func TestAlertService_EmailSubjectIncludesTitle(t *testing.T) {
 		t.Errorf("email body must include alert fields, got %q", got.Body)
 	}
 }
+
+func TestAlertServiceRoutingSinksAndSingleSinkDelivery(t *testing.T) {
+	emailer := &captureEmailer{}
+	a := NewAlertService("https://lark.invalid/hook", "", []string{"Ops@Example.com"}, emailer)
+	sinks := a.RoutingSinks()
+	if len(sinks) != 2 || sinks[0].Kind != "LARK" || sinks[1].Kind != "EMAIL" {
+		t.Fatalf("sinks = %#v", sinks)
+	}
+	outcome := a.SendRouting(context.Background(), "EMAIL", sinks[1].Fingerprint, "ERROR", "Routing action dead", map[string]string{"case": "1"})
+	if outcome != RoutingDeliverySent {
+		t.Fatalf("outcome = %s", outcome)
+	}
+	if len(emailer.calls) != 1 {
+		t.Fatalf("email calls = %d", len(emailer.calls))
+	}
+	if outcome := a.SendRouting(context.Background(), "EMAIL", strings.Repeat("0", 64), "ERROR", "Routing action dead", nil); outcome != RoutingDeliveryDefinitelyNotSent {
+		t.Fatalf("unknown sink outcome = %s", outcome)
+	}
+}

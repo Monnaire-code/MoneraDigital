@@ -31,8 +31,9 @@ func TestInsertProviderEvent_UsesDatabaseClockForOwnedRetention(t *testing.T) {
 		WithArgs(
 			input.Channel, input.ProviderEventID, input.EventType, nil, nil, nil,
 			input.SourceKind, nil, input.SourcePayloadDigest,
+			nil,
 			input.OwnedPayloadCiphertext, input.OwnedPayloadDigest, input.OwnedPayloadKeyVersion,
-			retention.Microseconds(), false,
+			retention.Microseconds(), false, nil,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(81))
 
@@ -70,8 +71,8 @@ func TestInsertProviderEvent_RejectsInvalidOwnedRetentionDurationBeforeDatabaseU
 
 func TestProviderEventRetentionSQLContracts(t *testing.T) {
 	for _, contract := range []string{
-		"NOW() + ($13::bigint * INTERVAL '1 microsecond')",
-		"CASE WHEN $13::bigint = 0 THEN NULL",
+		"NOW() + ($14::bigint * INTERVAL '1 microsecond')",
+		"CASE WHEN $14::bigint = 0 THEN NULL",
 		"owned_payload_purged_at IS NULL",
 		"source_kind <> 'OWNED_ENCRYPTED_PAYLOAD'",
 		"owned_payload_legal_hold = true",

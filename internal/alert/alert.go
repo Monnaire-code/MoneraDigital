@@ -37,6 +37,19 @@ type alertEmailer interface {
 	SendAlertEmail(ctx context.Context, toEmail, subject, body string) error
 }
 
+type RoutingDeliveryOutcome string
+
+const (
+	RoutingDeliverySent              RoutingDeliveryOutcome = "SENT"
+	RoutingDeliveryDefinitelyNotSent RoutingDeliveryOutcome = "DEFINITELY_NOT_SENT"
+	RoutingDeliveryUnknown           RoutingDeliveryOutcome = "DELIVERY_UNKNOWN"
+)
+
+type RoutingSink struct {
+	Kind        string
+	Fingerprint string
+}
+
 // NewAlertService configures a Feishu+email alert dispatcher.
 // feishuSecret is the Signing Secret from the Lark bot security settings;
 // leave empty to send unsigned (works only when bot signing is disabled).
@@ -64,9 +77,68 @@ func (a *AlertService) Send(level, title string, fields map[string]string) {
 	a.sendEmail(ctx, prefix, title, msg)
 }
 
+func (a *AlertService) RoutingSinks() []RoutingSink {
+	if a == nil {
+		return nil
+	}
+	result := make([]RoutingSink, 0, len(a.recipients)+1)
+	if a.feishuURL != "" {
+		result = append(result, RoutingSink{Kind: "LARK", Fingerprint: routingSinkFingerprint("LARK", a.feishuURL)})
+	}
+	for _, recipient := range a.recipients {
+		trimmed := strings.ToLower(strings.TrimSpace(recipient))
+		if trimmed != "" {
+			result = append(result, RoutingSink{Kind: "EMAIL", Fingerprint: routingSinkFingerprint("EMAIL", trimmed)})
+		}
+	}
+	return result
+}
+
+func (a *AlertService) SendRouting(ctx context.Context, kind, fingerprint, level, title string, fields map[string]string) RoutingDeliveryOutcome {
+	if a == nil {
+		return RoutingDeliveryDefinitelyNotSent
+	}
+	prefix := classifyAlertPrefix(title)
+	message := formatAlert(prefix, level, title, fields)
+	switch kind {
+	case "LARK":
+		if fingerprint != routingSinkFingerprint("LARK", a.feishuURL) || a.feishuURL == "" {
+			return RoutingDeliveryDefinitelyNotSent
+		}
+		return a.sendFeishuResult(ctx, message)
+	case "EMAIL":
+		for _, recipient := range a.recipients {
+			trimmed := strings.ToLower(strings.TrimSpace(recipient))
+			if fingerprint == routingSinkFingerprint("EMAIL", trimmed) {
+				if a.emailSvc == nil {
+					return RoutingDeliveryDefinitelyNotSent
+				}
+				if err := a.emailSvc.SendAlertEmail(ctx, recipient, prefix+title, message); err != nil {
+					return RoutingDeliveryUnknown
+				}
+				return RoutingDeliverySent
+			}
+		}
+		return RoutingDeliveryDefinitelyNotSent
+	default:
+		return RoutingDeliveryDefinitelyNotSent
+	}
+}
+
+func routingSinkFingerprint(kind, target string) string {
+	sum := sha256.Sum256([]byte(kind + "\x1f" + strings.TrimSpace(target)))
+	return fmt.Sprintf("%x", sum[:])
+}
+
 func (a *AlertService) sendFeishu(ctx context.Context, msg string) {
+	if outcome := a.sendFeishuResult(ctx, msg); outcome != RoutingDeliverySent && a.feishuURL != "" {
+		log.Printf("alert: feishu send outcome=%s", outcome)
+	}
+}
+
+func (a *AlertService) sendFeishuResult(ctx context.Context, msg string) RoutingDeliveryOutcome {
 	if a.feishuURL == "" {
-		return
+		return RoutingDeliveryDefinitelyNotSent
 	}
 
 	payload := map[string]any{
@@ -85,23 +157,26 @@ func (a *AlertService) sendFeishu(ctx context.Context, msg string) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("alert: feishu marshal failed: %v", err)
-		return
+		return RoutingDeliveryDefinitelyNotSent
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.feishuURL, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("alert: feishu request build failed: %v", err)
-		return
+		return RoutingDeliveryDefinitelyNotSent
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		log.Printf("alert: feishu send failed: %v", err)
-		return
+		return RoutingDeliveryUnknown
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		log.Printf("alert: feishu http error status=%d", resp.StatusCode)
-		return
+		if resp.StatusCode < 500 {
+			return RoutingDeliveryDefinitelyNotSent
+		}
+		return RoutingDeliveryUnknown
 	}
 	var result struct {
 		Code int    `json:"code"`
@@ -109,11 +184,13 @@ func (a *AlertService) sendFeishu(ctx context.Context, msg string) {
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil {
 		log.Printf("alert: feishu response parse failed: %v", err)
-		return
+		return RoutingDeliveryUnknown
 	}
 	if result.Code != 0 {
 		log.Printf("alert: feishu error code=%d msg=%s", result.Code, result.Msg)
+		return RoutingDeliveryDefinitelyNotSent
 	}
+	return RoutingDeliverySent
 }
 
 func (a *AlertService) sendEmail(ctx context.Context, prefix, title, body string) {

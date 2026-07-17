@@ -11,13 +11,14 @@ import (
 )
 
 type Config struct {
-	Port          string
-	DatabaseURL   string
-	RedisURL      string
-	JWTSecret     string
-	EncryptionKey string
-	TimeZone      string
-	CoreAPIURL    string
+	Port                            string
+	DatabaseURL                     string
+	RedisURL                        string
+	JWTSecret                       string
+	EncryptionKey                   string
+	TimeZone                        string
+	CoreAPIURL                      string
+	SafeheronTransactionRoutingMode string
 	// TrustedProxies controls which client addresses Gin trusts for X-Forwarded-For
 	// inspection (SEC-1). Empty means trust nothing — c.ClientIP() returns the
 	// direct peer address. Configure to LB CIDRs (e.g. "10.0.0.0/8") in production
@@ -50,14 +51,15 @@ func Load() *Config {
 	viper.AutomaticEnv()
 
 	cfg := &Config{
-		Port:           viper.GetString("PORT"),
-		DatabaseURL:    viper.GetString("DATABASE_URL"),
-		RedisURL:       viper.GetString("REDIS_URL"),
-		JWTSecret:      viper.GetString("JWT_SECRET"),
-		EncryptionKey:  viper.GetString("ENCRYPTION_KEY"),
-		TimeZone:       viper.GetString("TIME_ZONE"),
-		CoreAPIURL:     viper.GetString("MONNAIRE_CORE_API_URL"),
-		TrustedProxies: splitTrustedProxies(viper.GetString("TRUSTED_PROXIES")),
+		Port:                            viper.GetString("PORT"),
+		DatabaseURL:                     viper.GetString("DATABASE_URL"),
+		RedisURL:                        viper.GetString("REDIS_URL"),
+		JWTSecret:                       viper.GetString("JWT_SECRET"),
+		EncryptionKey:                   viper.GetString("ENCRYPTION_KEY"),
+		TimeZone:                        viper.GetString("TIME_ZONE"),
+		CoreAPIURL:                      viper.GetString("MONNAIRE_CORE_API_URL"),
+		SafeheronTransactionRoutingMode: viper.GetString("SAFEHERON_TRANSACTION_ROUTING_MODE"),
+		TrustedProxies:                  splitTrustedProxies(viper.GetString("TRUSTED_PROXIES")),
 	}
 
 	return cfg

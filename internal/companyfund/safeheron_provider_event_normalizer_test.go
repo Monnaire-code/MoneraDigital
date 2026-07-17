@@ -46,6 +46,61 @@ func TestSafeheronProviderEventNormalizer_MapsVerifiedStatusPayloadThroughExplic
 	}
 }
 
+func TestSafeheronProviderEventNormalizer_RoutingScopeAllowsOnlyAuthorizedBatchOccurrence(t *testing.T) {
+	input := testSafeheronNormalizationInput(t)
+	input.Snapshot.TxKey = "safeheron-routing-scoped-batch"
+	input.Snapshot.SourceAddress = "0xExternalSender"
+	input.Snapshot.DestinationAddress = ""
+	input.Snapshot.TxAmount = "3.75"
+	input.Snapshot.TxFee = "0.00021"
+	input.Snapshot.FeeCoinKey = "ETHEREUM_ETH"
+	input.Snapshot.DestinationAddressList = []safeheron.TransactionDestinationAddress{
+		{Address: "0xCompanyWallet", Amount: "1.25"},
+		{Address: "0xSecondCompanyWallet", Amount: "2.50"},
+	}
+	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
+		{ID: 1, Channel: ChannelSafeheron, NormalizedAddress: "0xcompanywallet", NetworkFamily: "EVM", Enabled: true},
+		{ID: 2, Channel: ChannelSafeheron, NormalizedAddress: "0xsecondcompanywallet", NetworkFamily: "EVM", Enabled: true},
+	}, nil, input.Registry.LoadedAt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	principals, err := EnumerateSafeheronPrincipalOccurrences(input.Snapshot, input.NetworkFamily)
+	if err != nil || len(principals) != 2 {
+		t.Fatalf("principal occurrences = %#v, %v", principals, err)
+	}
+	resolver := &safeheronTransactionMappingResolverStub{mapping: SafeheronTransactionMapping{
+		NetworkFamily: input.NetworkFamily, PrincipalAsset: input.PrincipalAsset,
+	}}
+	normalizer := newSafeheronProviderEventNormalizerForTest(t, resolver, registry)
+	lease := testSafeheronProviderEventLease("TRANSACTION_STATUS_CHANGED")
+	lease.AuthorizedSafeheronOccurrenceKey = principals[0].Occurrence.Key
+	input.Registry = registry
+	input.AuthorizedOccurrenceKey = lease.AuthorizedSafeheronOccurrenceKey
+	if _, directErr := NormalizeSafeheronProviderEvent(input); directErr != nil {
+		t.Fatalf("direct scoped normalization error = %v", directErr)
+	}
+
+	result, err := normalizer.NormalizeProviderEvent(context.Background(), lease, testSafeheronTransactionStatusPayload(t, input.Snapshot))
+	if err != nil {
+		t.Fatalf("NormalizeProviderEvent() error = %v", err)
+	}
+	if len(result.Movements) != 1 || result.Movements[0].ProviderOccurrenceKey != principals[0].Occurrence.Key {
+		t.Fatalf("scoped movements = %#v", result.Movements)
+	}
+	if result.Movements[0].ProviderDisplay.Fee.Amount == nil {
+		t.Fatal("the deterministic first batch occurrence must retain the transaction fee")
+	}
+	lease.AuthorizedSafeheronOccurrenceKey = principals[1].Occurrence.Key
+	second, err := normalizer.NormalizeProviderEvent(context.Background(), lease, testSafeheronTransactionStatusPayload(t, input.Snapshot))
+	if err != nil {
+		t.Fatalf("second scoped normalization error = %v", err)
+	}
+	if len(second.Movements) != 1 || second.Movements[0].ProviderDisplay.Fee.Amount != nil {
+		t.Fatalf("non-primary scoped batch occurrence duplicated transaction fee: %#v", second.Movements)
+	}
+}
+
 func TestSafeheronProviderEventNormalizer_IgnoresOnlyWellFormedNonReportableEventsAndUnmatchedTransactions(t *testing.T) {
 	input := testSafeheronNormalizationInput(t)
 	resolver := &safeheronTransactionMappingResolverStub{mapping: SafeheronTransactionMapping{

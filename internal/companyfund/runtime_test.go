@@ -572,8 +572,38 @@ func validCompanyFundRuntimeAccounts() []CompanyFundAccount {
 		{
 			ID: 11, Channel: ChannelSafeheron, ProviderAccountKey: "safe-vault-main", NetworkFamily: "EVM",
 			NormalizedAddress: "0x0000000000000000000000000000000000000011", Enabled: true,
+			MonitoringStartedAt: time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC),
 		},
 		{ID: 22, Channel: ChannelAirwallex, ProviderAccountKey: "awx-main", Enabled: true},
+	}
+}
+
+func TestCompanyFundSafeheronWindowHonorsMonitoringStart(t *testing.T) {
+	monitoringStartedAt := time.Date(2026, time.July, 15, 10, 0, 0, 0, time.UTC)
+	account := CompanyFundAccount{MonitoringStartedAt: monitoringStartedAt}
+
+	clamped, ok := companyFundSafeheronWindow(account, CompanyFundReconciliationWindow{
+		Key:   "crosses-monitoring-start",
+		Start: monitoringStartedAt.Add(-time.Hour),
+		End:   monitoringStartedAt.Add(time.Hour),
+	})
+	if !ok || !clamped.Start.Equal(monitoringStartedAt) || !clamped.End.Equal(monitoringStartedAt.Add(time.Hour)) {
+		t.Fatalf("clamped window = %#v ok=%t", clamped, ok)
+	}
+
+	if _, ok := companyFundSafeheronWindow(account, CompanyFundReconciliationWindow{
+		Key:   "before-monitoring-start",
+		Start: monitoringStartedAt.Add(-2 * time.Hour),
+		End:   monitoringStartedAt,
+	}); ok {
+		t.Fatal("window ending at monitoring start must be skipped")
+	}
+	if _, ok := companyFundSafeheronWindow(CompanyFundAccount{}, CompanyFundReconciliationWindow{
+		Key:   "missing-monitoring-start",
+		Start: monitoringStartedAt,
+		End:   monitoringStartedAt.Add(time.Hour),
+	}); ok {
+		t.Fatal("missing monitoring start must fail closed")
 	}
 }
 

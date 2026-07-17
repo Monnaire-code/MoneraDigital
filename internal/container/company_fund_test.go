@@ -369,9 +369,11 @@ func expectCompanyFundRegistryLoadWithAirwallexScope(mock sqlmock.Sqlmock, login
 	accountRows := sqlmock.NewRows([]string{
 		"id", "channel", "provider_account_key", "wallet_address", "normalized_address", "network_family",
 		"company_entity", "fund_account_name", "sub_account_name", "account_type", "account_name", "account_role", "is_enabled",
+		"monitoring_started_at", "first_enabled_at",
 	})
 	if loginAs != "" {
-		accountRows.AddRow(1, "AIRWALLEX", loginAs, "", "", "", "Monera Ltd", "Treasury", "USD", "BANK", "USD", "", true)
+		enabledAt := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+		accountRows.AddRow(1, "AIRWALLEX", loginAs, "", "", "", "Monera Ltd", "Treasury", "USD", "BANK", "USD", "", true, enabledAt, enabledAt)
 	}
 	mock.ExpectQuery(regexp.QuoteMeta("FROM company_fund_accounts\nWHERE is_enabled = true")).WillReturnRows(accountRows)
 	mock.ExpectQuery(regexp.QuoteMeta("FROM company_fund_account_asset_policies\nWHERE is_enabled = true")).WillReturnRows(sqlmock.NewRows([]string{

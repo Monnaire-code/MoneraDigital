@@ -608,6 +608,11 @@ func (runtime *CompanyFundRuntime) airwallexReconciliationAccount() (CompanyFund
 }
 
 func (runtime *CompanyFundRuntime) reconcileSafeheronWindow(ctx context.Context, account CompanyFundAccount, window CompanyFundReconciliationWindow, result CompanyFundReconciliationCycleResult) (CompanyFundReconciliationCycleResult, error) {
+	window, eligible := companyFundSafeheronWindow(account, window)
+	if !eligible {
+		result.SkippedAccounts++
+		return result, nil
+	}
 	providerAccountKey, ok := companyFundRuntimeProviderAccountKey(account)
 	if !ok {
 		result.SkippedAccounts++
@@ -630,6 +635,20 @@ func (runtime *CompanyFundRuntime) reconcileSafeheronWindow(ctx context.Context,
 		return result, nil
 	}
 	return runtime.finalizeSafeheronFailure(ctx, reconcileResult, result, err)
+}
+
+func companyFundSafeheronWindow(account CompanyFundAccount, window CompanyFundReconciliationWindow) (CompanyFundReconciliationWindow, bool) {
+	monitoringStartedAt := account.MonitoringStartedAt.UTC()
+	if monitoringStartedAt.IsZero() || window.Start.IsZero() || window.End.IsZero() || !window.Start.Before(window.End) {
+		return CompanyFundReconciliationWindow{}, false
+	}
+	if !window.End.After(monitoringStartedAt) {
+		return CompanyFundReconciliationWindow{}, false
+	}
+	if window.Start.Before(monitoringStartedAt) {
+		window.Start = monitoringStartedAt
+	}
+	return window, window.Start.Before(window.End)
 }
 
 func (runtime *CompanyFundRuntime) reconcileAirwallexAccountWindow(ctx context.Context, account CompanyFundAccount, window CompanyFundReconciliationWindow, result CompanyFundReconciliationCycleResult) (CompanyFundReconciliationCycleResult, error) {

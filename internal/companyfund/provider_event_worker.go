@@ -234,6 +234,7 @@ func bindProviderEventMovementProvenance(lease ProviderEventLease, movement Tran
 	movement.ProviderEventID = lease.ProviderEventID
 	movement.LatestProviderEventID = &eventID
 	movement.RawSnapshotDigest = lease.SourcePayloadDigest
+	movement.AuthorizingRoutingActionID = lease.AuthorizingRoutingActionID
 	return movement, nil
 }
 

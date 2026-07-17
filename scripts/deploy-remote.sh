@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
         --token) VERCEL_TOKEN="$2"; shift 2 ;;
         --api-url) API_URL="$2"; shift 2 ;;
         --help|-h)
-            echo "Backend: $0 --env test --release-mode MODE --artifact-sha FULL_SHA [--expected-migration-ceiling VERSION]"
+            echo "Backend: $0 --env test|production --release-mode MODE --artifact-sha FULL_SHA [--expected-migration-ceiling VERSION]"
             echo "Frontend: $0 --frontend [--token TOKEN] [--api-url URL]"
             exit 0
             ;;
@@ -48,7 +48,7 @@ fail_if_requested() {
 }
 
 validate_release_input() {
-    [[ "$ENV" == "test" ]] || { echo "ERROR: backend supports only --env test" >&2; return 1; }
+    [[ "$ENV" == "test" || "$ENV" == "production" ]] || { echo "ERROR: backend supports only --env test or production" >&2; return 1; }
     [[ "$RELEASE_MODE" =~ ^(migration-only|workers-off-current|server-dark|workers-on-installed|standard)$ ]] || { echo "ERROR: invalid release mode" >&2; return 1; }
     [[ "$ARTIFACT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: artifact SHA must be 40 lowercase hexadecimal characters" >&2; return 1; }
     if [[ -n "$INSTALLED_SERVER_SHA" ]]; then
@@ -115,14 +115,79 @@ require_server_dark_env() {
         echo "ERROR: server-dark requires exactly one normalized COMPANY_FUND_START_BACKGROUND_WORKERS=false" >&2
         return 1
     }
+    require_normalized_routing_mode || return 1
+}
+
+require_normalized_routing_mode() {
+    awk '
+        BEGIN { assignments=0; valid=0 }
+        /^[[:space:]]*(export[[:space:]]+)?SAFEHERON_TRANSACTION_ROUTING_MODE[[:space:]]*=/ { assignments++ }
+        $0 == "SAFEHERON_TRANSACTION_ROUTING_MODE=capture-only" || $0 == "SAFEHERON_TRANSACTION_ROUTING_MODE=routing-authoritative" { valid++ }
+        END { exit !(assignments == 1 && valid == 1) }
+    ' "$ENV_FILE" || {
+        echo "ERROR: SAFEHERON_TRANSACTION_ROUTING_MODE must be exactly capture-only or routing-authoritative" >&2
+        return 1
+    }
 }
 
 set_workers() {
     local enabled="$1"
     trace "env-workers-$([[ "$enabled" == "true" ]] && echo on || echo off)"
     fail_if_requested "env-workers-$([[ "$enabled" == "true" ]] && echo on || echo off)" || return 1
+    require_normalized_routing_mode || return 1
     atomic_env_set COMPANY_FUND_ENABLED true
     atomic_env_set COMPANY_FUND_START_BACKGROUND_WORKERS "$enabled"
+}
+
+set_routing_mode() {
+    local mode="$1"
+    [[ "$mode" == "capture-only" || "$mode" == "routing-authoritative" ]] || return 1
+    trace "env-routing-$mode"
+    fail_if_requested "env-routing-$mode" || return 1
+    atomic_env_set SAFEHERON_TRANSACTION_ROUTING_MODE "$mode"
+}
+
+release_state_enforced() {
+    [[ "$ENV" == "production" || "${MONERA_DEPLOY_ENFORCE_RELEASE_STATE:-0}" == "1" ]]
+}
+
+read_release_state() {
+    [[ -f "$RELEASE_STATE_FILE" ]] || return 1
+    RELEASE_STATE_SHA=$(awk -F '\t' 'NR==1 { print $1 }' "$RELEASE_STATE_FILE")
+    RELEASE_STATE_PHASE=$(awk -F '\t' 'NR==1 { print $2 }' "$RELEASE_STATE_FILE")
+    [[ "$RELEASE_STATE_SHA" =~ ^[0-9a-f]{40}$ && -n "$RELEASE_STATE_PHASE" ]]
+}
+
+require_release_state() {
+    local expected_phase="$1"
+    release_state_enforced || return 0
+    read_release_state || { echo "ERROR: controlled release state is missing" >&2; return 1; }
+    [[ "$RELEASE_STATE_SHA" == "$ARTIFACT_SHA" && "$RELEASE_STATE_PHASE" == "$expected_phase" ]] || {
+        echo "ERROR: controlled release requires $expected_phase for artifact $ARTIFACT_SHA" >&2
+        return 1
+    }
+}
+
+require_release_start() {
+    release_state_enforced || return 0
+    if ! read_release_state; then
+        return 0
+    fi
+    [[ ( "$RELEASE_STATE_SHA" == "$ARTIFACT_SHA" && "$RELEASE_STATE_PHASE" == "migration-056" ) ||
+       "$RELEASE_STATE_PHASE" == "workers-on-installed" ]] || {
+        echo "ERROR: another controlled release is incomplete at $RELEASE_STATE_PHASE" >&2
+        return 1
+    }
+}
+
+write_release_state() {
+    local phase="$1" tmp
+    release_state_enforced || return 0
+    trace "release-state-$phase"
+    tmp=$(mktemp "$APP_DIR/.release-state.XXXXXX")
+    printf '%s\t%s\n' "$ARTIFACT_SHA" "$phase" > "$tmp"
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$RELEASE_STATE_FILE"
 }
 
 installed_sha() {
@@ -138,7 +203,11 @@ verify_installed_sha() {
     fi
     [[ "$RELEASE_MODE" == "workers-off-current" ]] || { echo "ERROR: release manifest is missing" >&2; return 1; }
     trace "verify-legacy-embedded-sha"
-    if [[ ! -f "$APP_DIR/monera-server" ]] || ! grep -aFq "$expected_sha" "$APP_DIR/monera-server"; then
+    local legacy_binary="$APP_DIR/monera-server" legacy_short="${expected_sha:0:7}"
+    if [[ "$ENV" == "production" && ! -f "$legacy_binary" && -f "$APP_DIR/server" ]]; then
+        legacy_binary="$APP_DIR/server"
+    fi
+    if [[ ! -f "$legacy_binary" ]] || { ! grep -aFq "$expected_sha" "$legacy_binary" && { [[ "$ENV" != "production" ]] || ! grep -aFq "$legacy_short" "$legacy_binary"; }; }; then
         echo "ERROR: legacy installed server does not contain the approved artifact SHA" >&2
         return 1
     fi
@@ -163,9 +232,24 @@ write_manifest() {
     fail_if_requested write-manifest || return 1
     local tmp
     tmp=$(mktemp "$APP_DIR/.release-manifest.XXXXXX")
-    printf '{"server_sha":"%s"}\n' "$ARTIFACT_SHA" > "$tmp"
+    if [[ "$RELEASE_MODE" == "server-dark" ]]; then
+        printf '{"server_sha":"%s","migration_ceiling":"057","routing_mode":"capture-only","safe_artifact":true}\n' "$ARTIFACT_SHA" > "$tmp"
+    else
+        printf '{"server_sha":"%s"}\n' "$ARTIFACT_SHA" > "$tmp"
+    fi
     chmod 600 "$tmp"
     mv -f "$tmp" "$MANIFEST_FILE"
+}
+
+require_safe_dark_manifest() {
+    [[ -f "$MANIFEST_FILE" ]] || { echo "ERROR: release manifest is missing" >&2; return 1; }
+    grep -Eq '"server_sha"[[:space:]]*:[[:space:]]*"'"$ARTIFACT_SHA"'"' "$MANIFEST_FILE" &&
+        grep -Eq '"migration_ceiling"[[:space:]]*:[[:space:]]*"057"' "$MANIFEST_FILE" &&
+        grep -Eq '"routing_mode"[[:space:]]*:[[:space:]]*"capture-only"' "$MANIFEST_FILE" &&
+        grep -Eq '"safe_artifact"[[:space:]]*:[[:space:]]*true' "$MANIFEST_FILE" || {
+        echo "ERROR: installed server is not a validated dark release artifact" >&2
+        return 1
+    }
 }
 
 install_service() {
@@ -267,7 +351,7 @@ run_migration() {
         [[ "${MONERA_DEPLOY_FAKE_PRINT_CEILING_EXIT_CODE:-0}" == "0" ]] || return 1
         actual="${MONERA_DEPLOY_FAKE_MIGRATION_CEILING:-$EXPECTED_MIGRATION_CEILING}"
     else
-        actual=$("$APP_DIR/monera-migrate" -print-ceiling) || return 1
+        actual=$("$APP_DIR/monera-migrate" -print-ceiling -exact-version "$EXPECTED_MIGRATION_CEILING") || return 1
     fi
     if [[ -n "$EXPECTED_MIGRATION_CEILING" && "$actual" != "$EXPECTED_MIGRATION_CEILING" ]]; then
         echo "ERROR: migration ceiling $actual does not match $EXPECTED_MIGRATION_CEILING" >&2
@@ -278,7 +362,7 @@ run_migration() {
     if [[ "${MONERA_DEPLOY_FAKE:-0}" == "1" ]]; then
         migration_exit="${MONERA_DEPLOY_FAKE_MIGRATION_EXIT_CODE:-0}"
         [[ "${MONERA_DEPLOY_FAIL_ACTION:-}" != "migrate" ]] || migration_exit=1
-    elif (cd "$APP_DIR" && EXPECTED_MIGRATION_CEILING="$EXPECTED_MIGRATION_CEILING" ./monera-migrate); then
+    elif (cd "$APP_DIR" && EXPECTED_MIGRATION_CEILING="$EXPECTED_MIGRATION_CEILING" ./monera-migrate -exact-version "$EXPECTED_MIGRATION_CEILING"); then
         migration_exit=0
     else
         migration_exit=$?
@@ -460,8 +544,13 @@ persist_release_script() {
 
 deploy_backend() {
     validate_release_input
-    APP_DIR="${MONERA_DEPLOY_APP_DIR:-/opt/monera-digital}"
-    DEPLOY_SRC="${MONERA_DEPLOY_SRC:-/tmp/monera-stage-deploy/package}"
+    local default_app_dir="/opt/monera-digital" default_deploy_src="/tmp/monera-stage-deploy/package"
+    if [[ "$ENV" == "production" ]]; then
+        default_app_dir="/home/ec2-user/monera"
+        default_deploy_src="/tmp/monera-production-deploy/package"
+    fi
+    APP_DIR="${MONERA_DEPLOY_APP_DIR:-$default_app_dir}"
+    DEPLOY_SRC="${MONERA_DEPLOY_SRC:-$default_deploy_src}"
     SERVICE_NAME="${MONERA_DEPLOY_SERVICE_NAME:-monera-digital}"
     if [[ "${MONERA_DEPLOY_FAKE:-0}" == "1" ]]; then
         SERVICE_FILE="${MONERA_DEPLOY_SERVICE_FILE:-$APP_DIR/${SERVICE_NAME}.service}"
@@ -472,6 +561,7 @@ deploy_backend() {
     PORT="${PORT:-8086}"
     ENV_FILE="$APP_DIR/.env"
     MANIFEST_FILE="$APP_DIR/release-manifest.json"
+    RELEASE_STATE_FILE="${MONERA_DEPLOY_RELEASE_STATE_FILE:-$APP_DIR/release-state.tsv}"
     MIGRATION_SCHEMA_MARKER_FILE="${MONERA_DEPLOY_SCHEMA_MARKER:-$APP_DIR/.schema-marker}"
     MIGRATION_INVOCATION_FILE="${MONERA_DEPLOY_INVOCATION_FILE:-$APP_DIR/.invocation-id}"
     MANUAL_QUIESCE_FILE="${MONERA_DEPLOY_MANUAL_QUIESCE_FILE:-$APP_DIR/.manual-quiesce-required}"
@@ -480,43 +570,67 @@ deploy_backend() {
 
     case "$RELEASE_MODE" in
         migration-only)
+            if [[ "$EXPECTED_MIGRATION_CEILING" == "056" ]]; then
+                require_release_start
+            elif [[ "$EXPECTED_MIGRATION_CEILING" == "057" ]]; then
+                require_release_state migration-056
+            fi
             install_binary monera-migrate
             install_binary company-fund-release
             run_migration
+            if [[ "$EXPECTED_MIGRATION_CEILING" == "056" ]]; then
+                write_release_state migration-056
+            elif [[ "$EXPECTED_MIGRATION_CEILING" == "057" ]]; then
+                write_release_state migration-057
+            fi
             ;;
         workers-off-current)
+            require_release_state migration-057
             verify_installed_sha
             cp -p "$ENV_FILE" "$ENV_FILE.release-backup"
-            if ! set_workers false || ! restart_service || ! health_check; then
+            if ! set_routing_mode capture-only || ! set_workers false; then
                 mv -f "$ENV_FILE.release-backup" "$ENV_FILE"
-                recover_service_or_stop || true
+                return 1
+            fi
+            if ! stop_service || ! verify_service_inactive; then
+                mv -f "$ENV_FILE.release-backup" "$ENV_FILE"
+                stop_service || true
                 return 1
             fi
             rm -f "$ENV_FILE.release-backup"
+            write_release_state workers-off-current
             ;;
         server-dark)
+            require_release_state workers-off-current
             trace "require-workers-off"
             require_server_dark_env
             backup_file "$APP_DIR/monera-server"
             backup_file "$MANIFEST_FILE"
             backup_service
             if ! install_binary monera-server || ! write_manifest || ! install_service || ! restart_service || ! health_check; then
-                trace "rollback-server"
-                rollback_server_state || true
+                trace "fail-closed-server"
+                stop_service || true
                 return 1
             fi
             rm -f "$APP_DIR/monera-server.release-backup" "$MANIFEST_FILE.release-backup"
             discard_service_backup
             persist_release_script
+            write_release_state server-dark
             ;;
         workers-on-installed)
+            require_release_state server-dark
             verify_installed_sha
-            if ! set_workers true || ! restart_service || ! health_check; then
-                if ! set_workers false || ! recover_service_or_stop; then
+            require_safe_dark_manifest
+            cp -p "$ENV_FILE" "$ENV_FILE.release-backup"
+            if ! set_routing_mode routing-authoritative || ! set_workers true || ! restart_service || ! health_check; then
+                mv -f "$ENV_FILE.release-backup" "$ENV_FILE"
+                if ! recover_service_or_stop; then
                     stop_service || true
                 fi
                 return 1
             fi
+            rm -f "$ENV_FILE.release-backup"
+            write_release_state workers-on-installed
             ;;
         standard)
             backup_file "$APP_DIR/monera-migrate"
@@ -533,8 +647,8 @@ deploy_backend() {
             backup_file "$MANIFEST_FILE"
             backup_service
             if ! install_binary monera-server || ! write_manifest || ! install_service || ! restart_service || ! health_check; then
-                trace "rollback-server"
-                rollback_server_state || true
+                trace "fail-closed-server"
+                stop_service || true
                 return 1
             fi
             rm -f "$APP_DIR/monera-server.release-backup" "$APP_DIR/monera-migrate.release-backup" "$APP_DIR/company-fund-release.release-backup" "$MANIFEST_FILE.release-backup"

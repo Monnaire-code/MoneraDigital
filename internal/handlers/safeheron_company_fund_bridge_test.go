@@ -102,7 +102,7 @@ func assertSafeheronCompanyFundAck(t *testing.T, code int, body string) {
 	}
 }
 
-func TestSafeheronCompanyFundBridge_VerifiedRawEventCreatesProviderEvent(t *testing.T) {
+func TestSafeheronCompanyFundBridge_CannotBypassRoutingAuthorization(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -127,14 +127,6 @@ func TestSafeheronCompanyFundBridge_VerifiedRawEventCreatesProviderEvent(t *test
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT payload_digest FROM safeheron_webhook_events WHERE id = $1")).
 		WithArgs(91).
 		WillReturnRows(sqlmock.NewRows([]string{"payload_digest"}).AddRow(digest))
-	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO company_fund_provider_events")).
-		WithArgs(
-			companyfund.ChannelSafeheron, eventID, "TRANSACTION_STATUS_CHANGED", nil, nil, nil,
-			companyfund.ProviderEventSourceExistingSafeheronWebhookRef, 91, digest,
-			nil, nil, nil, int64(0), false,
-		).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(17))
-
 	w := runWebhook(newSafeheronCompanyFundBridgeHandler(deposits, deposits, funds, &safeheronCompanyFundEligibilityStub{decision: companyfund.SafeheronWebhookEligibilityDecision{Candidate: true}}, body), `{"safeheron":"signed-envelope"}`)
 	assertSafeheronCompanyFundAck(t, w.Code, w.Body.String())
 	if err := mock.ExpectationsWereMet(); err != nil {

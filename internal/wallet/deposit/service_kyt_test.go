@@ -995,6 +995,7 @@ func TestMarkOrphanAlertDone_CommitFails(t *testing.T) {
 func TestFlagAndFinalize_MarkEventDoneFails(t *testing.T) {
 	repo := newMockRepo()
 	repo.markDoneErr = errors.New("mark done boom")
+	repo.owners["0xstranger"] = 42
 	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
 	svc := newSvc(t, repo, reg, nil)
 
@@ -1005,7 +1006,7 @@ func TestFlagAndFinalize_MarkEventDoneFails(t *testing.T) {
 		EventDetail: PayloadEventDetail{
 			TxKey:                "tx-done-fail",
 			CoinKey:              "K",
-			TxAmount:             "1",
+			TxAmount:             "0.00001",
 			TransactionStatus:    "COMPLETED",
 			TransactionSubStatus: "CONFIRMED",
 			TransactionDirection: "INFLOW",

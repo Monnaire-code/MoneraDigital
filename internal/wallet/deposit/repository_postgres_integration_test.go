@@ -31,7 +31,17 @@ func TestDepositPoisonEventPostgresIntegration(t *testing.T) {
 	db := newDepositPostgresFixture(t, databaseURL)
 	repo := NewRepository(db)
 
-	t.Run("unsupported coin persists null mapping and completes event", func(t *testing.T) {
+	t.Run("production foreign key rejects synthetic user zero", func(t *testing.T) {
+		_, err := db.ExecContext(context.Background(), `
+			INSERT INTO deposits
+				(user_id, tx_hash, amount, asset, chain, status)
+			VALUES (0, 'tx-pg-user-zero', 1, 'ETH', 'ETHEREUM', 'MANUAL_REVIEW')`)
+		if err == nil {
+			t.Fatal("expected deposits.user_id foreign key to reject synthetic user 0")
+		}
+	})
+
+	t.Run("unsupported coin without an owner never inserts a synthetic user", func(t *testing.T) {
 		if got := len(testUnknownCoinKey64); got != 64 {
 			t.Fatalf("test fixture CoinKey length = %d, want 64", got)
 		}
@@ -52,39 +62,23 @@ func TestDepositPoisonEventPostgresIntegration(t *testing.T) {
 
 		processed, err := NewService(repo, newTestRegistry("ETH", "ETHEREUM", "ETH", "0.0001", 11), nil).
 			ProcessOne(context.Background())
-		if err != nil || !processed {
+		if err == nil || !processed {
 			t.Fatalf("process unsupported event: processed=%v err=%v", processed, err)
 		}
 
-		var coinKey, chainIdentity, status, reason, rawCoinKey, eventStatus string
-		var chainCode sql.NullString
-		var coinChainID sql.NullInt64
-		err = db.QueryRowContext(context.Background(), `
-			SELECT d.safeheron_coin_key, d.chain, d.chain_code, d.coin_chain_id,
-			       d.status, d.failed_reason, e.raw_payload #>> '{eventDetail,coinKey}',
-			       e.process_status
-			FROM deposits d
-			JOIN safeheron_webhook_events e ON e.id = $2
-			WHERE d.safeheron_tx_key = $1`, "tx-pg-unsupported", eventID).
-			Scan(&coinKey, &chainIdentity, &chainCode, &coinChainID, &status, &reason,
-				&rawCoinKey, &eventStatus)
-		if err != nil {
+		var depositCount int
+		if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM deposits WHERE safeheron_tx_key=$1`, "tx-pg-unsupported").Scan(&depositCount); err != nil {
 			t.Fatal(err)
 		}
-		if coinKey != testUnknownCoinKey64 || rawCoinKey != testUnknownCoinKey64 {
-			t.Fatalf("raw unsupported CoinKey was truncated: column=%q payload=%q", coinKey, rawCoinKey)
+		if depositCount != 0 {
+			t.Fatalf("unsupported unowned deposit count=%d", depositCount)
 		}
-		if chainIdentity != testLegacyUnsupportedChainIdentity {
-			t.Fatalf("legacy chain identity = %q, want %q", chainIdentity, testLegacyUnsupportedChainIdentity)
+		var eventStatus string
+		if err := db.QueryRowContext(context.Background(), `SELECT process_status FROM safeheron_webhook_events WHERE id=$1`, eventID).Scan(&eventStatus); err != nil {
+			t.Fatal(err)
 		}
-		if chainCode.Valid || coinChainID.Valid {
-			t.Fatalf("optional FK pair must be SQL NULL/NULL, got %#v/%#v", chainCode, coinChainID)
-		}
-		if status != DepositStatusManualReview || reason != ReasonCoinUnsupported {
-			t.Fatalf("unsupported deposit terminal state = %q/%q", status, reason)
-		}
-		if eventStatus != ProcessDone {
-			t.Fatalf("unsupported raw event status = %q, want DONE", eventStatus)
+		if eventStatus != ProcessError {
+			t.Fatalf("unsupported raw event status=%q", eventStatus)
 		}
 	})
 
@@ -211,6 +205,13 @@ func readDepositIntegrationEventStatus(t *testing.T, db *sql.DB, eventID int64) 
 }
 
 const depositPostgresFixtureDDL = `
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL
+);
+INSERT INTO users (id, email, password)
+VALUES (42, 'deposit-fixture@example.com', 'not-used');
 CREATE TABLE chains (code VARCHAR(32) PRIMARY KEY);
 CREATE TABLE coin_chains (
     id INT PRIMARY KEY,
@@ -237,7 +238,9 @@ CREATE TABLE deposits (
     status_rank SMALLINT NOT NULL DEFAULT 0,
     credited_at TIMESTAMP,
     failed_reason TEXT,
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT deposits_user_id_users_id_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
 );
 CREATE UNIQUE INDEX idx_deposits_safeheron_tx_key
     ON deposits(safeheron_tx_key) WHERE safeheron_tx_key IS NOT NULL;
@@ -257,6 +260,6 @@ CREATE TABLE safeheron_webhook_events (
 CREATE TABLE address_pool (
     address VARCHAR(255) NOT NULL,
     network_family VARCHAR(32) NOT NULL,
-    assigned_user_id INT
+    assigned_user_id INT REFERENCES users(id) ON DELETE SET NULL
 );
 `

@@ -228,7 +228,20 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		}
 	}
 	if coinChain == nil {
-		procErr, finalizeErr, txClosed := s.flagAndFinalize(ctx, tx1, evt, &d, 0, "", "", 0, ReasonCoinUnsupported, &alerts)
+		userID, ownerErr := s.lookupOwnerAcrossKnownNetworkFamilies(ctx, d.DestinationAddress)
+		if ownerErr != nil {
+			return true, ownerErr
+		}
+		if userID <= 0 {
+			processingErr := fmt.Errorf("unsupported asset destination has no assigned customer owner")
+			txClosed, markErr := s.finalizeEventErrorAfterRollback(ctx, tx1, evt.ID, processingErr)
+			tx1Closed = txClosed
+			if markErr != nil {
+				return true, markErr
+			}
+			return true, processingErr
+		}
+		procErr, finalizeErr, txClosed := s.flagAndFinalize(ctx, tx1, evt, &d, userID, "", "", 0, ReasonCoinUnsupported, &alerts)
 		tx1Closed = txClosed
 		if finalizeErr != nil {
 			return true, finalizeErr
@@ -250,13 +263,19 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 		return true, fmt.Errorf("lookup address owner: %w", err)
 	}
 	if !found {
-		procErr, finalizeErr, txClosed := s.flagAndFinalize(ctx, tx1, evt, &d, 0, coinChain.ChainCode, symbol, coinChain.ID, ReasonAddressUnassigned, &alerts)
+		processingErr := fmt.Errorf("deposit destination has no assigned customer owner")
+		alerts = append(alerts, alertPayload{level: "ERROR", title: "Deposit rejected", fields: map[string]string{
+			"reason": ReasonAddressUnassigned, "eventId": evt.EventID, "userId": "N/A",
+			"destinationAddress": d.DestinationAddress, "amount": d.TxAmount, "coinKey": d.CoinKey,
+			"txKey": d.TxKey, "txHash": d.TxHash,
+		}})
+		txClosed, markErr := s.finalizeEventErrorAfterRollback(ctx, tx1, evt.ID, processingErr)
 		tx1Closed = txClosed
-		if finalizeErr != nil {
-			return true, finalizeErr
+		if markErr != nil {
+			return true, markErr
 		}
 		s.fireAlerts(alerts)
-		return true, procErr
+		return true, processingErr
 	}
 
 	amount, err := decimal.NewFromString(d.TxAmount)
@@ -285,22 +304,23 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 
 	// UPSERT deposits with status_rank guard
 	row := &DepositRow{
-		UserID:             userID,
-		SafeheronTxKey:     d.TxKey,
-		SafeheronCoinKey:   coinChain.SafeheronCoinKey,
-		Amount:             d.TxAmount,
-		Asset:              symbol,
-		ChainCode:          coinChain.ChainCode,
-		CoinChainID:        coinChain.ID,
-		SafeheronStatus:    d.TransactionStatus,
-		SafeheronSubStatus: d.TransactionSubStatus,
-		StatusRank:         StatusRank(d.TransactionStatus),
-		BlockHeight:        d.BlockHeight,
-		BlockHash:          d.BlockHash,
-		Status:             DepositStatusPending,
-		FromAddress:        d.SourceAddress,
-		ToAddress:          d.DestinationAddress,
-		TxHash:             d.TxHash,
+		UserID:                     userID,
+		SafeheronTxKey:             d.TxKey,
+		SafeheronCoinKey:           coinChain.SafeheronCoinKey,
+		Amount:                     d.TxAmount,
+		Asset:                      symbol,
+		ChainCode:                  coinChain.ChainCode,
+		CoinChainID:                coinChain.ID,
+		SafeheronStatus:            d.TransactionStatus,
+		SafeheronSubStatus:         d.TransactionSubStatus,
+		StatusRank:                 StatusRank(d.TransactionStatus),
+		BlockHeight:                d.BlockHeight,
+		BlockHash:                  d.BlockHash,
+		Status:                     DepositStatusPending,
+		FromAddress:                d.SourceAddress,
+		ToAddress:                  d.DestinationAddress,
+		TxHash:                     d.TxHash,
+		AuthorizingRoutingActionID: evt.AuthorizingRoutingActionID,
 	}
 	dep, err := s.repo.UpsertDeposit(ctx, tx1, row)
 	if err != nil {
@@ -398,6 +418,24 @@ func (s *Service) ProcessOne(ctx context.Context) (processed bool, err error) {
 	}
 	tx1Closed = true
 	return true, nil
+}
+
+func (s *Service) lookupOwnerAcrossKnownNetworkFamilies(ctx context.Context, address string) (int, error) {
+	ownerID := 0
+	for _, family := range []string{"EVM", "TRON"} {
+		userID, found, err := s.repo.LookupAddressOwner(ctx, address, family)
+		if err != nil {
+			return 0, fmt.Errorf("lookup unsupported-asset address owner: %w", err)
+		}
+		if !found {
+			continue
+		}
+		if ownerID != 0 && ownerID != userID {
+			return 0, fmt.Errorf("unsupported-asset address ownership is ambiguous")
+		}
+		ownerID = userID
+	}
+	return ownerID, nil
 }
 
 const maxAMLListEntries = 50
@@ -617,6 +655,9 @@ func (s *Service) flagManualReview(
 	reason string,
 	alerts *[]alertPayload,
 ) error {
+	if userID <= 0 {
+		return fmt.Errorf("manual-review deposit requires a resolved positive customer user ID")
+	}
 	// If the deposit is already MANUAL_REVIEW a duplicate event arrived for the
 	// same tx — upsert to keep tracking data current, but skip the alert.
 	prior, found, err := s.repo.FindDepositByTxKey(ctx, tx, d.TxKey)
@@ -626,22 +667,23 @@ func (s *Service) flagManualReview(
 	alreadyFlagged := found && prior.Status == DepositStatusManualReview
 
 	row := &DepositRow{
-		UserID:             userID,
-		SafeheronTxKey:     d.TxKey,
-		SafeheronCoinKey:   d.CoinKey,
-		Amount:             d.TxAmount,
-		Asset:              symbol,
-		ChainCode:          chainCode,
-		CoinChainID:        coinChainID,
-		SafeheronStatus:    d.TransactionStatus,
-		SafeheronSubStatus: d.TransactionSubStatus,
-		StatusRank:         StatusRank(d.TransactionStatus),
-		BlockHeight:        d.BlockHeight,
-		BlockHash:          d.BlockHash,
-		Status:             DepositStatusManualReview,
-		FromAddress:        d.SourceAddress,
-		ToAddress:          d.DestinationAddress,
-		TxHash:             d.TxHash,
+		UserID:                     userID,
+		SafeheronTxKey:             d.TxKey,
+		SafeheronCoinKey:           d.CoinKey,
+		Amount:                     d.TxAmount,
+		Asset:                      symbol,
+		ChainCode:                  chainCode,
+		CoinChainID:                coinChainID,
+		SafeheronStatus:            d.TransactionStatus,
+		SafeheronSubStatus:         d.TransactionSubStatus,
+		StatusRank:                 StatusRank(d.TransactionStatus),
+		BlockHeight:                d.BlockHeight,
+		BlockHash:                  d.BlockHash,
+		Status:                     DepositStatusManualReview,
+		FromAddress:                d.SourceAddress,
+		ToAddress:                  d.DestinationAddress,
+		TxHash:                     d.TxHash,
+		AuthorizingRoutingActionID: evt.AuthorizingRoutingActionID,
 	}
 	dep, err := s.repo.UpsertDeposit(ctx, tx, row)
 	if err != nil {

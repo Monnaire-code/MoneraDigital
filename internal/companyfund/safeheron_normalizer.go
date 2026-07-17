@@ -2,7 +2,6 @@ package companyfund
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"monera-digital/internal/safeheron"
@@ -38,6 +37,10 @@ type SafeheronNormalizationInput struct {
 	SourcePayloadDigest   string
 	Metadata              ProviderFactMetadata
 	FirstSeenSource       TransactionSeenSource
+	// AuthorizedOccurrenceKey constrains routing projections to one exact,
+	// pre-authorized provider occurrence. Empty retains normal history/webhook
+	// normalization behavior.
+	AuthorizedOccurrenceKey string
 }
 
 // SafeheronNormalizedMovement is a pure adapter result. Future workers persist
@@ -63,8 +66,7 @@ type safeheronPrincipalDraft struct {
 	toAccount     *CompanyFundAccount
 	direction     Direction
 	identityInput MovementIdentityInput
-	baseTuple     string
-	detailKey     string
+	principal     SafeheronPrincipalOccurrence
 }
 
 // NormalizeSafeheronTransaction turns one Safeheron transaction snapshot into
@@ -76,32 +78,35 @@ func NormalizeSafeheronTransaction(input SafeheronNormalizationInput) ([]Safeher
 	if err != nil {
 		return nil, err
 	}
-	lines, transferMode, err := safeheronPrincipalLines(input.Snapshot)
+	principals, err := EnumerateSafeheronPrincipalOccurrences(input.Snapshot, base.networkFamily)
 	if err != nil {
 		return nil, err
 	}
-	drafts := make([]safeheronPrincipalDraft, 0, len(lines))
-	for _, line := range lines {
+	drafts := make([]safeheronPrincipalDraft, 0, len(principals))
+	for _, principal := range principals {
+		line := safeheronPrincipalLine{
+			DestinationAddress:  principal.DestinationAddress,
+			Amount:              principal.Amount,
+			DestinationPhishing: principal.DestinationPhishing,
+		}
 		draft, matched, err := safeheronPrincipalDraftFor(input.Registry, base, line)
 		if err != nil {
 			return nil, err
 		}
 		if matched {
+			draft.principal = principal
 			drafts = append(drafts, draft)
 		}
 	}
 	if len(drafts) == 0 {
 		return nil, nil
 	}
+	primaryOccurrenceKey := drafts[0].principal.Occurrence.Key
 
-	sort.Slice(drafts, func(left, right int) bool {
-		if drafts[left].baseTuple == drafts[right].baseTuple {
-			return drafts[left].detailKey < drafts[right].detailKey
-		}
-		return drafts[left].baseTuple < drafts[right].baseTuple
-	})
 	movements := make([]SafeheronNormalizedMovement, 0, len(drafts))
-	for index, draft := range drafts {
+	for _, draft := range drafts {
+		index := draft.principal.MovementIndex
+		transferMode := draft.principal.TransferMode
 		occurrenceInput := SafeheronOccurrenceInput{
 			ProviderTransactionKey: base.txKey,
 			MovementKind:           MovementKindPrincipal,
@@ -116,15 +121,23 @@ func NormalizeSafeheronTransaction(input SafeheronNormalizationInput) ([]Safeher
 		if err != nil {
 			return nil, fmt.Errorf("build Safeheron movement identity: %w", err)
 		}
-		occurrence, err := BuildSafeheronOccurrence(occurrenceInput)
-		if err != nil {
-			return nil, fmt.Errorf("build Safeheron provider occurrence: %w", err)
+		if input.AuthorizedOccurrenceKey != "" && draft.principal.Occurrence.Key != input.AuthorizedOccurrenceKey {
+			continue
 		}
-		movement, err := buildSafeheronPrincipalMovement(input, base, draft, identity, occurrence, transferMode, index)
+		movement, err := buildSafeheronPrincipalMovement(input, base, draft, identity, draft.principal.Occurrence, transferMode, index)
 		if err != nil {
 			return nil, err
 		}
 		movements = append(movements, movement)
+	}
+	if input.AuthorizedOccurrenceKey != "" && len(movements) == 0 {
+		return nil, fmt.Errorf("authorized Safeheron occurrence is absent from provider snapshot")
+	}
+	// Scoped routing executes one occurrence per action. Transaction-level fee
+	// metadata belongs only to the deterministic first principal occurrence;
+	// otherwise every scoped batch action would duplicate the full fee.
+	if input.AuthorizedOccurrenceKey != "" && input.AuthorizedOccurrenceKey != primaryOccurrenceKey {
+		return movements, nil
 	}
 	companyPaysFee := movements[0].Movement.FromAccountID != nil
 	fee, err := safeheronTransactionFeeDisplay(input.Snapshot, input.FeeAsset, companyPaysFee)
@@ -135,8 +148,8 @@ func NormalizeSafeheronTransaction(input SafeheronNormalizationInput) ([]Safeher
 		// One tx hash represents one displayed normal/internal transfer. The
 		// transaction-level network fee therefore belongs on one deterministic
 		// principal row rather than becoming a synthetic FEE cash-flow line.
-		// Drafts are sorted before identity assignment, so index zero is stable
-		// for non-identical batch recipients and never depends on map iteration.
+		// Principal occurrences are sorted before ownership filtering, so the
+		// selected primary row is stable and independent of configuration.
 		applySafeheronFeeDisplay(&movements[0], *fee)
 	}
 	return movements, nil

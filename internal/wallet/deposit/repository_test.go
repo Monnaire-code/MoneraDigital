@@ -66,12 +66,12 @@ func TestLockNextPendingEvent_Found(t *testing.T) {
 
 	cols := []string{"id", "event_id", "event_type", "safeheron_tx_key",
 		"customer_ref_id", "raw_payload", "process_status",
-		"process_attempts", "error_message"}
+		"process_attempts", "error_message", "authorizing_routing_action_id"}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT .+ FROM safeheron_webhook_events").
 		WillReturnRows(sqlmock.NewRows(cols).
-			AddRow(7, "evt-7", "T", "tk", "cr", []byte(`{}`), "PENDING", 0, ""))
+			AddRow(7, "evt-7", "T", "tk", "cr", []byte(`{}`), "PENDING", 0, "", int64(0)))
 	mock.ExpectCommit()
 
 	r := NewRepository(db)
@@ -94,12 +94,53 @@ func TestLockNextPendingEvent_NoRows(t *testing.T) {
 	defer db.Close()
 	cols := []string{"id", "event_id", "event_type", "safeheron_tx_key",
 		"customer_ref_id", "raw_payload", "process_status",
-		"process_attempts", "error_message"}
+		"process_attempts", "error_message", "authorizing_routing_action_id"}
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT .+ FROM safeheron_webhook_events").WillReturnRows(sqlmock.NewRows(cols))
 	mock.ExpectRollback()
 
 	r := NewRepository(db)
+	tx, _ := r.BeginTx(context.Background())
+	_, err := r.LockNextPendingEvent(context.Background(), tx)
+	if !errors.Is(err, ErrNoPending) {
+		t.Fatalf("expected ErrNoPending, got %v", err)
+	}
+	_ = tx.Rollback()
+}
+
+func TestLockNextPendingEventCanBeRestrictedToAML(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	cols := []string{"id", "event_id", "event_type", "safeheron_tx_key",
+		"customer_ref_id", "raw_payload", "process_status",
+		"process_attempts", "error_message", "authorizing_routing_action_id"}
+	mock.ExpectBegin()
+	mock.ExpectQuery("event_id LIKE 'routing-customer:%'").
+		WillReturnRows(sqlmock.NewRows(cols).AddRow(8, "evt-8", "AML_KYT_ALERT", "", "", []byte(`{}`), "PENDING", 0, "", int64(0)))
+	mock.ExpectRollback()
+
+	r := NewRepository(db)
+	r.SetTransactionClaimsEnabled(false)
+	tx, _ := r.BeginTx(context.Background())
+	if _, err := r.LockNextPendingEvent(context.Background(), tx); err != nil {
+		t.Fatalf("LockNextPendingEvent: %v", err)
+	}
+	_ = tx.Rollback()
+}
+
+func TestLockNextPendingEventCaptureOnlyExcludesRoutingProjectionEvents(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	cols := []string{"id", "event_id", "event_type", "safeheron_tx_key",
+		"customer_ref_id", "raw_payload", "process_status", "process_attempts", "error_message", "authorizing_routing_action_id"}
+	mock.ExpectBegin()
+	mock.ExpectQuery("event_type = 'AML_KYT_ALERT'").
+		WillReturnRows(sqlmock.NewRows(cols))
+	mock.ExpectRollback()
+
+	r := NewRepository(db)
+	r.SetTransactionClaimsEnabled(false)
+	r.SetRoutingProjectionClaimsEnabled(false)
 	tx, _ := r.BeginTx(context.Background())
 	_, err := r.LockNextPendingEvent(context.Background(), tx)
 	if !errors.Is(err, ErrNoPending) {

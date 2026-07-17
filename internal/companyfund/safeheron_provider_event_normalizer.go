@@ -122,16 +122,17 @@ func (normalizer *SafeheronProviderEventNormalizer) normalizeTransactionStatusEv
 	}
 	eventID := lease.ID
 	result, err := NormalizeSafeheronProviderEvent(SafeheronNormalizationInput{
-		Snapshot:              snapshot,
-		NetworkFamily:         mapping.NetworkFamily,
-		PrincipalAsset:        mapping.PrincipalAsset,
-		FeeAsset:              mapping.FeeAsset,
-		Registry:              registry,
-		ProviderEventID:       lease.ProviderEventID,
-		LatestProviderEventID: &eventID,
-		SourcePayloadDigest:   lease.SourcePayloadDigest,
-		Metadata:              ProviderFactMetadata{Source: ProviderSourceWebhook},
-		FirstSeenSource:       TransactionSeenSourceWebhook,
+		Snapshot:                snapshot,
+		NetworkFamily:           mapping.NetworkFamily,
+		PrincipalAsset:          mapping.PrincipalAsset,
+		FeeAsset:                mapping.FeeAsset,
+		Registry:                registry,
+		ProviderEventID:         lease.ProviderEventID,
+		LatestProviderEventID:   &eventID,
+		SourcePayloadDigest:     lease.SourcePayloadDigest,
+		Metadata:                ProviderFactMetadata{Source: ProviderSourceWebhook},
+		FirstSeenSource:         TransactionSeenSourceWebhook,
+		AuthorizedOccurrenceKey: lease.AuthorizedSafeheronOccurrenceKey,
 	})
 	if err != nil {
 		return ProviderEventNormalizationResult{}, safeheronPermanentNormalizationError("Safeheron transaction normalization rejected payload")
@@ -177,9 +178,12 @@ func validateSafeheronProviderEventLease(lease ProviderEventLease) error {
 			lease.EventType == SafeheronTransactionHistorySnapshotEventType {
 			return safeheronPermanentNormalizationError("invalid Safeheron webhook provider-event lease")
 		}
+		if lease.AuthorizedSafeheronOccurrenceKey != "" && !validSafeheronOccurrenceKey(lease.AuthorizedSafeheronOccurrenceKey) {
+			return safeheronPermanentNormalizationError("invalid Safeheron routing occurrence authorization")
+		}
 	case ProviderEventSourceOwnedEncryptedPayload:
 		if lease.EventType != SafeheronTransactionHistorySnapshotEventType || lease.SafeheronWebhookEventID != nil ||
-			strings.TrimSpace(lease.ProviderAccountKey) == "" {
+			strings.TrimSpace(lease.ProviderAccountKey) == "" || lease.AuthorizedSafeheronOccurrenceKey != "" {
 			return safeheronPermanentNormalizationError("invalid Safeheron transaction history provider-event lease")
 		}
 	default:
