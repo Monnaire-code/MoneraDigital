@@ -247,7 +247,57 @@ func TestWorker_ProcessErrorContinues(t *testing.T) {
 	defer cancel()
 	w.Run(ctx)
 
-	if len(repo.errorIDs) == 0 {
+	if len(repo.noTxErrorIDs) == 0 {
 		t.Error("expected at least one error event recorded")
+	}
+}
+
+func TestWorker_UnsupportedEventDoesNotStarveLaterValidEvent(t *testing.T) {
+	if got := len(testUnknownCoinKey64); got != 64 {
+		t.Fatalf("test fixture CoinKey length = %d, want 64", got)
+	}
+
+	repo := newMockRepo()
+	repo.owners["0xdest"] = 42
+	reg := newTestRegistry("ETH", "ETHEREUM", "ETH", "0.0001", 11)
+	svc := NewService(repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-poison",
+			CoinKey:              testUnknownCoinKey64,
+			TxAmount:             "1",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-valid",
+			CoinKey:              "ETH",
+			TxAmount:             "1",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+
+	NewWorker(svc, WorkerConfig{}).drainSafely(context.Background())
+
+	if got := repo.deposits["tx-poison"]; got == nil || got.Status != DepositStatusManualReview {
+		t.Fatalf("poison event must terminate in MANUAL_REVIEW, got %+v", got)
+	} else if got.SafeheronCoinKey != testUnknownCoinKey64 || got.ChainCode != "" || got.CoinChainID != 0 {
+		t.Fatalf("poison evidence/mapping = %q/%q/%d", got.SafeheronCoinKey, got.ChainCode, got.CoinChainID)
+	}
+	if got := repo.deposits["tx-valid"]; got == nil || got.Status != DepositStatusCredited {
+		t.Fatalf("later valid event must be credited, got %+v", got)
+	}
+	if len(repo.doneIDs) != 2 {
+		t.Fatalf("both events must be finalized, got DONE ids %v", repo.doneIDs)
 	}
 }

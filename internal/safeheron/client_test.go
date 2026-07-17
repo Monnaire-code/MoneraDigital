@@ -41,11 +41,18 @@ func (m *mockAccountAPI) GetAccountByAddress(req api.OneAccountByAddressRequest,
 
 type mockTransactionAPI struct {
 	createTxFn func(api.CreateTransactionsRequest, *api.CreateTransactionV3Response) error
+	listTxFn   func(api.ListTransactionsV2Request, *api.TransactionsResponseV2) error
 	oneTxFn    func(api.OneTransactionsRequest, *api.OneTransactionsResponse) error
 }
 
 func (m *mockTransactionAPI) CreateTransactionsV3(req api.CreateTransactionsRequest, resp *api.CreateTransactionV3Response) error {
 	return m.createTxFn(req, resp)
+}
+func (m *mockTransactionAPI) ListTransactionsV2(req api.ListTransactionsV2Request, resp *api.TransactionsResponseV2) error {
+	if m.listTxFn == nil {
+		return errors.New("unexpected ListTransactionsV2 call")
+	}
+	return m.listTxFn(req, resp)
 }
 func (m *mockTransactionAPI) OneTransactions(req api.OneTransactionsRequest, resp *api.OneTransactionsResponse) error {
 	return m.oneTxFn(req, resp)
@@ -147,7 +154,7 @@ func TestNewClient_FilePathsHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if c.account == nil || c.compliance == nil || c.transaction == nil {
+	if c.account == nil || c.compliance == nil || c.coin == nil || c.transaction == nil || c.webhookReplay == nil {
 		t.Fatal("expected all SDK API clients to be wired")
 	}
 	if c.webhookConv == nil {

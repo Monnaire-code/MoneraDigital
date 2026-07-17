@@ -36,7 +36,7 @@
     "deploymentEnabled": {
       "stage": true,
       "main": false,
-      "*": false
+      "**": false
     }
   }
 }

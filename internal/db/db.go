@@ -5,11 +5,21 @@ import (
 	"log"
 	"time"
 
+	"monera-digital/internal/buildinfo"
+
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func InitDB(databaseURL string) (*sql.DB, error) {
-	db, err := sql.Open("pgx", databaseURL)
+	return InitDBWithProvenance(databaseURL, "dev", "")
+}
+
+func InitDBWithProvenance(databaseURL, version, invocationID string) (*sql.DB, error) {
+	provenanceURL, err := buildinfo.DatabaseURL(databaseURL, version, invocationID)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("pgx", provenanceURL)
 	if err != nil {
 		return nil, err
 	}

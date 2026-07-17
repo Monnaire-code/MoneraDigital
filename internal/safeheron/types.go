@@ -2,6 +2,20 @@ package safeheron
 
 import "encoding/json"
 
+// Coin is the project-local mirror of immutable metadata returned by
+// Safeheron's /v1/coin/list endpoint.
+type Coin struct {
+	CoinKey         string
+	CoinName        string
+	Symbol          string
+	CoinDecimal     int32
+	FeeCoinKey      string
+	BlockChain      string
+	BlockchainType  string
+	Network         string
+	TokenIdentifier string
+}
+
 // KytReportResponse mirrors SDK api.KytReportResponse — 项目内类型，
 // 业务层只 import internal/safeheron，不直接依赖 SDK。
 type KytReportResponse struct {

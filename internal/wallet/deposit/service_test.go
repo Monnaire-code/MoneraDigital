@@ -45,7 +45,12 @@ type mockRepo struct {
 		id  int64
 		msg string
 	}
+	noTxErrorIDs []struct {
+		id  int64
+		msg string
+	}
 	markErrorErr       error // forces MarkEventError to fail (T7-I-5)
+	markErrorNoTxErr   error
 	findDepositByTxErr error // forces FindDepositByTxKey to fail
 
 	commitCalls           int
@@ -53,8 +58,10 @@ type mockRepo struct {
 	beginTxCalls          int     // tracks how many tx were begun (T7-I-5 hot-loop check)
 	noTxIncrements        []int64 // recorded eventIDs of IncrementEventAttemptsNoTx calls (T10 C-1/I-2)
 	rollbackBeforeNoTxInc bool    // true means each noTx increment is observed AFTER at least one rollback
+	rollbackBeforeNoTxErr bool
 
 	commitErr   error // injected commit failure for fakeTx
+	rollbackErr error
 	markDoneErr error // forces MarkEventDone to fail
 	markMRErr   error // forces MarkDepositManualReview to fail
 }
@@ -76,14 +83,21 @@ func (m *mockRepo) BeginTx(_ context.Context) (Tx, error) {
 	if m.beginTxErr != nil {
 		return nil, m.beginTxErr
 	}
-	return &fakeTx{mu: &m.mu, commits: &m.commitCalls, rollbacks: &m.rollbackCalls, commitErr: m.commitErr}, nil
+	return &fakeTx{
+		mu:          &m.mu,
+		commits:     &m.commitCalls,
+		rollbacks:   &m.rollbackCalls,
+		commitErr:   m.commitErr,
+		rollbackErr: m.rollbackErr,
+	}, nil
 }
 
 type fakeTx struct {
-	mu        *sync.Mutex
-	commits   *int
-	rollbacks *int
-	commitErr error // injected commit failure
+	mu          *sync.Mutex
+	commits     *int
+	rollbacks   *int
+	commitErr   error // injected commit failure
+	rollbackErr error
 }
 
 func (f *fakeTx) Commit() error {
@@ -99,7 +113,7 @@ func (f *fakeTx) Rollback() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	*f.rollbacks++
-	return nil
+	return f.rollbackErr
 }
 
 func (m *mockRepo) InsertEventOrSkip(ctx context.Context, evt *Event) (bool, error) {
@@ -261,6 +275,20 @@ func (m *mockRepo) MarkEventError(_ context.Context, _ Tx, id int64, msg string)
 		msg string
 	}{id, msg})
 	return nil
+}
+
+func (m *mockRepo) MarkEventErrorNoTx(_ context.Context, id int64, msg string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.markErrorNoTxErr != nil {
+		return false, m.markErrorNoTxErr
+	}
+	m.rollbackBeforeNoTxErr = m.rollbackCalls > 0
+	m.noTxErrorIDs = append(m.noTxErrorIDs, struct {
+		id  int64
+		msg string
+	}{id, msg})
+	return true, nil
 }
 
 // === AML/KYT mock methods ===
@@ -683,7 +711,76 @@ func TestProcessOne_AddressUnassigned_FlagsManualReview(t *testing.T) {
 	}
 }
 
+type companyFundDestinationMatcherStub map[string]bool
+
+func (stub companyFundDestinationMatcherStub) IsCompanyFundDestination(address string) bool {
+	return stub[strings.ToLower(strings.TrimSpace(address))]
+}
+
+func TestProcessOne_CompanyFundDestination_SkipsLegacyDepositReview(t *testing.T) {
+	for _, coinKey := range []string{"USDT_BEP20", testUnknownCoinKey64} {
+		t.Run(coinKey, func(t *testing.T) {
+			repo := newMockRepo()
+			reg := newTestRegistry("USDT", "BINANCE_SMART_CHAIN", "USDT_BEP20", "0.0001", 11)
+			alertFn, alerts := newAlertCollector()
+			svc := newSvc(t, repo, reg, alertFn)
+			svc.SetCompanyFundDestinationMatcher(companyFundDestinationMatcherStub{
+				"0x4b55422a3c2df278433bfd53cce029c8e6ce652e": true,
+			})
+
+			enqueueRaw(t, repo, PayloadEnvelope{
+				EventType: "TRANSACTION_CREATED",
+				EventDetail: PayloadEventDetail{
+					TxKey:                "company-fund-tx",
+					CoinKey:              coinKey,
+					TxAmount:             "0.011",
+					TransactionStatus:    "COMPLETED",
+					TransactionSubStatus: "CONFIRMED",
+					TransactionDirection: "INFLOW",
+					DestinationAddress:   "0x4B55422A3c2DF278433Bfd53CcE029C8E6cE652E",
+				},
+			})
+
+			processed, err := svc.ProcessOne(context.Background())
+			if err != nil || !processed {
+				t.Fatalf("ProcessOne() = %v, %v; want company-fund event finalized", processed, err)
+			}
+			if len(repo.deposits) != 0 || len(repo.manualUpdates) != 0 || len(*alerts) != 0 {
+				t.Fatalf("company-fund destination reached legacy deposit review: deposits=%v manual=%v alerts=%v", repo.deposits, repo.manualUpdates, *alerts)
+			}
+			if len(repo.doneIDs) != 1 || repo.doneIDs[0] != 1 {
+				t.Fatalf("company-fund raw event finalization = %v, want DONE once", repo.doneIDs)
+			}
+		})
+	}
+}
+
+func TestCompanyFundDestinationMatcherCanBeWiredWhileWorkerReads(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+	matcher := companyFundDestinationMatcherStub{"0xcompany": true}
+	var wait sync.WaitGroup
+	for range 10 {
+		wait.Add(2)
+		go func() {
+			defer wait.Done()
+			svc.SetCompanyFundDestinationMatcher(matcher)
+		}()
+		go func() {
+			defer wait.Done()
+			_ = svc.isCompanyFundDestination("0xcompany")
+		}()
+	}
+	wait.Wait()
+	if !svc.isCompanyFundDestination("0xcompany") {
+		t.Fatal("latest matcher must remain visible after concurrent wiring")
+	}
+}
+
 func TestProcessOne_CoinUnsupported_FlagsManualReview(t *testing.T) {
+	if got := len(testUnknownCoinKey64); got != 64 {
+		t.Fatalf("test fixture CoinKey length = %d, want 64", got)
+	}
+
 	repo := newMockRepo()
 	repo.owners["0xdest"] = 42
 	reg := &stubRegistry{byKey: map[string]*walletconfig.CoinChain{}}
@@ -694,7 +791,7 @@ func TestProcessOne_CoinUnsupported_FlagsManualReview(t *testing.T) {
 		EventType: "TRANSACTION_CREATED",
 		EventDetail: PayloadEventDetail{
 			TxKey:                "tx-1",
-			CoinKey:              "UNKNOWN",
+			CoinKey:              testUnknownCoinKey64,
 			TxAmount:             "1",
 			TransactionStatus:    "COMPLETED",
 			TransactionSubStatus: "CONFIRMED",
@@ -707,6 +804,23 @@ func TestProcessOne_CoinUnsupported_FlagsManualReview(t *testing.T) {
 	}
 	if (*alerts)[0].fields["reason"] != ReasonCoinUnsupported {
 		t.Errorf("expected COIN_UNSUPPORTED alert, got %+v", *alerts)
+	}
+	deposit := repo.deposits["tx-1"]
+	if deposit == nil {
+		t.Fatal("expected unsupported deposit evidence to be persisted")
+	}
+	if deposit.Status != DepositStatusManualReview {
+		t.Errorf("expected MANUAL_REVIEW deposit, got %q", deposit.Status)
+	}
+	if deposit.SafeheronCoinKey != testUnknownCoinKey64 {
+		t.Errorf("expected raw CoinKey evidence, got %q", deposit.SafeheronCoinKey)
+	}
+	if deposit.ChainCode != "" || deposit.CoinChainID != 0 {
+		t.Errorf("unsupported mapping must leave both optional FKs empty, got %q/%d",
+			deposit.ChainCode, deposit.CoinChainID)
+	}
+	if len(repo.doneIDs) != 1 || repo.doneIDs[0] != 1 {
+		t.Errorf("unsupported event must be DONE exactly once, got %v", repo.doneIDs)
 	}
 }
 
@@ -897,8 +1011,80 @@ func TestProcessOne_DepositErrorMarksEventErrorAndReturnsErr(t *testing.T) {
 	if !processed {
 		t.Error("expected processed=true even on error")
 	}
-	if len(repo.errorIDs) != 1 {
-		t.Errorf("expected event marked ERROR, got %+v", repo.errorIDs)
+	if len(repo.errorIDs) != 0 {
+		t.Errorf("must not mark ERROR inside the failed transaction, got %+v", repo.errorIDs)
+	}
+	if len(repo.noTxErrorIDs) != 1 {
+		t.Errorf("expected no-tx event ERROR finalization, got %+v", repo.noTxErrorIDs)
+	}
+	if !repo.rollbackBeforeNoTxErr {
+		t.Error("failed deposit transaction must roll back before no-tx ERROR finalization")
+	}
+	if repo.commitCalls != 0 {
+		t.Errorf("failed deposit transaction must not commit, got %d commits", repo.commitCalls)
+	}
+}
+
+func TestProcessOne_UnsupportedDepositSQLFailureRollsBackBeforeErrorFinalization(t *testing.T) {
+	repo := newMockRepo()
+	repo.depositErr = errors.New("pq: insert or update violates foreign key constraint (SQLSTATE 23503)")
+	svc := newSvc(t, repo, &stubRegistry{byKey: map[string]*walletconfig.CoinChain{}}, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-unsupported-fk",
+			CoinKey:              "ETH_TEST5_USDC",
+			TxAmount:             "1",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xdest",
+		},
+	})
+
+	processed, err := svc.ProcessOne(context.Background())
+	if !processed || err == nil {
+		t.Fatalf("expected processed row-specific failure, got processed=%v err=%v", processed, err)
+	}
+	if len(repo.errorIDs) != 0 {
+		t.Fatalf("aborted transaction must not receive MarkEventError, got %+v", repo.errorIDs)
+	}
+	if len(repo.noTxErrorIDs) != 1 || repo.noTxErrorIDs[0].id != 1 {
+		t.Fatalf("expected conditional no-tx ERROR finalization, got %+v", repo.noTxErrorIDs)
+	}
+	if !repo.rollbackBeforeNoTxErr {
+		t.Fatal("expected rollback before no-tx ERROR finalization (25P02 guard)")
+	}
+}
+
+func TestProcessOne_RollbackFailureDoesNotAttemptNoTxFinalization(t *testing.T) {
+	repo := newMockRepo()
+	repo.depositErr = errors.New("statement failed")
+	repo.rollbackErr = errors.New("rollback connection failure")
+	svc := newSvc(t, repo, &stubRegistry{byKey: map[string]*walletconfig.CoinChain{}}, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-rollback-failure",
+			CoinKey:              "ETH_TEST5_USDC",
+			TxAmount:             "1",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+		},
+	})
+
+	_, err := svc.ProcessOne(context.Background())
+	if !errors.Is(err, ErrMarkErrorFailed) {
+		t.Fatalf("rollback infrastructure failure must trigger worker yield sentinel, got %v", err)
+	}
+	if len(repo.noTxErrorIDs) != 0 {
+		t.Fatalf("NoTx finalization must not run after rollback failure, got %+v", repo.noTxErrorIDs)
+	}
+	if repo.rollbackCalls != 2 {
+		t.Fatalf("expected explicit rollback plus deferred retry, got %d calls", repo.rollbackCalls)
 	}
 }
 
@@ -1036,9 +1222,12 @@ func TestProcessOne_FlagManualReviewUpsertFails_MarksEventError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when flagManualReview fails")
 	}
-	// MarkEventError should have been called
-	if len(repo.errorIDs) != 1 {
-		t.Errorf("expected 1 error event (from flagAndFinalize error path), got %d", len(repo.errorIDs))
+	// The failed transaction must be rolled back before conditional no-tx finalization.
+	if len(repo.noTxErrorIDs) != 1 {
+		t.Errorf("expected 1 no-tx error event (from flagAndFinalize error path), got %d", len(repo.noTxErrorIDs))
+	}
+	if !repo.rollbackBeforeNoTxErr {
+		t.Error("expected rollback before no-tx ERROR finalization")
 	}
 }
 
@@ -1423,5 +1612,186 @@ func TestProcessOne_BelowMinAmount_FindDepositError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "check existing deposit") {
 		t.Errorf("expected error to contain 'check existing deposit', got: %v", err)
+	}
+}
+
+// === 本次变更补充测试 ===
+
+// TestProcessOne_AddressUnassigned_AssetFieldPopulated 验证地址未分配时 deposits.asset
+// 字段仍正确写入 coin symbol（修复前该字段为空字符串）。
+func TestProcessOne_AddressUnassigned_AssetFieldPopulated(t *testing.T) {
+	repo := newMockRepo()
+	// 不设置 owner → LookupAddressOwner 返回 not found
+	reg := newTestRegistry("ETH", "ETHEREUM", "ETH", "0.0001", 7)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-unassigned",
+			CoinKey:              "ETH",
+			TxAmount:             "0.05",
+			TransactionStatus:    "COMPLETED",
+			TransactionSubStatus: "CONFIRMED",
+			TransactionDirection: "INFLOW",
+			DestinationAddress:   "0xunknown",
+		},
+	})
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	dep, ok := repo.deposits["tx-unassigned"]
+	if !ok {
+		t.Fatal("expected deposit row to be written")
+	}
+	if dep.Asset != "ETH" {
+		t.Errorf("expected Asset=ETH, got %q (symbol must be populated even when address unassigned)", dep.Asset)
+	}
+	if dep.Status != DepositStatusManualReview {
+		t.Errorf("expected status MANUAL_REVIEW, got %s", dep.Status)
+	}
+}
+
+// TestProcessOne_AddressUnassigned_TwoEvents_SingleAlert 验证同一未分配地址充值收到两
+// 条事件时，第二条不重复告警（alreadyFlagged 路径）。
+func TestProcessOne_AddressUnassigned_TwoEvents_SingleAlert(t *testing.T) {
+	repo := newMockRepo()
+	reg := newTestRegistry("ETH", "ETHEREUM", "ETH", "0.0001", 7)
+	alertFn, alerts := newAlertCollector()
+	svc := newSvc(t, repo, reg, alertFn)
+
+	detail := PayloadEventDetail{
+		TxKey:                "tx-dup-unassigned",
+		CoinKey:              "ETH",
+		TxAmount:             "0.05",
+		TransactionDirection: "INFLOW",
+		DestinationAddress:   "0xunknown",
+	}
+
+	// 第一条：CONFIRMING
+	detail.TransactionStatus = "CONFIRMING"
+	enqueueRaw(t, repo, PayloadEnvelope{EventType: "TRANSACTION_CREATED", EventDetail: detail})
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatalf("event 1: %v", err)
+	}
+
+	// 第二条：COMPLETED（同笔，deposit 已是 MANUAL_REVIEW）
+	detail.TransactionStatus = "COMPLETED"
+	detail.TransactionSubStatus = "CONFIRMED"
+	enqueueRaw(t, repo, PayloadEnvelope{EventType: "TRANSACTION_STATUS_CHANGED", EventDetail: detail})
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatalf("event 2: %v", err)
+	}
+
+	if len(*alerts) != 1 {
+		t.Errorf("expected exactly 1 alert for 2 events on same unassigned deposit, got %d", len(*alerts))
+	}
+	// 两条事件操作同一笔 deposit（同 ID），manualUpdates map 只有一个键
+	if len(repo.manualUpdates) != 1 {
+		t.Errorf("expected 1 deposit in manualUpdates (same deposit, two events), got %d", len(repo.manualUpdates))
+	}
+}
+
+// TestProcessOne_MarkMRNonTerminalError_Propagated 验证 MarkDepositManualReview 返回
+// 非 ErrDepositTerminalState 错误时，flagManualReview 将其包装后上浮（不静默吞掉）。
+func TestProcessOne_MarkMRNonTerminalError_Propagated(t *testing.T) {
+	repo := newMockRepo()
+	repo.markMRErr = errors.New("constraint violation")
+	reg := newTestRegistry("ETH", "ETHEREUM", "ETH", "0.0001", 7)
+	svc := newSvc(t, repo, reg, nil)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-mr-err",
+			CoinKey:              "ETH",
+			TxAmount:             "0.05",
+			TransactionDirection: "INFLOW",
+			TransactionStatus:    "COMPLETED",
+			DestinationAddress:   "0xunknown",
+		},
+	})
+	_, err := svc.ProcessOne(context.Background())
+	if err == nil {
+		t.Fatal("expected error when MarkDepositManualReview fails with non-terminal error")
+	}
+	if !strings.Contains(err.Error(), "mark manual_review") {
+		t.Errorf("expected 'mark manual_review' in error, got: %v", err)
+	}
+	// flagAndFinalize rolls back before the conditional no-tx ERROR update.
+	if len(repo.noTxErrorIDs) != 1 {
+		t.Errorf("expected MarkEventErrorNoTx called once, got %d", len(repo.noTxErrorIDs))
+	}
+	if !repo.rollbackBeforeNoTxErr {
+		t.Error("expected rollback before MarkEventErrorNoTx")
+	}
+}
+
+// TestProcessOne_AddressUnassigned_AlertUserIDIsNA 验证地址未分配时告警字段
+// userId 为 "N/A" 而非 "0"，避免运维误读为系统账户（S-3）。
+func TestProcessOne_AddressUnassigned_AlertUserIDIsNA(t *testing.T) {
+	repo := newMockRepo()
+	reg := newTestRegistry("ETH", "ETHEREUM", "ETH", "0.0001", 7)
+	alertFn, alerts := newAlertCollector()
+	svc := newSvc(t, repo, reg, alertFn)
+
+	enqueueRaw(t, repo, PayloadEnvelope{
+		EventType: "TRANSACTION_CREATED",
+		EventDetail: PayloadEventDetail{
+			TxKey:                "tx-na-userid",
+			CoinKey:              "ETH",
+			TxAmount:             "0.05",
+			TransactionDirection: "INFLOW",
+			TransactionStatus:    "COMPLETED",
+			DestinationAddress:   "0xunknown",
+		},
+	})
+	if _, err := svc.ProcessOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*alerts) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(*alerts))
+	}
+	got := (*alerts)[0].fields["userId"]
+	if got != "N/A" {
+		t.Errorf("expected userId=N/A for unassigned address, got %q", got)
+	}
+}
+
+// TestWarnIfTerminalState_TerminalError_Absorbed 验证传入 ErrDepositTerminalState 时
+// 函数返回 nil（告警日志但不冒泡）。
+func TestWarnIfTerminalState_TerminalError_Absorbed(t *testing.T) {
+	err := warnIfTerminalState(ErrDepositTerminalState, 42, "MANUAL_REVIEW")
+	if err != nil {
+		t.Errorf("expected nil when ErrDepositTerminalState is passed, got %v", err)
+	}
+}
+
+// TestWarnIfTerminalState_OtherError_Propagated 验证非终态错误原样返回。
+func TestWarnIfTerminalState_OtherError_Propagated(t *testing.T) {
+	sentinel := errors.New("db connection lost")
+	err := warnIfTerminalState(sentinel, 42, "MANUAL_REVIEW")
+	if !errors.Is(err, sentinel) {
+		t.Errorf("expected sentinel error to propagate, got %v", err)
+	}
+}
+
+// TestScanAmlPending_BeginTxError_Logged 验证 scanOneAmlPending 内部 BeginTx 失败时
+// ScanAmlPending 记录错误日志（不 panic）。
+func TestScanAmlPending_BeginTxError_Logged(t *testing.T) {
+	repo := newMockRepo()
+	repo.beginTxErr = errors.New("db unavailable")
+	svc := newSvc(t, repo, nil, nil)
+	svc.ScanAmlPending(context.Background()) // must not panic
+}
+
+// TestSetAMLFirstPollDelay_Negative_DefaultsToFiveMinutes 验证传入负值时使用默认 5m。
+func TestSetAMLFirstPollDelay_Negative_DefaultsToFiveMinutes(t *testing.T) {
+	repo := newMockRepo()
+	svc := NewService(repo, nil, nil)
+	svc.SetAMLFirstPollDelay(-1)
+	if svc.amlFirstPollDelay != 5*time.Minute {
+		t.Errorf("expected 5m, got %v", svc.amlFirstPollDelay)
 	}
 }

@@ -5,6 +5,11 @@ import (
 	"errors"
 )
 
+var (
+	ErrEventPayloadDigestMismatch    = errors.New("safeheron event payload digest conflicts with existing raw event")
+	ErrEventPayloadDigestUnavailable = errors.New("safeheron event payload digest is unavailable for an existing raw event")
+)
+
 // Process statuses for safeheron_webhook_events.process_status.
 const (
 	ProcessPending = "PENDING"
@@ -47,9 +52,18 @@ type Event struct {
 	SafeheronTxKey  string
 	CustomerRefID   string
 	RawPayload      []byte
+	PayloadDigest   string
 	ProcessStatus   string
 	ProcessAttempts int
 	ErrorMessage    string
+}
+
+// EventSource is the immutable source reference a secondary consumer may use
+// after the Safeheron webhook row has been durably stored. It deliberately
+// excludes process_status and every deposit-worker lifecycle field.
+type EventSource struct {
+	ID            int
+	PayloadDigest string
 }
 
 // PayloadEnvelope is the decrypted webhook business envelope (eventType +

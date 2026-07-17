@@ -183,3 +183,24 @@ func TestRateLimiter_SkipPath_DoesNotAffectPerKeyCounter(t *testing.T) {
 		t.Fatal("/api/fund/stats should be whitelisted after SkipPath")
 	}
 }
+
+// Provider webhook exemptions must be exact paths. A prefix exemption would
+// accidentally remove the global limiter from unrelated future endpoints
+// under /api/webhooks.
+func TestRateLimiter_CompanyFundWebhookExemptionsAreExact(t *testing.T) {
+	rl := NewRateLimiter(2, time.Minute)
+	defer rl.Stop()
+	rl.SkipPath("/api/webhooks/safeheron")
+	rl.SkipPath("/api/webhooks/airwallex")
+
+	for _, path := range []string{"/api/webhooks/safeheron", "/api/webhooks/airwallex"} {
+		if !rl.IsPathWhitelisted(path) {
+			t.Fatalf("%s should be an exact webhook exemption", path)
+		}
+	}
+	for _, path := range []string{"/api/webhooks", "/api/webhooks/safeheron/replay", "/api/webhooks/airwallex/replay"} {
+		if rl.IsPathWhitelisted(path) {
+			t.Fatalf("%s must not be exempted by a provider webhook path", path)
+		}
+	}
+}

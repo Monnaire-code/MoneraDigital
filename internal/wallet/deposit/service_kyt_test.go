@@ -618,11 +618,11 @@ func (r *updateAMLErrRepo) UpdateAMLFields(_ context.Context, _ Tx, _ int64, _, 
 	return errors.New("update AML fields boom")
 }
 
-// flagAndFinalize: flagManualReview fails AND MarkEventError also fails → wraps ErrMarkErrorFailed
+// flagAndFinalize: flagManualReview fails AND no-tx MarkEventError also fails → wraps ErrMarkErrorFailed
 func TestProcessOne_FlagAndFinalize_BothFail(t *testing.T) {
 	repo := newMockRepo()
 	repo.depositErr = errors.New("upsert boom in MR")
-	repo.markErrorErr = errors.New("mark error also failed")
+	repo.markErrorNoTxErr = errors.New("mark error also failed")
 	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
 	svc := newSvc(t, repo, reg, nil)
 
@@ -1660,12 +1660,12 @@ func TestProcessOne_Outflow_CommitFails(t *testing.T) {
 	}
 }
 
-// --- ProcessOne: UpsertDeposit error + MarkEventError error (double fail wraps sentinel) ---
+// --- ProcessOne: UpsertDeposit error + no-tx MarkEventError error (double fail wraps sentinel) ---
 func TestProcessOne_UpsertErr_MarkErrorFails_WrapsSentinel(t *testing.T) {
 	repo := newMockRepo()
 	repo.owners["0xdest"] = 42
 	repo.depositErr = errors.New("upsert boom")
-	repo.markErrorErr = errors.New("mark error also boom")
+	repo.markErrorNoTxErr = errors.New("mark error also boom")
 	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
 	svc := newSvc(t, repo, reg, nil)
 
@@ -1690,8 +1690,8 @@ func TestProcessOne_UpsertErr_MarkErrorFails_WrapsSentinel(t *testing.T) {
 	}
 }
 
-// --- ProcessOne: UpsertDeposit error + commit error (after MarkEventError) ---
-func TestProcessOne_UpsertErr_CommitFails(t *testing.T) {
+// --- ProcessOne: UpsertDeposit error never tries to commit the aborted transaction ---
+func TestProcessOne_UpsertErr_DoesNotCommitAbortedTransaction(t *testing.T) {
 	repo := newMockRepo()
 	repo.owners["0xdest"] = 42
 	repo.depositErr = errors.New("upsert boom")
@@ -1713,7 +1713,13 @@ func TestProcessOne_UpsertErr_CommitFails(t *testing.T) {
 	})
 	_, err := svc.ProcessOne(context.Background())
 	if err == nil {
-		t.Fatal("expected error when commit fails after upsert error mark")
+		t.Fatal("expected upsert error")
+	}
+	if repo.commitCalls != 0 {
+		t.Fatalf("aborted transaction must not be committed, got %d commits", repo.commitCalls)
+	}
+	if len(repo.noTxErrorIDs) != 1 {
+		t.Fatalf("expected no-tx ERROR finalization, got %+v", repo.noTxErrorIDs)
 	}
 }
 

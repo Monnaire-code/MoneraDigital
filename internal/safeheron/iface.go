@@ -20,4 +20,12 @@ type SafeheronClient interface {
 	Close() error
 }
 
+// CoinClient is the narrow Safeheron coin-metadata surface. Keeping it
+// separate avoids forcing wallet and transaction consumers to mock catalog
+// operations they do not use.
+type CoinClient interface {
+	ListCoin(ctx context.Context) ([]Coin, error)
+}
+
 var _ SafeheronClient = (*Client)(nil)
+var _ CoinClient = (*Client)(nil)

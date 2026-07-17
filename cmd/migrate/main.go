@@ -15,17 +15,24 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 
+	"monera-digital/internal/buildinfo"
 	"monera-digital/internal/migration"
 	"monera-digital/internal/migration/migrations"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 )
+
+var version = "dev"
+var artifactMigrationCeiling = "055"
+
+const controlledCommitOutcomeIndeterminateExitCode = 75
 
 func main() {
 	if os.Getenv("APP_ENV") != "production" {
@@ -34,14 +41,34 @@ func main() {
 
 	dryRun := flag.Bool("dry-run", false, "Print migration status and exit without applying anything")
 	rollback := flag.Bool("rollback", false, "Roll back the most recently applied migration instead of applying pending ones")
+	printCeiling := flag.Bool("print-ceiling", false, "Print the highest registered migration version and exit")
+	printVersions := flag.Bool("print-versions", false, "Print the complete registered migration version list as JSON and exit")
 	flag.Parse()
+	if *printVersions {
+		m := migration.NewMigrator(nil)
+		registerMigrations(m)
+		if err := json.NewEncoder(os.Stdout).Encode(m.RegisteredVersions()); err != nil {
+			log.Fatal("Print migration versions:", err)
+		}
+		return
+	}
+	if *printCeiling {
+		m := migration.NewMigrator(nil)
+		registerMigrations(m)
+		fmt.Println(m.Ceiling())
+		return
+	}
 
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		log.Fatal("DATABASE_URL environment variable is required")
 	}
 
-	db, err := sql.Open("pgx", dbURL)
+	provenanceURL, err := buildinfo.DatabaseURL(dbURL, version, os.Getenv("INVOCATION_ID"))
+	if err != nil {
+		log.Fatal("Invalid DATABASE_URL:", err)
+	}
+	db, err := sql.Open("pgx", provenanceURL)
 	if err != nil {
 		log.Fatal("Failed to connect:", err)
 	}
@@ -66,8 +93,9 @@ func main() {
 		}
 		printStatus(status)
 	default:
-		if err := m.Migrate(); err != nil {
-			log.Fatal("Migration failed:", err)
+		if err := m.MigrateWithExpectedCeiling(os.Getenv("EXPECTED_MIGRATION_CEILING")); err != nil {
+			log.Print("Migration failed:", err)
+			os.Exit(migrationFailureExitCode(err))
 		}
 		status, err := m.GetStatus()
 		if err != nil {
@@ -77,12 +105,28 @@ func main() {
 	}
 }
 
+func migrationFailureExitCode(err error) int {
+	if migration.IsControlledCommitOutcomeIndeterminate(err) {
+		return controlledCommitOutcomeIndeterminateExitCode
+	}
+	return 1
+}
+
 // registerMigrations wires every known Go migration into the runner. Adding
 // a new migration? Append it here AND add the corresponding *.go file under
 // internal/migration/migrations/. The CI guard
 // scripts/check-secrets.sh's migration entrypoint check enforces both
 // pieces exist.
 func registerMigrations(m *migration.Migrator) {
+	if err := registerMigrationsForArtifact(m, artifactMigrationCeiling); err != nil {
+		panic(err)
+	}
+}
+
+func registerMigrationsForArtifact(m *migration.Migrator, ceiling string) error {
+	if ceiling != "052" && ceiling != "053" && ceiling != "054" && ceiling != "055" {
+		return fmt.Errorf("unsupported compiled migration ceiling %q", ceiling)
+	}
 	m.Register(&migrations.CreateUsersTable{})
 	m.Register(&migrations.CreateLendingPositionsTable{})
 	m.Register(&migrations.CreateWithdrawalTables{})
@@ -98,10 +142,23 @@ func registerMigrations(m *migration.Migrator) {
 	m.Register(&migrations.AddEmailVerifiedStatusAndContactFields{})
 	m.Register(&migrations.SafeheronPhase1{})
 	m.Register(&migrations.AccountFrozenBalanceDefault{})
-	m.Register(&migrations.CreateFundReports{})
 	m.Register(&migrations.AddPendingStatusAndActivationFields{})
 	m.Register(&migrations.NormalizeAmountTypes{})
 	m.Register(&migrations.AddMissingForeignKeys{})
+	m.Register(&migrations.CreateFundReports{})
+	m.Register(&migrations.CreateCompanyFundLedger{})
+	m.Register(&migrations.WidenAmountPrecision{})
+	m.Register(&migrations.ExpandCompanyFundOccurrenceAndManualValuation{})
+	if ceiling == "053" || ceiling == "054" || ceiling == "055" {
+		m.Register(&migrations.EnforceSafeheronOccurrence{})
+	}
+	if ceiling == "054" || ceiling == "055" {
+		m.Register(&migrations.AllowManualCompanyFundTransactions{})
+	}
+	if ceiling == "055" {
+		m.Register(&migrations.AddCounterpartyNameOverride{})
+	}
+	return nil
 }
 
 func printStatus(status []migration.MigrationStatus) {

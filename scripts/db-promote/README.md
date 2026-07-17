@@ -182,7 +182,7 @@ Zero side effects beyond the migration itself; the 5 rows of trend +
 - **Full backend deploy** (build + copy + migrate + systemd): use
   `scripts/deploy.sh` instead. It already calls the migrator.
 - **Vercel frontend deploy**: `bash scripts/deploy-remote.sh --frontend`.
-- **Test env deploy**: `bash scripts/deploy-remote.sh --env test`.
+- **Test env deploy**: use `.github/workflows/deploy-backend-stage.yml`; direct backend deployment now requires an exact full SHA and an explicit release mode as documented in `docs/company-fund-stage-release-control.md`.
 - **Other migrations** (007-015): the inspector is hard-coded to 016.
   For other migrations, fall back to `go run cmd/migrate/main.go`
   directly.

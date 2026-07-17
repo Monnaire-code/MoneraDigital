@@ -2,11 +2,19 @@ package deposit
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
+
+// legacyUnsupportedChainIdentity keeps unmapped MANUAL_REVIEW rows compatible
+// with the required deposits.chain VARCHAR(50) field. The complete CoinKey is
+// retained separately in safeheron_coin_key and the webhook raw_payload.
+const legacyUnsupportedChainIdentity = "UNSUPPORTED"
 
 // Tx is the minimal transactional handle the Service threads through its
 // repository calls. *sql.Tx satisfies this interface; tests can supply a stub.
@@ -17,9 +25,9 @@ type Tx interface {
 
 // Repository is the narrow DB surface the deposit Service depends on.
 //
-// All write methods accept a Tx so the Service can run the full SPEC §6.4
-// state machine in one transaction. Read-only methods (no tx) are safe to call
-// from the webhook handler's sync path.
+// Transactional writes accept a Tx so the Service can run the full SPEC §6.4
+// state machine atomically. Methods suffixed NoTx are explicit post-rollback
+// finalization paths and must not be called while the event-row lock is held.
 type Repository interface {
 	InsertEventOrSkip(ctx context.Context, evt *Event) (inserted bool, err error)
 	LockNextPendingEvent(ctx context.Context, tx Tx) (*Event, error)
@@ -44,6 +52,7 @@ type Repository interface {
 
 	MarkEventDone(ctx context.Context, tx Tx, eventID int64) error
 	MarkEventError(ctx context.Context, tx Tx, eventID int64, errMsg string) error
+	MarkEventErrorNoTx(ctx context.Context, eventID int64, errMsg string) (updated bool, err error)
 	LookupAddressOwner(ctx context.Context, address, networkFamily string) (userID int, found bool, err error)
 	BeginTx(ctx context.Context) (Tx, error)
 }
@@ -53,10 +62,10 @@ type DepositRow struct {
 	ID                 int64
 	UserID             int
 	SafeheronTxKey     string
-	SafeheronCoinKey   string // registry.SafeheronCoinKey — written so deposits ⇆ coin_chains reconciles. R2-I-1.
+	SafeheronCoinKey   string // Canonical registry key when mapped; raw webhook key for unsupported evidence.
 	Amount             string
 	Asset              string
-	ChainCode          string
+	ChainCode          string // Empty only with CoinChainID=0 on MANUAL_REVIEW; repository persists SQL NULL/NULL.
 	CoinChainID        int
 	SafeheronStatus    string
 	SafeheronSubStatus string
@@ -108,12 +117,16 @@ func asSQLTx(tx Tx) *sql.Tx {
 }
 
 func (r *DBRepository) InsertEventOrSkip(ctx context.Context, evt *Event) (bool, error) {
+	payloadDigest := eventPayloadDigest(evt.RawPayload)
+	if evt.PayloadDigest != "" && evt.PayloadDigest != payloadDigest {
+		return false, fmt.Errorf("webhook event payload digest does not match raw payload")
+	}
 	res, err := r.db.ExecContext(ctx,
 		`INSERT INTO safeheron_webhook_events
-		   (event_id, event_type, safeheron_tx_key, customer_ref_id, raw_payload, process_status)
-		 VALUES ($1, $2, $3, $4, $5, 'PENDING')
+		   (event_id, event_type, safeheron_tx_key, customer_ref_id, raw_payload, payload_digest, process_status)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'PENDING')
 		 ON CONFLICT (event_id) DO NOTHING`,
-		evt.EventID, evt.EventType, evt.SafeheronTxKey, evt.CustomerRefID, evt.RawPayload,
+		evt.EventID, evt.EventType, evt.SafeheronTxKey, evt.CustomerRefID, evt.RawPayload, payloadDigest,
 	)
 	if err != nil {
 		return false, fmt.Errorf("insert webhook event: %w", err)
@@ -122,7 +135,15 @@ func (r *DBRepository) InsertEventOrSkip(ctx context.Context, evt *Event) (bool,
 	if err != nil {
 		return false, fmt.Errorf("rows affected: %w", err)
 	}
-	return n > 0, nil
+	if n > 0 {
+		return true, nil
+	}
+	return r.validateExistingEventPayloadDigest(ctx, evt.EventID, payloadDigest)
+}
+
+func eventPayloadDigest(rawPayload []byte) string {
+	sum := sha256.Sum256(rawPayload)
+	return hex.EncodeToString(sum[:])
 }
 
 func (r *DBRepository) LockNextPendingEvent(ctx context.Context, tx Tx) (*Event, error) {
@@ -151,6 +172,14 @@ func (r *DBRepository) LockNextPendingEvent(ctx context.Context, tx Tx) (*Event,
 }
 
 func (r *DBRepository) UpsertDeposit(ctx context.Context, tx Tx, d *DepositRow) (*DepositRow, error) {
+	chainCodeArg, coinChainIDArg, err := optionalDepositMappingArgs(
+		d.ChainCode,
+		d.CoinChainID,
+		d.Status,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("upsert deposit: %w", err)
+	}
 	sqlTx := asSQLTx(tx)
 	row := sqlTx.QueryRowContext(ctx,
 		`INSERT INTO deposits
@@ -184,8 +213,8 @@ func (r *DBRepository) UpsertDeposit(ctx context.Context, tx Tx, d *DepositRow) 
 		           COALESCE(safeheron_status, ''), COALESCE(safeheron_sub_status, ''),
 		           status_rank, COALESCE(block_height, 0), COALESCE(block_hash, ''),
 		           status`,
-		d.UserID, nullableTxHash(d.TxHash, d.SafeheronTxKey), d.Amount, d.Asset, d.ChainCode,
-		d.SafeheronTxKey, d.SafeheronCoinKey, d.ChainCode, d.CoinChainID,
+		d.UserID, nullableTxHash(d.TxHash, d.SafeheronTxKey), d.Amount, d.Asset, depositChainIdentity(d),
+		d.SafeheronTxKey, d.SafeheronCoinKey, chainCodeArg, coinChainIDArg,
 		d.SafeheronStatus, d.SafeheronSubStatus, d.StatusRank,
 		d.BlockHeight, d.BlockHash, d.Status,
 		d.FromAddress, d.ToAddress,
@@ -373,6 +402,28 @@ func (r *DBRepository) MarkEventError(ctx context.Context, tx Tx, eventID int64,
 	return nil
 }
 
+// MarkEventErrorNoTx conditionally finalizes a raw event after its owning
+// transaction has been rolled back. The PENDING guard prevents a stale worker
+// from overwriting a concurrent owner's terminal state.
+func (r *DBRepository) MarkEventErrorNoTx(ctx context.Context, eventID int64, errMsg string) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE safeheron_webhook_events
+		 SET process_status = 'ERROR', error_message = $2,
+		     processed_at = NOW(),
+		     process_attempts = process_attempts + 1
+		 WHERE id = $1 AND process_status = 'PENDING'`,
+		eventID, errMsg,
+	)
+	if err != nil {
+		return false, fmt.Errorf("mark event error without transaction: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("mark event error without transaction: rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
 func (r *DBRepository) LookupAddressOwner(ctx context.Context, address, networkFamily string) (int, bool, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT COALESCE(assigned_user_id, 0)
@@ -541,6 +592,30 @@ func (r *DBRepository) IncrementEventAttemptsNoTx(ctx context.Context, eventID i
 		return fmt.Errorf("increment event attempts: %w", err)
 	}
 	return nil
+}
+
+func optionalDepositMappingArgs(chainCode string, coinChainID int, status string) (any, any, error) {
+	hasChainCode := strings.TrimSpace(chainCode) != ""
+	hasCoinChainID := coinChainID != 0
+	if coinChainID < 0 || hasChainCode != hasCoinChainID {
+		return nil, nil, fmt.Errorf("optional FK mapping requires chain_code and coin_chain_id together")
+	}
+	if !hasChainCode {
+		if status != DepositStatusManualReview {
+			return nil, nil, fmt.Errorf("optional FK mapping may be absent only for MANUAL_REVIEW deposits")
+		}
+		return nil, nil, nil
+	}
+	return chainCode, coinChainID, nil
+}
+
+func depositChainIdentity(d *DepositRow) string {
+	// deposits.chain is the legacy non-FK identity field. Keep the canonical
+	// chain for mapped rows and use a bounded sentinel for unsupported rows.
+	if strings.TrimSpace(d.ChainCode) != "" {
+		return d.ChainCode
+	}
+	return legacyUnsupportedChainIdentity
 }
 
 // nullableTxHash satisfies the legacy deposits.tx_hash NOT NULL UNIQUE

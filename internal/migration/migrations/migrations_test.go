@@ -1,6 +1,10 @@
 package migrations
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"monera-digital/internal/migration"
@@ -63,6 +67,28 @@ func TestAddMissingForeignKeys_Description(t *testing.T) {
 	m := &AddMissingForeignKeys{}
 	if m.Description() == "" {
 		t.Error("Description should not be empty")
+	}
+}
+
+func TestWidenAmountPrecision_InterfaceAndVersion(t *testing.T) {
+	var _ migration.Migration = (*WidenAmountPrecision)(nil)
+	if version := (&WidenAmountPrecision{}).Version(); version != "051" {
+		t.Fatalf("Version() = %q, want 051", version)
+	}
+}
+
+func TestExpandCompanyFundOccurrenceAndManualValuationInterfaceAndVersion(t *testing.T) {
+	var _ migration.Migration = (*ExpandCompanyFundOccurrenceAndManualValuation)(nil)
+	if version := (&ExpandCompanyFundOccurrenceAndManualValuation{}).Version(); version != "052" {
+		t.Fatalf("Version() = %q, want 052", version)
+	}
+}
+
+func TestEnforceSafeheronOccurrenceInterfaceAndVersion(t *testing.T) {
+	var _ migration.Migration = (*EnforceSafeheronOccurrence)(nil)
+	var _ migration.ControlledMigration = (*EnforceSafeheronOccurrence)(nil)
+	if version := (&EnforceSafeheronOccurrence{}).Version(); version != "053" {
+		t.Fatalf("Version() = %q, want 053", version)
 	}
 }
 
@@ -136,6 +162,12 @@ func TestMigrationOrder(t *testing.T) {
 		{"NormalizeAmountTypes", "047"},
 		{"AddMissingForeignKeys", "048"},
 		{"CreateFundReports", "049"},
+		{"CreateCompanyFundLedger", "050"},
+		{"WidenAmountPrecision", "051"},
+		{"ExpandCompanyFundOccurrenceAndManualValuation", "052"},
+		{"EnforceSafeheronOccurrence", "053"},
+		{"AllowManualCompanyFundTransactions", "054"},
+		{"AddCounterpartyNameOverride", "055"},
 	}
 
 	seen := make(map[string]bool, len(migrations))
@@ -156,5 +188,41 @@ func TestMigrationOrder(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMigrationRunnerRegistersVersionsInOrder(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", "..", ".."))
+	source, err := os.ReadFile(filepath.Join(repoRoot, "cmd", "migrate", "main.go"))
+	if err != nil {
+		t.Fatalf("read migration runner: %v", err)
+	}
+
+	previous := -1
+	for _, registration := range []string{
+		"m.Register(&migrations.AddPendingStatusAndActivationFields{})",
+		"m.Register(&migrations.NormalizeAmountTypes{})",
+		"m.Register(&migrations.AddMissingForeignKeys{})",
+		"m.Register(&migrations.CreateFundReports{})",
+		"m.Register(&migrations.CreateCompanyFundLedger{})",
+		"m.Register(&migrations.WidenAmountPrecision{})",
+		"m.Register(&migrations.ExpandCompanyFundOccurrenceAndManualValuation{})",
+		"m.Register(&migrations.EnforceSafeheronOccurrence{})",
+		"m.Register(&migrations.AllowManualCompanyFundTransactions{})",
+		"m.Register(&migrations.AddCounterpartyNameOverride{})",
+	} {
+		position := strings.Index(string(source), registration)
+		if position < 0 {
+			t.Errorf("registerMigrations is missing %q", registration)
+			continue
+		}
+		if position <= previous {
+			t.Errorf("registerMigrations entry %q is not in version order", registration)
+		}
+		previous = position
 	}
 }
