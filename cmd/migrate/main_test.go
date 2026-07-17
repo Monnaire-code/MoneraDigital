@@ -4,12 +4,188 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+
 	"monera-digital/internal/migration"
 )
+
+func TestExactVersionPrintVersionsRegistersOnlyRequestedMigration(t *testing.T) {
+	t.Parallel()
+	cmd := exec.Command("go", "run", ".", "-print-versions", "-exact-version", "050")
+	cmd.Env = append(os.Environ(), "APP_ENV=production")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("exact-version CLI failed: %v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != `["050"]` {
+		t.Fatalf("exact-version registration = %s, want [\"050\"]", got)
+	}
+}
+
+func TestExactVersionPrintCeilingMatchesSelection(t *testing.T) {
+	t.Parallel()
+	cmd := exec.Command("go", "run", ".", "-print-ceiling", "-exact-version", "051")
+	cmd.Env = append(os.Environ(), "APP_ENV=production")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("exact-version ceiling CLI failed: %v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "051" {
+		t.Fatalf("exact-version ceiling = %s, want 051", got)
+	}
+}
+
+func TestExactVersionRejectsRollbackBeforeOpeningDatabase(t *testing.T) {
+	t.Parallel()
+	cmd := exec.Command("go", "run", ".", "-rollback", "-exact-version", "050")
+	cmd.Env = append(os.Environ(), "APP_ENV=production", "DATABASE_URL=")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("rollback with exact-version unexpectedly succeeded:\n%s", out)
+	}
+	if !strings.Contains(string(out), "exact-version cannot be combined with rollback") {
+		t.Fatalf("rollback rejection = %s", out)
+	}
+}
+
+func TestExactVersionRequiresMatchingCeilingBeforeOpeningDatabase(t *testing.T) {
+	t.Parallel()
+	cmd := exec.Command("go", "run", ".", "-dry-run", "-exact-version", "050")
+	cmd.Env = append(os.Environ(), "APP_ENV=production", "DATABASE_URL=", "EXPECTED_MIGRATION_CEILING=")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("exact-version without ceiling unexpectedly succeeded:\n%s", out)
+	}
+	if !strings.Contains(string(out), "requires EXPECTED_MIGRATION_CEILING=050") {
+		t.Fatalf("ceiling rejection = %s", out)
+	}
+}
+
+func TestExactMigrationOptionsRequireImmediatePredecessor(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		version     string
+		predecessor string
+	}{
+		{version: "050", predecessor: "049"},
+		{version: "051", predecessor: "050"},
+		{version: "052", predecessor: "051"},
+		{version: "053", predecessor: "052"},
+		{version: "054", predecessor: "053"},
+		{version: "055", predecessor: "054"},
+	} {
+		got, err := validateExactMigrationOptions(testCase.version, testCase.version, false)
+		if err != nil {
+			t.Fatalf("validate %s: %v", testCase.version, err)
+		}
+		if got != testCase.predecessor {
+			t.Fatalf("migration %s predecessor = %s, want %s", testCase.version, got, testCase.predecessor)
+		}
+	}
+	if _, err := validateExactMigrationOptions("049", "049", false); err == nil {
+		t.Fatal("historical migration accepted by exact production mode")
+	}
+	if predecessor, err := validateExactMigrationOptions("", "", false); err != nil || predecessor != "" {
+		t.Fatalf("default migration mode changed: predecessor=%q err=%v", predecessor, err)
+	}
+}
+
+func TestExactMigrationOptionsRejectRollbackAndMismatchedCeiling(t *testing.T) {
+	t.Parallel()
+	if _, err := validateExactMigrationOptions("050", "050", true); err == nil || !strings.Contains(err.Error(), "cannot be combined with rollback") {
+		t.Fatalf("rollback rejection = %v", err)
+	}
+	if _, err := validateExactMigrationOptions("050", "051", false); err == nil || !strings.Contains(err.Error(), "requires EXPECTED_MIGRATION_CEILING=050") {
+		t.Fatalf("ceiling rejection = %v", err)
+	}
+}
+
+func TestRequireAppliedMigrationRejectsSparsePredecessorGap(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery(`SELECT EXISTS`).WithArgs("049").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	if err := requireAppliedMigration(db, "049"); err == nil || !strings.Contains(err.Error(), "must be applied") {
+		t.Fatalf("missing predecessor error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRequireAppliedMigrationAcceptsRecordedPredecessor(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery(`SELECT EXISTS`).WithArgs("049").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	if err := requireAppliedMigration(db, "049"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRequireAppliedMigrationPropagatesLookupFailure(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery(`SELECT EXISTS`).WithArgs("049").WillReturnError(errors.New("database unavailable"))
+	if err := requireAppliedMigration(db, "049"); err == nil || !strings.Contains(err.Error(), "query migration 049 provenance") {
+		t.Fatalf("lookup failure = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExactMigrationRegistrationContainsOnlyRequestedVersion(t *testing.T) {
+	t.Parallel()
+	for _, version := range []string{"050", "051", "052", "053", "054", "055"} {
+		migrator := migration.NewMigrator(nil)
+		if err := registerSelectedMigrations(migrator, version); err != nil {
+			t.Fatalf("register %s: %v", version, err)
+		}
+		got := migrator.RegisteredVersions()
+		if len(got) != 1 || got[0] != version {
+			t.Fatalf("exact migration %s registered %v", version, got)
+		}
+	}
+}
+
+func TestExactMigrationRegistrationRejectsHistoricalAndUnknownVersions(t *testing.T) {
+	t.Parallel()
+	for _, version := range []string{"049", "056", "latest"} {
+		if err := registerSelectedMigrations(migration.NewMigrator(nil), version); err == nil {
+			t.Fatalf("exact migration %q accepted", version)
+		}
+	}
+}
+
+func TestDefaultMigrationSelectionRegistersCurrentArtifact(t *testing.T) {
+	t.Parallel()
+	migrator := migration.NewMigrator(nil)
+	if err := registerSelectedMigrations(migrator, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := migrator.Ceiling(); got != artifactMigrationCeiling {
+		t.Fatalf("default migration ceiling = %q, want %q", got, artifactMigrationCeiling)
+	}
+}
 
 func TestCurrentArtifactCeilingIs055(t *testing.T) {
 	t.Parallel()
