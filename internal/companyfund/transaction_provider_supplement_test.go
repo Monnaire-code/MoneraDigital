@@ -120,7 +120,7 @@ func TestProviderTransactionSupplementSQL_ExcludesManualFinanceAndManualRiskOver
 		}
 	}
 	for _, forbidden := range []string{
-		"finance_category", "is_operating_income_expense", "applicant", "business_description", "summary_inclusion_override",
+		"finance_category", "is_operating_income_expense", "applicant", "business_description", "summary_inclusion_override", "counterparty_name_override",
 		"classification_", "risk_override_", "risk_status", "risk_reason_code",
 	} {
 		if strings.Contains(updateCompanyFundTransactionProviderSupplementSQL, forbidden) {

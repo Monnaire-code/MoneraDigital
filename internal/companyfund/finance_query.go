@@ -63,6 +63,7 @@ SELECT transaction.id,
 	COALESCE(transaction.provider_reported_fee_currency, ''),
 	COALESCE(transaction.payer_name, transaction.from_address_or_account, ''),
 	COALESCE(transaction.payee_name, transaction.to_address_or_account, ''),
+	transaction.counterparty_name_override,
 	COALESCE(transaction.from_address_or_account, ''),
 	COALESCE(transaction.to_address_or_account, ''),
 	COALESCE(transaction.applicant, ''),
@@ -261,17 +262,18 @@ func financeAggregateDrilldown(filter FinanceTransactionFilter, direction Direct
 
 func scanFinanceTransactionDetail(rows *sql.Rows) (FinanceTransactionDetail, error) {
 	var (
-		detail          FinanceTransactionDetail
-		channel         string
-		direction       string
-		transferMode    string
-		movementKind    string
-		operating       sql.NullBool
-		level1ID        sql.NullInt64
-		level2ID        sql.NullInt64
-		usdValue        sql.NullString
-		feeAmount       sql.NullString
-		summaryOverride sql.NullBool
+		detail                   FinanceTransactionDetail
+		channel                  string
+		direction                string
+		transferMode             string
+		movementKind             string
+		operating                sql.NullBool
+		level1ID                 sql.NullInt64
+		level2ID                 sql.NullInt64
+		usdValue                 sql.NullString
+		feeAmount                sql.NullString
+		counterpartyNameOverride sql.NullString
+		summaryOverride          sql.NullBool
 	)
 	if err := rows.Scan(
 		&detail.ID,
@@ -298,6 +300,7 @@ func scanFinanceTransactionDetail(rows *sql.Rows) (FinanceTransactionDetail, err
 		&detail.FeeCurrency,
 		&detail.Payer,
 		&detail.Payee,
+		&counterpartyNameOverride,
 		&detail.FromAddressOrAccount,
 		&detail.ToAddressOrAccount,
 		&detail.Applicant,
@@ -320,8 +323,40 @@ func scanFinanceTransactionDetail(rows *sql.Rows) (FinanceTransactionDetail, err
 	detail.FinanceCategoryLevel2ID = financeNullInt64Pointer(level2ID)
 	detail.USDValue = financeNullStringPointer(usdValue)
 	detail.FeeAmount = financeNullStringPointer(feeAmount)
+	detail.CounterpartyNameOverride = financeNullStringPointer(counterpartyNameOverride)
+	detail.EffectiveCounterpartyName = effectiveFinanceCounterpartyName(detail.Direction, detail.Payer, detail.Payee, detail.CounterpartyNameOverride)
 	detail.SummaryInclusionOverride = financeNullBoolPointer(summaryOverride)
 	return detail, nil
+}
+
+func effectiveFinanceCounterpartyName(direction Direction, payer, payee string, override *string) string {
+	if override != nil {
+		if value := strings.TrimSpace(*override); value != "" {
+			return value
+		}
+	}
+	payer = strings.TrimSpace(payer)
+	payee = strings.TrimSpace(payee)
+	switch direction {
+	case DirectionInflow:
+		return financeCounterpartyPart(payer)
+	case DirectionOutflow:
+		return financeCounterpartyPart(payee)
+	case DirectionInternalTransfer:
+		return financeCounterpartyPart(payer) + " → " + financeCounterpartyPart(payee)
+	default:
+		if payer != "" {
+			return payer
+		}
+		return financeCounterpartyPart(payee)
+	}
+}
+
+func financeCounterpartyPart(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func financeNullBoolPointer(value sql.NullBool) *bool {

@@ -167,6 +167,7 @@ func TestMigrationOrder(t *testing.T) {
 		{"ExpandCompanyFundOccurrenceAndManualValuation", "052"},
 		{"EnforceSafeheronOccurrence", "053"},
 		{"AllowManualCompanyFundTransactions", "054"},
+		{"AddCounterpartyNameOverride", "055"},
 	}
 
 	seen := make(map[string]bool, len(migrations))
@@ -212,6 +213,7 @@ func TestMigrationRunnerRegistersVersionsInOrder(t *testing.T) {
 		"m.Register(&migrations.ExpandCompanyFundOccurrenceAndManualValuation{})",
 		"m.Register(&migrations.EnforceSafeheronOccurrence{})",
 		"m.Register(&migrations.AllowManualCompanyFundTransactions{})",
+		"m.Register(&migrations.AddCounterpartyNameOverride{})",
 	} {
 		position := strings.Index(string(source), registration)
 		if position < 0 {

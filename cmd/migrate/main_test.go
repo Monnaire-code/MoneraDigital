@@ -11,12 +11,12 @@ import (
 	"monera-digital/internal/migration"
 )
 
-func TestCurrentArtifactCeilingIs054(t *testing.T) {
+func TestCurrentArtifactCeilingIs055(t *testing.T) {
 	t.Parallel()
 	migrator := migration.NewMigrator(nil)
 	registerMigrations(migrator)
-	if got := migrator.Ceiling(); got != "054" {
-		t.Fatalf("registered migration ceiling = %q, want 054", got)
+	if got := migrator.Ceiling(); got != "055" {
+		t.Fatalf("registered migration ceiling = %q, want 055", got)
 	}
 }
 
@@ -29,6 +29,7 @@ func TestArtifactMigrationCeilingControlsRegistrationAndCannotBeRuntimeExpanded(
 		{ceiling: "052", want: "052"},
 		{ceiling: "053", want: "053"},
 		{ceiling: "054", want: "054"},
+		{ceiling: "055", want: "055"},
 	} {
 		migrator := migration.NewMigrator(nil)
 		if err := registerMigrationsForArtifact(migrator, testCase.ceiling); err != nil {
@@ -41,7 +42,7 @@ func TestArtifactMigrationCeilingControlsRegistrationAndCannotBeRuntimeExpanded(
 	if err := registerMigrationsForArtifact(migration.NewMigrator(nil), "051"); err == nil {
 		t.Fatal("unsupported artifact migration ceiling accepted")
 	}
-	if artifactMigrationCeiling != "054" {
+	if artifactMigrationCeiling != "055" {
 		t.Fatalf("current tree compiled ceiling = %q", artifactMigrationCeiling)
 	}
 }
@@ -55,6 +56,7 @@ func TestArtifactMigrationRegistrationManifestIsCompleteOrderedAndImmutable(t *t
 		{ceiling: "052", want: wantA},
 		{ceiling: "053", want: append(append([]string(nil), wantA...), "053")},
 		{ceiling: "054", want: append(append([]string(nil), wantA...), "053", "054")},
+		{ceiling: "055", want: append(append([]string(nil), wantA...), "053", "054", "055")},
 	} {
 		migrator := migration.NewMigrator(nil)
 		if err := registerMigrationsForArtifact(migrator, testCase.ceiling); err != nil {

@@ -115,7 +115,7 @@ func TestListFinanceTransactionDetails_ReturnsFinancialDisplayWithoutRawPayload(
 			77, date, "SAFEHERON", "Monera HK", "Treasury", "Cold", "WALLET", "INTERNAL_TRANSFER", "BATCH", "PRINCIPAL", true,
 			1, "OPERATING", "Operating", 2, "VENDOR", "Vendor payment",
 			"USDT", "10.000000000000000001", "10.123456789012345678", "0.00021", "ETH",
-			"Treasury", "Vendor Ltd", "0xfrom", "0xto", "finance@monera", "July invoice", "0xtx", "provider-tx-7",
+			"Treasury", "Vendor Ltd", "Finance vendor alias", "0xfrom", "0xto", "finance@monera", "July invoice", "0xtx", "provider-tx-7",
 			true, false, false, nil,
 		))
 
@@ -124,7 +124,7 @@ func TestListFinanceTransactionDetails_ReturnsFinancialDisplayWithoutRawPayload(
 		t.Fatalf("ListFinanceTransactionDetails() = %#v, %v", details, err)
 	}
 	detail := details[0]
-	if detail.Amount != "10.000000000000000001" || detail.USDValue == nil || *detail.USDValue != "10.123456789012345678" || detail.FeeAmount == nil || *detail.FeeAmount != "0.00021" || detail.Payer != "Treasury" || detail.Payee != "Vendor Ltd" {
+	if detail.Amount != "10.000000000000000001" || detail.USDValue == nil || *detail.USDValue != "10.123456789012345678" || detail.FeeAmount == nil || *detail.FeeAmount != "0.00021" || detail.Payer != "Treasury" || detail.Payee != "Vendor Ltd" || detail.CounterpartyNameOverride == nil || *detail.CounterpartyNameOverride != "Finance vendor alias" || detail.EffectiveCounterpartyName != "Finance vendor alias" {
 		t.Fatalf("financial display detail = %#v", detail)
 	}
 	if detail.Direction != DirectionInternalTransfer || detail.TransferMode != TransferModeBatch || detail.MovementKind != MovementKindPrincipal {
@@ -140,7 +140,32 @@ func financeDetailColumns() []string {
 	return []string{
 		"id", "date", "channel", "company_entity", "fund_account_name", "sub_account_name", "account_type", "direction", "transfer_mode", "movement_kind", "operating",
 		"level1_id", "level1_code", "level1_name", "level2_id", "level2_code", "level2_name", "currency", "amount", "usd_value", "fee_amount", "fee_currency",
-		"payer", "payee", "from_address", "to_address", "applicant", "business_description", "tx_hash", "provider_transaction_id", "summary_included", "is_dust", "auto_excluded", "summary_override",
+		"payer", "payee", "counterparty_name_override", "from_address", "to_address", "applicant", "business_description", "tx_hash", "provider_transaction_id", "summary_included", "is_dust", "auto_excluded", "summary_override",
+	}
+}
+
+func TestEffectiveFinanceCounterpartyName_PreservesProviderFactsAndUsesFinanceOverride(t *testing.T) {
+	override := "Finance alias"
+	for _, testCase := range []struct {
+		name      string
+		direction Direction
+		payer     string
+		payee     string
+		override  *string
+		want      string
+	}{
+		{"inflow provider payer", DirectionInflow, "External payer", "Treasury", nil, "External payer"},
+		{"outflow provider payee", DirectionOutflow, "Treasury", "External payee", nil, "External payee"},
+		{"inflow missing provider name", DirectionInflow, "", "Treasury", nil, "-"},
+		{"outflow missing provider name", DirectionOutflow, "Treasury", "", nil, "-"},
+		{"internal provider parties", DirectionInternalTransfer, "Treasury", "Operations", nil, "Treasury → Operations"},
+		{"finance override wins", DirectionInflow, "External payer", "Treasury", &override, "Finance alias"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := effectiveFinanceCounterpartyName(testCase.direction, testCase.payer, testCase.payee, testCase.override); got != testCase.want {
+				t.Fatalf("effectiveFinanceCounterpartyName() = %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
 

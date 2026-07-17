@@ -30,7 +30,7 @@ import (
 )
 
 var version = "dev"
-var artifactMigrationCeiling = "054"
+var artifactMigrationCeiling = "055"
 
 const controlledCommitOutcomeIndeterminateExitCode = 75
 
@@ -124,7 +124,7 @@ func registerMigrations(m *migration.Migrator) {
 }
 
 func registerMigrationsForArtifact(m *migration.Migrator, ceiling string) error {
-	if ceiling != "052" && ceiling != "053" && ceiling != "054" {
+	if ceiling != "052" && ceiling != "053" && ceiling != "054" && ceiling != "055" {
 		return fmt.Errorf("unsupported compiled migration ceiling %q", ceiling)
 	}
 	m.Register(&migrations.CreateUsersTable{})
@@ -149,11 +149,14 @@ func registerMigrationsForArtifact(m *migration.Migrator, ceiling string) error 
 	m.Register(&migrations.CreateCompanyFundLedger{})
 	m.Register(&migrations.WidenAmountPrecision{})
 	m.Register(&migrations.ExpandCompanyFundOccurrenceAndManualValuation{})
-	if ceiling == "053" || ceiling == "054" {
+	if ceiling == "053" || ceiling == "054" || ceiling == "055" {
 		m.Register(&migrations.EnforceSafeheronOccurrence{})
 	}
-	if ceiling == "054" {
+	if ceiling == "054" || ceiling == "055" {
 		m.Register(&migrations.AllowManualCompanyFundTransactions{})
+	}
+	if ceiling == "055" {
+		m.Register(&migrations.AddCounterpartyNameOverride{})
 	}
 	return nil
 }

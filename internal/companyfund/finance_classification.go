@@ -19,11 +19,12 @@ SET finance_category_level1_id = $2,
 	applicant = $5,
 	business_description = $6,
 	summary_inclusion_override = $7,
+	counterparty_name_override = CASE WHEN $8 THEN $9 ELSE counterparty_name_override END,
 	classification_status = CASE
 		WHEN $2 IS NULL AND $3 IS NULL THEN 'UNCLASSIFIED'
 		ELSE 'CLASSIFIED'
 	END,
-	classification_updated_by = $8,
+	classification_updated_by = $10,
 	classification_updated_at = NOW(),
 	updated_at = NOW()
 WHERE id = $1
@@ -34,14 +35,15 @@ RETURNING id,
 	COALESCE(applicant, ''),
 	COALESCE(business_description, ''),
 	summary_inclusion_override,
+	counterparty_name_override,
 	classification_status,
 	classification_updated_by,
 	classification_updated_at`
 
-// UpdateFinanceTransactionClassification applies a complete finance-owned
-// classification update inside an explicit transaction. The existing category
-// hierarchy constraint trigger is intentionally authoritative; this method
-// does not recreate its category-parent logic in Go.
+// UpdateFinanceTransactionClassification applies finance-owned fields inside
+// an explicit transaction. The counterparty override is presence-aware for
+// backward compatibility; the existing category hierarchy constraint trigger
+// remains authoritative.
 func (r *DBRepository) UpdateFinanceTransactionClassification(ctx context.Context, input FinanceClassificationUpdate) (FinanceClassificationResult, error) {
 	canonical, err := input.canonical()
 	if err != nil {
@@ -70,6 +72,8 @@ func (r *DBRepository) UpdateFinanceTransactionClassification(ctx context.Contex
 		nullableStringPointer(canonical.Applicant),
 		nullableStringPointer(canonical.BusinessDescription),
 		nullableFinanceBool(canonical.SummaryInclusionOverride),
+		canonical.CounterpartyNameOverrideSet,
+		nullableStringPointer(canonical.CounterpartyNameOverride),
 		canonical.UpdatedBy,
 	))
 	if err != nil {
@@ -87,11 +91,12 @@ func (r *DBRepository) UpdateFinanceTransactionClassification(ctx context.Contex
 
 func scanFinanceClassificationResult(row *sql.Row) (FinanceClassificationResult, error) {
 	var (
-		result          FinanceClassificationResult
-		level1ID        sql.NullInt64
-		level2ID        sql.NullInt64
-		operating       sql.NullBool
-		summaryOverride sql.NullBool
+		result                   FinanceClassificationResult
+		level1ID                 sql.NullInt64
+		level2ID                 sql.NullInt64
+		operating                sql.NullBool
+		summaryOverride          sql.NullBool
+		counterpartyNameOverride sql.NullString
 	)
 	if err := row.Scan(
 		&result.TransactionID,
@@ -101,6 +106,7 @@ func scanFinanceClassificationResult(row *sql.Row) (FinanceClassificationResult,
 		&result.Applicant,
 		&result.BusinessDescription,
 		&summaryOverride,
+		&counterpartyNameOverride,
 		&result.ClassificationStatus,
 		&result.UpdatedBy,
 		&result.UpdatedAt,
@@ -111,6 +117,7 @@ func scanFinanceClassificationResult(row *sql.Row) (FinanceClassificationResult,
 	result.FinanceCategoryLevel2ID = financeNullInt64Pointer(level2ID)
 	result.IsOperatingIncomeExpense = financeNullBoolPointer(operating)
 	result.SummaryInclusionOverride = financeNullBoolPointer(summaryOverride)
+	result.CounterpartyNameOverride = financeNullStringPointer(counterpartyNameOverride)
 	return result, nil
 }
 

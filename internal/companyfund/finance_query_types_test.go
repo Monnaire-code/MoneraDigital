@@ -83,38 +83,50 @@ func TestCanonicalizeFinanceClassificationUpdate_ManualFieldsAndValidation(t *te
 	level2 := int64(22)
 	applicant := "  finance@monera.example  "
 	description := "  July vendor settlement  "
+	counterpartyName := "  Vendor alias  "
 	canonical, err := CanonicalizeFinanceClassificationUpdate(FinanceClassificationUpdate{
-		TransactionID:           71,
-		FinanceCategoryLevel1ID: &level1,
-		FinanceCategoryLevel2ID: &level2,
-		Applicant:               &applicant,
-		BusinessDescription:     &description,
-		UpdatedBy:               "  finance-admin  ",
+		TransactionID:            71,
+		FinanceCategoryLevel1ID:  &level1,
+		FinanceCategoryLevel2ID:  &level2,
+		Applicant:                &applicant,
+		BusinessDescription:      &description,
+		CounterpartyNameOverride: &counterpartyName,
+		UpdatedBy:                "  finance-admin  ",
 	})
 	if err != nil || canonical.UpdatedBy != "finance-admin" || canonical.Applicant == nil || *canonical.Applicant != "finance@monera.example" ||
-		canonical.BusinessDescription == nil || *canonical.BusinessDescription != "July vendor settlement" {
+		canonical.BusinessDescription == nil || *canonical.BusinessDescription != "July vendor settlement" || !canonical.CounterpartyNameOverrideSet || canonical.CounterpartyNameOverride == nil || *canonical.CounterpartyNameOverride != "Vendor alias" {
 		t.Fatalf("canonical classification = %#v, %v", canonical, err)
 	}
 
 	blank := " \t "
 	cleared, err := CanonicalizeFinanceClassificationUpdate(FinanceClassificationUpdate{
-		TransactionID:       72,
-		Applicant:           &blank,
-		BusinessDescription: &blank,
-		UpdatedBy:           "finance-admin",
+		TransactionID:            72,
+		Applicant:                &blank,
+		BusinessDescription:      &blank,
+		CounterpartyNameOverride: &blank,
+		UpdatedBy:                "finance-admin",
 	})
-	if err != nil || cleared.Applicant != nil || cleared.BusinessDescription != nil {
+	if err != nil || cleared.Applicant != nil || cleared.BusinessDescription != nil || !cleared.CounterpartyNameOverrideSet || cleared.CounterpartyNameOverride != nil {
 		t.Fatalf("blank manual text must clear fields: %#v, %v", cleared, err)
+	}
+
+	omitted, err := CanonicalizeFinanceClassificationUpdate(FinanceClassificationUpdate{
+		TransactionID: 73,
+		UpdatedBy:     "finance-admin",
+	})
+	if err != nil || omitted.CounterpartyNameOverrideSet || omitted.CounterpartyNameOverride != nil {
+		t.Fatalf("omitted counterparty override must preserve stored value: %#v, %v", omitted, err)
 	}
 
 	invalidUTF8 := string([]byte{0xff})
 	zero := int64(0)
 	for _, input := range []FinanceClassificationUpdate{
 		{UpdatedBy: "finance-admin"},
-		{TransactionID: 73, FinanceCategoryLevel1ID: &zero, UpdatedBy: "finance-admin"},
-		{TransactionID: 73, UpdatedBy: " "},
-		{TransactionID: 73, Applicant: &invalidUTF8, UpdatedBy: "finance-admin"},
-		{TransactionID: 73, BusinessDescription: stringPointer(strings.Repeat("x", maxFinanceDescriptionBytes+1)), UpdatedBy: "finance-admin"},
+		{TransactionID: 74, FinanceCategoryLevel1ID: &zero, UpdatedBy: "finance-admin"},
+		{TransactionID: 74, UpdatedBy: " "},
+		{TransactionID: 74, Applicant: &invalidUTF8, UpdatedBy: "finance-admin"},
+		{TransactionID: 74, BusinessDescription: stringPointer(strings.Repeat("x", maxFinanceDescriptionBytes+1)), UpdatedBy: "finance-admin"},
+		{TransactionID: 74, CounterpartyNameOverride: stringPointer(strings.Repeat("x", maxFinanceCounterpartyNameBytes+1)), UpdatedBy: "finance-admin"},
 	} {
 		if _, err := CanonicalizeFinanceClassificationUpdate(input); err == nil {
 			t.Fatalf("CanonicalizeFinanceClassificationUpdate(%#v) = nil, want validation error", input)

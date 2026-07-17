@@ -10,11 +10,12 @@ import (
 )
 
 const (
-	defaultFinanceDetailLimit  = 100
-	maxFinanceDetailLimit      = 1000
-	maxFinanceApplicantBytes   = 256
-	maxFinanceDescriptionBytes = 16 << 10
-	maxFinanceUpdatedByBytes   = 256
+	defaultFinanceDetailLimit       = 100
+	maxFinanceDetailLimit           = 1000
+	maxFinanceApplicantBytes        = 256
+	maxFinanceCounterpartyNameBytes = 256
+	maxFinanceDescriptionBytes      = 16 << 10
+	maxFinanceUpdatedByBytes        = 256
 )
 
 // FinanceTransactionFilter is the single shared inclusion contract for both
@@ -211,6 +212,8 @@ type FinanceTransactionDetail struct {
 	FeeCurrency               string       `json:"feeCurrency"`
 	Payer                     string       `json:"payer"`
 	Payee                     string       `json:"payee"`
+	CounterpartyNameOverride  *string      `json:"counterpartyNameOverride,omitempty"`
+	EffectiveCounterpartyName string       `json:"effectiveCounterpartyName"`
 	FromAddressOrAccount      string       `json:"fromAddressOrAccount"`
 	ToAddressOrAccount        string       `json:"toAddressOrAccount"`
 	Applicant                 string       `json:"applicant"`
@@ -223,19 +226,21 @@ type FinanceTransactionDetail struct {
 	SummaryInclusionOverride  *bool        `json:"summaryInclusionOverride,omitempty"`
 }
 
-// FinanceClassificationUpdate is a full replacement of finance-owned fields
-// for one transaction. Nil category/boolean/text values intentionally clear
-// their respective manual field; provider ingestion has no path to these
-// columns.
+// FinanceClassificationUpdate replaces finance-owned fields for one
+// transaction. CounterpartyNameOverrideSet distinguishes omission (preserve)
+// from an explicit null or blank value (clear), so older callers cannot erase
+// a newer manual override. Provider ingestion has no path to these columns.
 type FinanceClassificationUpdate struct {
-	TransactionID            int64   `json:"transactionId"`
-	FinanceCategoryLevel1ID  *int64  `json:"financeCategoryLevel1Id,omitempty"`
-	FinanceCategoryLevel2ID  *int64  `json:"financeCategoryLevel2Id,omitempty"`
-	IsOperatingIncomeExpense *bool   `json:"isOperatingIncomeExpense,omitempty"`
-	Applicant                *string `json:"applicant,omitempty"`
-	BusinessDescription      *string `json:"businessDescription,omitempty"`
-	SummaryInclusionOverride *bool   `json:"summaryInclusionOverride,omitempty"`
-	UpdatedBy                string  `json:"updatedBy"`
+	TransactionID               int64   `json:"transactionId"`
+	FinanceCategoryLevel1ID     *int64  `json:"financeCategoryLevel1Id,omitempty"`
+	FinanceCategoryLevel2ID     *int64  `json:"financeCategoryLevel2Id,omitempty"`
+	IsOperatingIncomeExpense    *bool   `json:"isOperatingIncomeExpense,omitempty"`
+	Applicant                   *string `json:"applicant,omitempty"`
+	BusinessDescription         *string `json:"businessDescription,omitempty"`
+	SummaryInclusionOverride    *bool   `json:"summaryInclusionOverride,omitempty"`
+	CounterpartyNameOverride    *string `json:"counterpartyNameOverride,omitempty"`
+	CounterpartyNameOverrideSet bool    `json:"-"`
+	UpdatedBy                   string  `json:"updatedBy"`
 }
 
 // CanonicalizeFinanceClassificationUpdate validates finance-owned fields
@@ -252,6 +257,7 @@ type FinanceClassificationResult struct {
 	Applicant                string    `json:"applicant"`
 	BusinessDescription      string    `json:"businessDescription"`
 	SummaryInclusionOverride *bool     `json:"summaryInclusionOverride,omitempty"`
+	CounterpartyNameOverride *string   `json:"counterpartyNameOverride,omitempty"`
 	ClassificationStatus     string    `json:"classificationStatus"`
 	UpdatedBy                string    `json:"updatedBy"`
 	UpdatedAt                time.Time `json:"updatedAt"`
@@ -290,8 +296,15 @@ func (input FinanceClassificationUpdate) canonical() (FinanceClassificationUpdat
 	if err != nil {
 		return FinanceClassificationUpdate{}, err
 	}
+	counterpartyNameOverrideSet := input.CounterpartyNameOverrideSet || input.CounterpartyNameOverride != nil
+	counterpartyName, err := canonicalFinanceManualText("finance counterparty name override", input.CounterpartyNameOverride, maxFinanceCounterpartyNameBytes)
+	if err != nil {
+		return FinanceClassificationUpdate{}, err
+	}
 	input.Applicant = applicant
 	input.BusinessDescription = description
+	input.CounterpartyNameOverride = counterpartyName
+	input.CounterpartyNameOverrideSet = counterpartyNameOverrideSet
 	input.UpdatedBy = updatedBy
 	return input, nil
 }

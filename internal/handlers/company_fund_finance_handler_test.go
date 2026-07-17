@@ -133,6 +133,7 @@ func TestCompanyFundFinanceHandler_ClassificationUsesAdminActorAndManualFieldsOn
 	level2 := int64(22)
 	operating := true
 	override := false
+	counterpartyName := "Vendor alias"
 	store := companyFundFinanceStoreStub{
 		dashboard: func(context.Context, companyfund.FinanceTransactionFilter) (companyfund.FinanceDashboardSummary, error) {
 			return companyfund.FinanceDashboardSummary{}, nil
@@ -146,6 +147,7 @@ func TestCompanyFundFinanceHandler_ClassificationUsesAdminActorAndManualFieldsOn
 				input.IsOperatingIncomeExpense == nil || *input.IsOperatingIncomeExpense != operating ||
 				input.Applicant == nil || *input.Applicant != "finance@monera" ||
 				input.BusinessDescription == nil || *input.BusinessDescription != "July settlement" ||
+				!input.CounterpartyNameOverrideSet || input.CounterpartyNameOverride == nil || *input.CounterpartyNameOverride != counterpartyName ||
 				input.SummaryInclusionOverride == nil || *input.SummaryInclusionOverride != override || input.UpdatedBy != "finance-admin" {
 				t.Fatalf("classification input = %#v", input)
 			}
@@ -157,6 +159,7 @@ func TestCompanyFundFinanceHandler_ClassificationUsesAdminActorAndManualFieldsOn
 				Applicant:                *input.Applicant,
 				BusinessDescription:      *input.BusinessDescription,
 				SummaryInclusionOverride: input.SummaryInclusionOverride,
+				CounterpartyNameOverride: input.CounterpartyNameOverride,
 				ClassificationStatus:     "CLASSIFIED",
 				UpdatedBy:                input.UpdatedBy,
 				UpdatedAt:                time.Date(2026, time.July, 10, 0, 0, 0, 0, time.UTC),
@@ -164,7 +167,7 @@ func TestCompanyFundFinanceHandler_ClassificationUsesAdminActorAndManualFieldsOn
 		},
 	}
 	router := newCompanyFundFinanceHandlerRouter(t, store)
-	body := `{"financeCategoryLevel1Id":11,"financeCategoryLevel2Id":22,"isOperatingIncomeExpense":true,"applicant":"finance@monera","businessDescription":"July settlement","summaryInclusionOverride":false}`
+	body := `{"financeCategoryLevel1Id":11,"financeCategoryLevel2Id":22,"isOperatingIncomeExpense":true,"applicant":"finance@monera","businessDescription":"July settlement","summaryInclusionOverride":false,"counterpartyNameOverride":"Vendor alias"}`
 	request := httpRequest(http.MethodPut, "/transactions/77/classification", body, map[string]string{
 		companyFundAdminKeyHeader:   "company-fund-admin-key",
 		companyFundAdminActorHeader: "finance-admin",
@@ -175,8 +178,51 @@ func TestCompanyFundFinanceHandler_ClassificationUsesAdminActorAndManualFieldsOn
 	if response.Code != http.StatusOK {
 		t.Fatalf("classification response = %d body=%s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"transactionId":77`) || strings.Contains(response.Body.String(), `"TransactionID"`) {
+	if !strings.Contains(response.Body.String(), `"transactionId":77`) || !strings.Contains(response.Body.String(), `"counterpartyNameOverride":"Vendor alias"`) || strings.Contains(response.Body.String(), `"TransactionID"`) {
 		t.Fatalf("classification JSON must be camelCase: %s", response.Body.String())
+	}
+}
+
+func TestCompanyFundFinanceHandler_ClassificationCounterpartyOverridePresence(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		body      string
+		wantSet   bool
+		wantValue *string
+	}{
+		{name: "omitted preserves existing override", body: `{}`, wantSet: false},
+		{name: "explicit null clears override", body: `{"counterpartyNameOverride":null}`, wantSet: true},
+		{name: "blank clears override", body: `{"counterpartyNameOverride":"   "}`, wantSet: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			called := false
+			store := companyFundFinanceStoreStub{
+				dashboard: func(context.Context, companyfund.FinanceTransactionFilter) (companyfund.FinanceDashboardSummary, error) {
+					return companyfund.FinanceDashboardSummary{}, nil
+				},
+				details: func(context.Context, companyfund.FinanceTransactionDetailRequest) ([]companyfund.FinanceTransactionDetail, error) {
+					return nil, nil
+				},
+				update: func(_ context.Context, input companyfund.FinanceClassificationUpdate) (companyfund.FinanceClassificationResult, error) {
+					called = true
+					if input.CounterpartyNameOverrideSet != testCase.wantSet || input.CounterpartyNameOverride != testCase.wantValue {
+						t.Fatalf("counterparty override presence = %#v", input)
+					}
+					return companyfund.FinanceClassificationResult{TransactionID: input.TransactionID}, nil
+				},
+			}
+			router := newCompanyFundFinanceHandlerRouter(t, store)
+			request := httpRequest(http.MethodPut, "/transactions/77/classification", testCase.body, map[string]string{
+				companyFundAdminKeyHeader:   "company-fund-admin-key",
+				companyFundAdminActorHeader: "finance-admin",
+				"Content-Type":              "application/json",
+			})
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || !called {
+				t.Fatalf("classification response = %d called=%v body=%s", response.Code, called, response.Body.String())
+			}
+		})
 	}
 }
 

@@ -21,13 +21,14 @@ func TestUpdateFinanceTransactionClassification_UpdatesOnlyManualFieldsAndAudit(
 	override := true
 	applicant := "  finance@monera  "
 	description := "  July vendor settlement  "
+	counterpartyName := "  Vendor alias  "
 	updatedAt := time.Date(2026, time.July, 10, 7, 0, 0, 0, time.UTC)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta(updateFinanceTransactionClassificationSQL)).
-		WithArgs(int64(71), level1ID, level2ID, operating, "finance@monera", "July vendor settlement", override, "finance-admin").
+		WithArgs(int64(71), level1ID, level2ID, operating, "finance@monera", "July vendor settlement", override, true, "Vendor alias", "finance-admin").
 		WillReturnRows(sqlmock.NewRows(financeClassificationColumns()).AddRow(
-			71, level1ID, level2ID, operating, "finance@monera", "July vendor settlement", override, "CLASSIFIED", "finance-admin", updatedAt,
+			71, level1ID, level2ID, operating, "finance@monera", "July vendor settlement", override, "Vendor alias", "CLASSIFIED", "finance-admin", updatedAt,
 		))
 	mock.ExpectCommit()
 
@@ -39,9 +40,10 @@ func TestUpdateFinanceTransactionClassification_UpdatesOnlyManualFieldsAndAudit(
 		Applicant:                &applicant,
 		BusinessDescription:      &description,
 		SummaryInclusionOverride: &override,
+		CounterpartyNameOverride: &counterpartyName,
 		UpdatedBy:                "finance-admin",
 	})
-	if err != nil || result.TransactionID != 71 || result.FinanceCategoryLevel1ID == nil || *result.FinanceCategoryLevel1ID != level1ID || result.SummaryInclusionOverride == nil || !*result.SummaryInclusionOverride || result.UpdatedBy != "finance-admin" || !result.UpdatedAt.Equal(updatedAt) {
+	if err != nil || result.TransactionID != 71 || result.FinanceCategoryLevel1ID == nil || *result.FinanceCategoryLevel1ID != level1ID || result.SummaryInclusionOverride == nil || !*result.SummaryInclusionOverride || result.CounterpartyNameOverride == nil || *result.CounterpartyNameOverride != "Vendor alias" || result.UpdatedBy != "finance-admin" || !result.UpdatedAt.Equal(updatedAt) {
 		t.Fatalf("UpdateFinanceTransactionClassification() = %#v, %v", result, err)
 	}
 	assertFinanceMockExpectations(t, mock)
@@ -56,9 +58,9 @@ func TestUpdateFinanceTransactionClassification_PropagatesDeferredCategoryHierar
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta(updateFinanceTransactionClassificationSQL)).
-		WithArgs(int64(72), nil, level2ID, nil, nil, nil, nil, "finance-admin").
+		WithArgs(int64(72), nil, level2ID, nil, nil, nil, nil, false, nil, "finance-admin").
 		WillReturnRows(sqlmock.NewRows(financeClassificationColumns()).AddRow(
-			72, nil, level2ID, nil, "", "", nil, "CLASSIFIED", "finance-admin", updatedAt,
+			72, nil, level2ID, nil, "", "", nil, "Existing alias", "CLASSIFIED", "finance-admin", updatedAt,
 		))
 	mock.ExpectCommit().WillReturnError(errors.New("finance_category_level2_id must reference a level 2 child"))
 
@@ -72,6 +74,31 @@ func TestUpdateFinanceTransactionClassification_PropagatesDeferredCategoryHierar
 	assertFinanceMockExpectations(t, mock)
 }
 
+func TestUpdateFinanceTransactionClassification_ExplicitlyClearsCounterpartyOverride(t *testing.T) {
+	db, mock := newFinanceMockDB(t)
+	defer db.Close()
+	repository := NewDBRepository(db)
+	updatedAt := time.Date(2026, time.July, 10, 7, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(updateFinanceTransactionClassificationSQL)).
+		WithArgs(int64(73), nil, nil, nil, nil, nil, nil, true, nil, "finance-admin").
+		WillReturnRows(sqlmock.NewRows(financeClassificationColumns()).AddRow(
+			73, nil, nil, nil, "", "", nil, nil, "UNCLASSIFIED", "finance-admin", updatedAt,
+		))
+	mock.ExpectCommit()
+
+	result, err := repository.UpdateFinanceTransactionClassification(context.Background(), FinanceClassificationUpdate{
+		TransactionID:               73,
+		CounterpartyNameOverrideSet: true,
+		UpdatedBy:                   "finance-admin",
+	})
+	if err != nil || result.CounterpartyNameOverride != nil {
+		t.Fatalf("explicit counterparty override clear = %#v, %v", result, err)
+	}
+	assertFinanceMockExpectations(t, mock)
+}
+
 func TestFinanceClassificationAndProviderSQLOwnershipContracts(t *testing.T) {
 	for _, required := range []string{
 		"finance_category_level1_id = $2",
@@ -80,7 +107,8 @@ func TestFinanceClassificationAndProviderSQLOwnershipContracts(t *testing.T) {
 		"applicant = $5",
 		"business_description = $6",
 		"summary_inclusion_override = $7",
-		"classification_updated_by = $8",
+		"counterparty_name_override = CASE WHEN $8 THEN $9 ELSE counterparty_name_override END",
+		"classification_updated_by = $10",
 		"classification_updated_at = NOW()",
 	} {
 		if !strings.Contains(updateFinanceTransactionClassificationSQL, required) {
@@ -95,7 +123,7 @@ func TestFinanceClassificationAndProviderSQLOwnershipContracts(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"finance_category", "is_operating_income_expense", "applicant", "business_description", "summary_inclusion_override",
+		"finance_category", "is_operating_income_expense", "applicant", "business_description", "summary_inclusion_override", "counterparty_name_override",
 	} {
 		if strings.Contains(updateCompanyFundTransactionSQL+updateCompanyFundTransactionProviderSupplementSQL, forbidden) {
 			t.Fatalf("provider write SQL must not update manual field %q", forbidden)
@@ -108,6 +136,6 @@ func TestFinanceClassificationAndProviderSQLOwnershipContracts(t *testing.T) {
 
 func financeClassificationColumns() []string {
 	return []string{
-		"id", "finance_category_level1_id", "finance_category_level2_id", "is_operating_income_expense", "applicant", "business_description", "summary_inclusion_override", "classification_status", "classification_updated_by", "classification_updated_at",
+		"id", "finance_category_level1_id", "finance_category_level2_id", "is_operating_income_expense", "applicant", "business_description", "summary_inclusion_override", "counterparty_name_override", "classification_status", "classification_updated_by", "classification_updated_at",
 	}
 }

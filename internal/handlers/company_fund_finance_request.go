@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -13,12 +15,32 @@ import (
 )
 
 type companyFundClassificationRequest struct {
-	FinanceCategoryLevel1ID  *int64  `json:"financeCategoryLevel1Id"`
-	FinanceCategoryLevel2ID  *int64  `json:"financeCategoryLevel2Id"`
-	IsOperatingIncomeExpense *bool   `json:"isOperatingIncomeExpense"`
-	Applicant                *string `json:"applicant"`
-	BusinessDescription      *string `json:"businessDescription"`
-	SummaryInclusionOverride *bool   `json:"summaryInclusionOverride"`
+	FinanceCategoryLevel1ID  *int64                            `json:"financeCategoryLevel1Id"`
+	FinanceCategoryLevel2ID  *int64                            `json:"financeCategoryLevel2Id"`
+	IsOperatingIncomeExpense *bool                             `json:"isOperatingIncomeExpense"`
+	Applicant                *string                           `json:"applicant"`
+	BusinessDescription      *string                           `json:"businessDescription"`
+	SummaryInclusionOverride *bool                             `json:"summaryInclusionOverride"`
+	CounterpartyNameOverride companyFundOptionalNullableString `json:"counterpartyNameOverride"`
+}
+
+type companyFundOptionalNullableString struct {
+	Set   bool
+	Value *string
+}
+
+func (value *companyFundOptionalNullableString) UnmarshalJSON(data []byte) error {
+	value.Set = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		value.Value = nil
+		return nil
+	}
+	var decoded string
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	value.Value = &decoded
+	return nil
 }
 
 func parseCompanyFundFinanceFilter(c *gin.Context) (companyfund.FinanceTransactionFilter, error) {
@@ -110,14 +132,16 @@ func parseCompanyFundFinanceClassification(c *gin.Context) (companyfund.FinanceC
 		return companyfund.FinanceClassificationUpdate{}, err
 	}
 	return companyfund.FinanceClassificationUpdate{
-		TransactionID:            transactionID,
-		FinanceCategoryLevel1ID:  request.FinanceCategoryLevel1ID,
-		FinanceCategoryLevel2ID:  request.FinanceCategoryLevel2ID,
-		IsOperatingIncomeExpense: request.IsOperatingIncomeExpense,
-		Applicant:                request.Applicant,
-		BusinessDescription:      request.BusinessDescription,
-		SummaryInclusionOverride: request.SummaryInclusionOverride,
-		UpdatedBy:                actor,
+		TransactionID:               transactionID,
+		FinanceCategoryLevel1ID:     request.FinanceCategoryLevel1ID,
+		FinanceCategoryLevel2ID:     request.FinanceCategoryLevel2ID,
+		IsOperatingIncomeExpense:    request.IsOperatingIncomeExpense,
+		Applicant:                   request.Applicant,
+		BusinessDescription:         request.BusinessDescription,
+		SummaryInclusionOverride:    request.SummaryInclusionOverride,
+		CounterpartyNameOverride:    request.CounterpartyNameOverride.Value,
+		CounterpartyNameOverrideSet: request.CounterpartyNameOverride.Set,
+		UpdatedBy:                   actor,
 	}, nil
 }
 
