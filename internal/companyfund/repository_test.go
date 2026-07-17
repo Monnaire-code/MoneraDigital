@@ -45,12 +45,35 @@ func TestInsertProviderEvent_ValidatesSourceShapeAndDigestBeforeDatabaseUse(t *t
 			value.ProviderEventVersion = strings.Repeat("v", maxProviderEventVersionBytes+1)
 			return value
 		}(),
+		func() ProviderEventInput {
+			value := validExisting
+			value.AuthorizingRoutingActionID = 9
+			return value
+		}(),
 	}
 	for _, input := range invalid {
 		if _, err := repository.InsertProviderEvent(context.Background(), input); err == nil {
 			t.Fatalf("invalid provider event unexpectedly accepted: %#v", input)
 		}
 	}
+}
+
+func TestInsertProviderEvent_RoutingProjectionUsesAtomicCommandFence(t *testing.T) {
+	db, mock := newCompanyFundMockDB(t)
+	defer db.Close()
+	input := validSafeheronProviderEvent()
+	input.AuthorizedSafeheronOccurrenceKey = SafeheronOccurrenceAlgorithmVersion + ":" + strings.Repeat("a", 64)
+	input.AuthorizingRoutingActionID = 9
+	input.AuthorizingRoutingLeaseOwner = "routing-worker"
+	mock.ExpectQuery(regexp.QuoteMeta(selectSafeheronWebhookPayloadDigestSQL)).
+		WithArgs(17).WillReturnRows(sqlmock.NewRows([]string{"payload_digest"}).AddRow(input.SourcePayloadDigest))
+	mock.ExpectQuery("WITH authorized AS (?s).*FOR UPDATE OF action,command,routing(?s).*INSERT INTO company_fund_provider_events").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(41))
+	result, err := NewDBRepository(db).InsertProviderEvent(context.Background(), input)
+	if err != nil || !result.Inserted || result.ID != 41 {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	assertCompanyFundMockExpectations(t, mock)
 }
 
 func TestInsertProviderEvent_IdempotentlyInsertsAndLooksUpDuplicate(t *testing.T) {
@@ -225,9 +248,10 @@ func TestClaimNextProviderEvent_UsesSkipLockedAndCommitsLease(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, channel, provider_event_id, event_type")).
+		WithArgs(SafeheronProviderClaimAll).
 		WillReturnRows(sqlmock.NewRows(providerEventClaimColumns()).AddRow(
 			7, "SAFEHERON", "event-7", "TRANSACTION", "v1", "org-a", "account-a", "EXISTING_SAFEHERON_WEBHOOK_REF",
-			17, strings.Repeat("a", 64), nil, nil, nil, nil, nil, false, 2,
+			17, strings.Repeat("a", 64), "", int64(0), nil, nil, nil, nil, nil, false, 2,
 		))
 	mock.ExpectQuery(regexp.QuoteMeta("UPDATE company_fund_provider_events")).
 		WithArgs(int64(7), "worker-a", time.Minute.Microseconds()).
@@ -240,6 +264,23 @@ func TestClaimNextProviderEvent_UsesSkipLockedAndCommitsLease(t *testing.T) {
 	}
 	if lease == nil || lease.ID != 7 || lease.ProviderOrgKey != "org-a" || lease.ProviderAccountKey != "account-a" || lease.AttemptCount != 3 || !lease.LeaseExpiresAt.Equal(databaseLeaseExpiry) {
 		t.Fatalf("lease = %#v", lease)
+	}
+	assertCompanyFundMockExpectations(t, mock)
+}
+
+func TestClaimNextProviderEventCaptureOnlyExcludesRoutingScopedProjection(t *testing.T) {
+	db, mock := newCompanyFundMockDB(t)
+	defer db.Close()
+	repository := NewDBRepository(db)
+	repository.SetSafeheronProviderClaimMode(SafeheronProviderClaimDisabled)
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, channel, provider_event_id, event_type")).
+		WithArgs(SafeheronProviderClaimDisabled).
+		WillReturnRows(sqlmock.NewRows(providerEventClaimColumns()))
+	mock.ExpectRollback()
+	lease, err := repository.ClaimNextProviderEvent(context.Background(), "capture-only", time.Minute)
+	if err != nil || lease != nil {
+		t.Fatalf("ClaimNextProviderEvent() lease=%#v err=%v", lease, err)
 	}
 	assertCompanyFundMockExpectations(t, mock)
 }
@@ -669,7 +710,7 @@ func validOwnedProviderEvent() ProviderEventInput {
 func providerEventClaimColumns() []string {
 	return []string{
 		"id", "channel", "provider_event_id", "event_type", "provider_event_version", "provider_org_key", "provider_account_key", "source_kind",
-		"safeheron_webhook_event_id", "source_payload_digest", "owned_payload_ciphertext",
+		"safeheron_webhook_event_id", "source_payload_digest", "authorized_safeheron_occurrence_key", "authorizing_routing_action_id", "owned_payload_ciphertext",
 		"owned_payload_digest", "owned_payload_key_version", "owned_payload_retention_until",
 		"owned_payload_purged_at", "owned_payload_legal_hold", "attempt_count",
 	}
@@ -682,8 +723,8 @@ func providerEventIdentityRows(input ProviderEventInput, id int64) *sqlmock.Rows
 	}
 	return sqlmock.NewRows([]string{
 		"id", "event_type", "source_kind", "source_payload_digest",
-		"safeheron_webhook_event_id", "provider_event_version",
-	}).AddRow(id, input.EventType, input.SourceKind, input.SourcePayloadDigest, rawEventID, input.ProviderEventVersion)
+		"safeheron_webhook_event_id", "provider_event_version", "authorized_safeheron_occurrence_key", "authorizing_routing_action_id",
+	}).AddRow(id, input.EventType, input.SourceKind, input.SourcePayloadDigest, rawEventID, input.ProviderEventVersion, input.AuthorizedSafeheronOccurrenceKey, nullablePositiveInt64(input.AuthorizingRoutingActionID))
 }
 
 func transactionForUpdateColumns() []string {

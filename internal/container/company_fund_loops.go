@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"monera-digital/internal/companyfund"
+	"monera-digital/internal/fundrouting"
 	"monera-digital/internal/handlers"
 )
 
@@ -23,6 +24,9 @@ func newCompanyFundSafeheronCollector(
 	normalizer *companyfund.SafeheronProviderEventNormalizer,
 	eligibility companyfund.SafeheronWebhookEligibility,
 ) *companyfund.SafeheronProviderEventCollector {
+	if c != nil && (c.SafeheronRoutingMode == fundrouting.ModeCaptureOnly || c.SafeheronRoutingMode == fundrouting.ModeRoutingAuthoritative) {
+		return nil
+	}
 	if c == nil || normalizer == nil || eligibility == nil || c.SafeheronWebhookHandler == nil || c.DepositEventRepo == nil || c.CompanyFundRepository == nil || c.CompanyFundAccountRegistry == nil {
 		return nil
 	}

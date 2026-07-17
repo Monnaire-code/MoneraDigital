@@ -46,16 +46,17 @@ const JournalBizTypeDeposit = "10"
 
 // Event mirrors a safeheron_webhook_events row.
 type Event struct {
-	ID              int64
-	EventID         string
-	EventType       string
-	SafeheronTxKey  string
-	CustomerRefID   string
-	RawPayload      []byte
-	PayloadDigest   string
-	ProcessStatus   string
-	ProcessAttempts int
-	ErrorMessage    string
+	ID                         int64
+	EventID                    string
+	EventType                  string
+	SafeheronTxKey             string
+	CustomerRefID              string
+	RawPayload                 []byte
+	PayloadDigest              string
+	ProcessStatus              string
+	ProcessAttempts            int
+	ErrorMessage               string
+	AuthorizingRoutingActionID int64
 }
 
 // EventSource is the immutable source reference a secondary consumer may use

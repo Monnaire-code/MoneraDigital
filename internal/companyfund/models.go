@@ -563,19 +563,21 @@ type BTCCrossResult struct {
 // rules depend on SQL or HTTP concerns.
 
 type CompanyFundAccount struct {
-	ID                 int64
-	Channel            Channel
-	ProviderAccountKey string
-	WalletAddress      string
-	NormalizedAddress  string
-	NetworkFamily      string
-	CompanyEntity      string
-	FundAccountName    string
-	SubAccountName     string
-	AccountType        string
-	AccountName        string
-	AccountRole        string
-	Enabled            bool
+	ID                  int64
+	Channel             Channel
+	ProviderAccountKey  string
+	WalletAddress       string
+	NormalizedAddress   string
+	NetworkFamily       string
+	CompanyEntity       string
+	FundAccountName     string
+	SubAccountName      string
+	AccountType         string
+	AccountName         string
+	AccountRole         string
+	Enabled             bool
+	MonitoringStartedAt time.Time
+	FirstEnabledAt      *time.Time
 }
 
 type AccountSnapshot struct {

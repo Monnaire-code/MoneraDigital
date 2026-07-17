@@ -674,7 +674,7 @@ func TestProcessOne_OutOfOrderCompletedThenConfirmingNoRegress(t *testing.T) {
 
 // ------------------- routing failures → MANUAL_REVIEW -------------------
 
-func TestProcessOne_AddressUnassigned_FlagsManualReview(t *testing.T) {
+func TestProcessOne_AddressUnassignedRejectsWithoutCreatingDeposit(t *testing.T) {
 	repo := newMockRepo()
 	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
 	alertFn, alerts := newAlertCollector()
@@ -692,16 +692,11 @@ func TestProcessOne_AddressUnassigned_FlagsManualReview(t *testing.T) {
 			DestinationAddress:   "0xstranger",
 		},
 	})
-	if _, err := svc.ProcessOne(context.Background()); err != nil {
-		t.Fatal(err)
+	if _, err := svc.ProcessOne(context.Background()); err == nil || !strings.Contains(err.Error(), "no assigned customer owner") {
+		t.Fatalf("ProcessOne() error = %v", err)
 	}
-	if len(repo.manualUpdates) != 1 {
-		t.Fatalf("expected 1 manual_review update, got %v", repo.manualUpdates)
-	}
-	for _, reason := range repo.manualUpdates {
-		if reason != ReasonAddressUnassigned {
-			t.Errorf("expected ADDRESS_UNASSIGNED, got %s", reason)
-		}
+	if repo.upsertCalls != 0 || len(repo.deposits) != 0 || len(repo.manualUpdates) != 0 {
+		t.Fatalf("unassigned destination wrote deposit state: upserts=%d deposits=%v manual=%v", repo.upsertCalls, repo.deposits, repo.manualUpdates)
 	}
 	if len(*alerts) != 1 || (*alerts)[0].fields["reason"] != ReasonAddressUnassigned {
 		t.Errorf("expected alert with reason ADDRESS_UNASSIGNED, got %+v", *alerts)
@@ -1617,9 +1612,7 @@ func TestProcessOne_BelowMinAmount_FindDepositError(t *testing.T) {
 
 // === 本次变更补充测试 ===
 
-// TestProcessOne_AddressUnassigned_AssetFieldPopulated 验证地址未分配时 deposits.asset
-// 字段仍正确写入 coin symbol（修复前该字段为空字符串）。
-func TestProcessOne_AddressUnassigned_AssetFieldPopulated(t *testing.T) {
+func TestProcessOne_AddressUnassignedDoesNotConstructZeroUserLedgerRow(t *testing.T) {
 	repo := newMockRepo()
 	// 不设置 owner → LookupAddressOwner 返回 not found
 	reg := newTestRegistry("ETH", "ETHEREUM", "ETH", "0.0001", 7)
@@ -1637,25 +1630,17 @@ func TestProcessOne_AddressUnassigned_AssetFieldPopulated(t *testing.T) {
 			DestinationAddress:   "0xunknown",
 		},
 	})
-	if _, err := svc.ProcessOne(context.Background()); err != nil {
-		t.Fatal(err)
+	if _, err := svc.ProcessOne(context.Background()); err == nil {
+		t.Fatal("expected deterministic unassigned-owner rejection")
 	}
-
-	dep, ok := repo.deposits["tx-unassigned"]
-	if !ok {
-		t.Fatal("expected deposit row to be written")
-	}
-	if dep.Asset != "ETH" {
-		t.Errorf("expected Asset=ETH, got %q (symbol must be populated even when address unassigned)", dep.Asset)
-	}
-	if dep.Status != DepositStatusManualReview {
-		t.Errorf("expected status MANUAL_REVIEW, got %s", dep.Status)
+	if repo.upsertCalls != 0 || len(repo.deposits) != 0 {
+		t.Fatalf("unassigned owner must never reach UpsertDeposit: calls=%d deposits=%v", repo.upsertCalls, repo.deposits)
 	}
 }
 
 // TestProcessOne_AddressUnassigned_TwoEvents_SingleAlert 验证同一未分配地址充值收到两
 // 条事件时，第二条不重复告警（alreadyFlagged 路径）。
-func TestProcessOne_AddressUnassigned_TwoEvents_SingleAlert(t *testing.T) {
+func TestProcessOne_AddressUnassignedRepeatedEventsRemainLedgerFree(t *testing.T) {
 	repo := newMockRepo()
 	reg := newTestRegistry("ETH", "ETHEREUM", "ETH", "0.0001", 7)
 	alertFn, alerts := newAlertCollector()
@@ -1672,24 +1657,23 @@ func TestProcessOne_AddressUnassigned_TwoEvents_SingleAlert(t *testing.T) {
 	// 第一条：CONFIRMING
 	detail.TransactionStatus = "CONFIRMING"
 	enqueueRaw(t, repo, PayloadEnvelope{EventType: "TRANSACTION_CREATED", EventDetail: detail})
-	if _, err := svc.ProcessOne(context.Background()); err != nil {
-		t.Fatalf("event 1: %v", err)
+	if _, err := svc.ProcessOne(context.Background()); err == nil {
+		t.Fatal("event 1 must reject unassigned owner")
 	}
 
 	// 第二条：COMPLETED（同笔，deposit 已是 MANUAL_REVIEW）
 	detail.TransactionStatus = "COMPLETED"
 	detail.TransactionSubStatus = "CONFIRMED"
 	enqueueRaw(t, repo, PayloadEnvelope{EventType: "TRANSACTION_STATUS_CHANGED", EventDetail: detail})
-	if _, err := svc.ProcessOne(context.Background()); err != nil {
-		t.Fatalf("event 2: %v", err)
+	if _, err := svc.ProcessOne(context.Background()); err == nil {
+		t.Fatal("event 2 must reject unassigned owner")
 	}
 
-	if len(*alerts) != 1 {
-		t.Errorf("expected exactly 1 alert for 2 events on same unassigned deposit, got %d", len(*alerts))
+	if len(*alerts) != 2 {
+		t.Errorf("expected one rejection alert per raw event, got %d", len(*alerts))
 	}
-	// 两条事件操作同一笔 deposit（同 ID），manualUpdates map 只有一个键
-	if len(repo.manualUpdates) != 1 {
-		t.Errorf("expected 1 deposit in manualUpdates (same deposit, two events), got %d", len(repo.manualUpdates))
+	if repo.upsertCalls != 0 || len(repo.deposits) != 0 || len(repo.manualUpdates) != 0 {
+		t.Fatalf("repeated unassigned events wrote ledger state")
 	}
 }
 
@@ -1698,6 +1682,7 @@ func TestProcessOne_AddressUnassigned_TwoEvents_SingleAlert(t *testing.T) {
 func TestProcessOne_MarkMRNonTerminalError_Propagated(t *testing.T) {
 	repo := newMockRepo()
 	repo.markMRErr = errors.New("constraint violation")
+	repo.owners["0xunknown"] = 42
 	reg := newTestRegistry("ETH", "ETHEREUM", "ETH", "0.0001", 7)
 	svc := newSvc(t, repo, reg, nil)
 
@@ -1706,7 +1691,7 @@ func TestProcessOne_MarkMRNonTerminalError_Propagated(t *testing.T) {
 		EventDetail: PayloadEventDetail{
 			TxKey:                "tx-mr-err",
 			CoinKey:              "ETH",
-			TxAmount:             "0.05",
+			TxAmount:             "0.00001",
 			TransactionDirection: "INFLOW",
 			TransactionStatus:    "COMPLETED",
 			DestinationAddress:   "0xunknown",
@@ -1747,8 +1732,8 @@ func TestProcessOne_AddressUnassigned_AlertUserIDIsNA(t *testing.T) {
 			DestinationAddress:   "0xunknown",
 		},
 	})
-	if _, err := svc.ProcessOne(context.Background()); err != nil {
-		t.Fatal(err)
+	if _, err := svc.ProcessOne(context.Background()); err == nil {
+		t.Fatal("expected deterministic unassigned-owner rejection")
 	}
 	if len(*alerts) != 1 {
 		t.Fatalf("expected 1 alert, got %d", len(*alerts))

@@ -59,23 +59,24 @@ type Repository interface {
 
 // DepositRow is the deposit upsert payload.
 type DepositRow struct {
-	ID                 int64
-	UserID             int
-	SafeheronTxKey     string
-	SafeheronCoinKey   string // Canonical registry key when mapped; raw webhook key for unsupported evidence.
-	Amount             string
-	Asset              string
-	ChainCode          string // Empty only with CoinChainID=0 on MANUAL_REVIEW; repository persists SQL NULL/NULL.
-	CoinChainID        int
-	SafeheronStatus    string
-	SafeheronSubStatus string
-	StatusRank         int
-	BlockHeight        int64
-	BlockHash          string
-	Status             string
-	FromAddress        string
-	ToAddress          string
-	TxHash             string
+	ID                         int64
+	UserID                     int
+	SafeheronTxKey             string
+	SafeheronCoinKey           string // Canonical registry key when mapped; raw webhook key for unsupported evidence.
+	Amount                     string
+	Asset                      string
+	ChainCode                  string // Empty only with CoinChainID=0 on MANUAL_REVIEW; repository persists SQL NULL/NULL.
+	CoinChainID                int
+	SafeheronStatus            string
+	SafeheronSubStatus         string
+	StatusRank                 int
+	BlockHeight                int64
+	BlockHash                  string
+	Status                     string
+	FromAddress                string
+	ToAddress                  string
+	TxHash                     string
+	AuthorizingRoutingActionID int64
 	// AML/KYT fields (v1.5 spec §4.6)
 	AMLScreeningState string
 	AMLRiskLevel      string
@@ -96,10 +97,26 @@ type JournalEntry struct {
 
 // DBRepository is the postgres implementation.
 type DBRepository struct {
-	db *sql.DB
+	db                             *sql.DB
+	transactionClaimsEnabled       bool
+	routingProjectionClaimsEnabled bool
 }
 
-func NewRepository(db *sql.DB) *DBRepository { return &DBRepository{db: db} }
+func NewRepository(db *sql.DB) *DBRepository {
+	return &DBRepository{db: db, transactionClaimsEnabled: true, routingProjectionClaimsEnabled: true}
+}
+
+func (r *DBRepository) SetRoutingProjectionClaimsEnabled(enabled bool) {
+	if r != nil {
+		r.routingProjectionClaimsEnabled = enabled
+	}
+}
+
+func (r *DBRepository) SetTransactionClaimsEnabled(enabled bool) {
+	if r != nil {
+		r.transactionClaimsEnabled = enabled
+	}
+}
 
 func (r *DBRepository) BeginTx(ctx context.Context) (Tx, error) {
 	return r.db.BeginTx(ctx, nil)
@@ -147,21 +164,36 @@ func eventPayloadDigest(rawPayload []byte) string {
 }
 
 func (r *DBRepository) LockNextPendingEvent(ctx context.Context, tx Tx) (*Event, error) {
-	row := asSQLTx(tx).QueryRowContext(ctx,
-		`SELECT id, event_id, event_type,
-		        COALESCE(safeheron_tx_key, ''), COALESCE(customer_ref_id, ''),
-		        raw_payload, process_status, process_attempts,
-		        COALESCE(error_message, '')
+	query := `SELECT id, event_id, event_type,
+			        COALESCE(safeheron_tx_key, ''), COALESCE(customer_ref_id, ''),
+			        raw_payload, process_status, process_attempts,
+			        COALESCE(error_message, ''), COALESCE(authorizing_routing_action_id, 0)
 		 FROM safeheron_webhook_events
-		 WHERE process_status = 'PENDING'
+		 WHERE process_status = 'PENDING'`
+	if !r.transactionClaimsEnabled {
+		query += ` AND event_type = 'AML_KYT_ALERT'`
+		if r.routingProjectionClaimsEnabled {
+			query += ` OR (process_status = 'PENDING' AND event_id LIKE 'routing-customer:%'
+			  AND EXISTS (
+			    SELECT 1 FROM safeheron_transaction_routing_case_actions action
+			    JOIN safeheron_transaction_routing_case_commands command ON command.id=action.command_id
+			    JOIN safeheron_transaction_routing_cases routing
+			      ON routing.id=command.case_id AND routing.pending_command_id=command.id
+			    WHERE action.id=safeheron_webhook_events.authorizing_routing_action_id
+			      AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
+			  ))`
+		}
+	}
+	query += `
 		 ORDER BY received_at
 		 FOR UPDATE SKIP LOCKED
-		 LIMIT 1`,
-	)
+		 LIMIT 1`
+	row := asSQLTx(tx).QueryRowContext(ctx, query)
 	var e Event
 	if err := row.Scan(
 		&e.ID, &e.EventID, &e.EventType, &e.SafeheronTxKey, &e.CustomerRefID,
 		&e.RawPayload, &e.ProcessStatus, &e.ProcessAttempts, &e.ErrorMessage,
+		&e.AuthorizingRoutingActionID,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNoPending
@@ -181,6 +213,9 @@ func (r *DBRepository) UpsertDeposit(ctx context.Context, tx Tx, d *DepositRow) 
 		return nil, fmt.Errorf("upsert deposit: %w", err)
 	}
 	sqlTx := asSQLTx(tx)
+	if err := ensureCustomerRoutingAction(ctx, sqlTx, d.AuthorizingRoutingActionID); err != nil {
+		return nil, err
+	}
 	row := sqlTx.QueryRowContext(ctx,
 		`INSERT INTO deposits
 		   (user_id, tx_hash, amount, asset, chain,
@@ -233,6 +268,29 @@ func (r *DBRepository) UpsertDeposit(ctx context.Context, tx Tx, d *DepositRow) 
 		return nil, fmt.Errorf("upsert deposit: %w", err)
 	}
 	return out, nil
+}
+
+func ensureCustomerRoutingAction(ctx context.Context, tx *sql.Tx, actionID int64) error {
+	if actionID <= 0 {
+		return nil
+	}
+	var locked int64
+	err := tx.QueryRowContext(ctx, `SELECT action.id
+FROM safeheron_transaction_routing_case_actions action
+JOIN safeheron_transaction_routing_case_commands command ON command.id=action.command_id
+JOIN safeheron_transaction_routing_cases routing
+  ON routing.id=command.case_id AND routing.pending_command_id=command.id
+WHERE action.id=$1 AND action.action_type='APPLY_CUSTOMER'
+  AND action.projection_kind='CUSTOMER' AND action.status IN ('PENDING','RETRYABLE')
+  AND command.status='PENDING'
+FOR UPDATE OF action,command,routing`, actionID).Scan(&locked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("customer routing action %d is no longer authorized", actionID)
+	}
+	if err != nil {
+		return fmt.Errorf("lock customer routing action %d: %w", actionID, err)
+	}
+	return nil
 }
 
 func (r *DBRepository) fetchDepositByTxKey(ctx context.Context, tx *sql.Tx, txKey string) (*DepositRow, error) {

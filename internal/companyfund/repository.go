@@ -55,11 +55,24 @@ type Repository interface {
 // DBRepository is the PostgreSQL implementation of the company-fund storage
 // boundary. It does not touch Safeheron's deposit-owned process_status column.
 type DBRepository struct {
-	db SQLDatabase
+	db                         SQLDatabase
+	safeheronProviderClaimMode string
 }
 
+const (
+	SafeheronProviderClaimAll           = "ALL"
+	SafeheronProviderClaimDisabled      = "DISABLED"
+	SafeheronProviderClaimRoutingScoped = "ROUTING_SCOPED"
+)
+
 func NewDBRepository(db SQLDatabase) *DBRepository {
-	return &DBRepository{db: db}
+	return &DBRepository{db: db, safeheronProviderClaimMode: SafeheronProviderClaimAll}
+}
+
+func (r *DBRepository) SetSafeheronProviderClaimMode(mode string) {
+	if r != nil {
+		r.safeheronProviderClaimMode = mode
+	}
 }
 
 // NewDBRepositoryWithClock remains source-compatible for callers that used
@@ -80,20 +93,23 @@ const (
 // Webhooks reference their already-verified raw event by INTEGER ID; provider
 // API/Airwallex payloads use bounded encrypted bytes owned by this feature.
 type ProviderEventInput struct {
-	Channel                       Channel
-	ProviderEventID               string
-	EventType                     string
-	ProviderEventVersion          string
-	ProviderOrgKey                string
-	ProviderAccountKey            string
-	SourceKind                    ProviderEventSource
-	SafeheronWebhookEventID       *int
-	SourcePayloadDigest           string
-	OwnedPayloadCiphertext        []byte
-	OwnedPayloadDigest            string
-	OwnedPayloadKeyVersion        string
-	OwnedPayloadRetentionDuration time.Duration
-	OwnedPayloadLegalHold         bool
+	Channel                          Channel
+	ProviderEventID                  string
+	EventType                        string
+	ProviderEventVersion             string
+	ProviderOrgKey                   string
+	ProviderAccountKey               string
+	SourceKind                       ProviderEventSource
+	SafeheronWebhookEventID          *int
+	SourcePayloadDigest              string
+	AuthorizedSafeheronOccurrenceKey string
+	AuthorizingRoutingActionID       int64
+	AuthorizingRoutingLeaseOwner     string
+	OwnedPayloadCiphertext           []byte
+	OwnedPayloadDigest               string
+	OwnedPayloadKeyVersion           string
+	OwnedPayloadRetentionDuration    time.Duration
+	OwnedPayloadLegalHold            bool
 }
 
 type ProviderEventInsertResult struct {
@@ -102,25 +118,27 @@ type ProviderEventInsertResult struct {
 }
 
 type ProviderEventLease struct {
-	ID                         int64
-	Channel                    Channel
-	ProviderEventID            string
-	EventType                  string
-	ProviderEventVersion       string
-	ProviderOrgKey             string
-	ProviderAccountKey         string
-	SourceKind                 ProviderEventSource
-	SafeheronWebhookEventID    *int
-	SourcePayloadDigest        string
-	OwnedPayloadCiphertext     []byte
-	OwnedPayloadDigest         string
-	OwnedPayloadKeyVersion     string
-	OwnedPayloadRetentionUntil *time.Time
-	OwnedPayloadPurgedAt       *time.Time
-	OwnedPayloadLegalHold      bool
-	AttemptCount               int
-	LeaseOwner                 string
-	LeaseExpiresAt             time.Time
+	ID                               int64
+	Channel                          Channel
+	ProviderEventID                  string
+	EventType                        string
+	ProviderEventVersion             string
+	ProviderOrgKey                   string
+	ProviderAccountKey               string
+	SourceKind                       ProviderEventSource
+	SafeheronWebhookEventID          *int
+	SourcePayloadDigest              string
+	AuthorizedSafeheronOccurrenceKey string
+	AuthorizingRoutingActionID       int64
+	OwnedPayloadCiphertext           []byte
+	OwnedPayloadDigest               string
+	OwnedPayloadKeyVersion           string
+	OwnedPayloadRetentionUntil       *time.Time
+	OwnedPayloadPurgedAt             *time.Time
+	OwnedPayloadLegalHold            bool
+	AttemptCount                     int
+	LeaseOwner                       string
+	LeaseExpiresAt                   time.Time
 }
 
 type ProviderEventFinalizeOutcome string
@@ -136,23 +154,50 @@ const insertProviderEventSQL = `
 INSERT INTO company_fund_provider_events (
 	channel, provider_event_id, event_type, provider_event_version, provider_org_key, provider_account_key,
 	source_kind, safeheron_webhook_event_id, source_payload_digest,
+	authorized_safeheron_occurrence_key, authorizing_routing_action_id,
 	owned_payload_ciphertext, owned_payload_digest, owned_payload_key_version,
 	owned_payload_retention_until, owned_payload_legal_hold
 ) VALUES (
 	$1, $2, $3, $4, $5, $6,
 	$7, $8, $9,
-	$10, $11, $12,
-	CASE WHEN $13::bigint = 0 THEN NULL
-		ELSE NOW() + ($13::bigint * INTERVAL '1 microsecond')
+	$10, $16,
+	$11, $12, $13,
+	CASE WHEN $14::bigint = 0 THEN NULL
+		ELSE NOW() + ($14::bigint * INTERVAL '1 microsecond')
 	END,
-	$14
+	$15
 )
 ON CONFLICT (channel, provider_event_id) DO NOTHING
 RETURNING id`
 
+const insertAuthorizedProviderEventSQL = `
+WITH authorized AS (
+  SELECT 1
+  FROM safeheron_transaction_routing_case_actions action
+  JOIN safeheron_transaction_routing_case_commands command ON command.id=action.command_id
+  JOIN safeheron_transaction_routing_cases routing
+    ON routing.id=command.case_id AND routing.pending_command_id=command.id
+  WHERE action.id=$16 AND action.lease_owner=$17 AND action.lease_expires_at>now()
+    AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
+  FOR UPDATE OF action,command,routing
+)
+INSERT INTO company_fund_provider_events (
+	channel, provider_event_id, event_type, provider_event_version, provider_org_key, provider_account_key,
+	source_kind, safeheron_webhook_event_id, source_payload_digest,
+	authorized_safeheron_occurrence_key, authorizing_routing_action_id,
+	owned_payload_ciphertext, owned_payload_digest, owned_payload_key_version,
+	owned_payload_retention_until, owned_payload_legal_hold
+)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$16,$11,$12,$13,
+	CASE WHEN $14::bigint=0 THEN NULL ELSE NOW()+($14::bigint*INTERVAL '1 microsecond') END,$15
+FROM authorized
+ON CONFLICT (channel,provider_event_id) DO NOTHING
+RETURNING id`
+
 const selectProviderEventIdentitySQL = `
 SELECT id, event_type, source_kind, source_payload_digest,
-       safeheron_webhook_event_id, COALESCE(provider_event_version, '')
+       safeheron_webhook_event_id, COALESCE(provider_event_version, ''),
+       COALESCE(authorized_safeheron_occurrence_key, ''), authorizing_routing_action_id
 FROM company_fund_provider_events
 WHERE channel = $1 AND provider_event_id = $2`
 
@@ -164,20 +209,37 @@ WHERE id = $1`
 const claimNextProviderEventSQL = `
 SELECT id, channel, provider_event_id, event_type, COALESCE(provider_event_version, ''),
        COALESCE(provider_org_key, ''), COALESCE(provider_account_key, ''), source_kind,
-       safeheron_webhook_event_id, source_payload_digest,
+	       safeheron_webhook_event_id, source_payload_digest,
+	       COALESCE(authorized_safeheron_occurrence_key, ''),
+	       COALESCE(authorizing_routing_action_id, 0),
        owned_payload_ciphertext, owned_payload_digest, owned_payload_key_version,
        owned_payload_retention_until, owned_payload_purged_at, owned_payload_legal_hold, attempt_count
 FROM company_fund_provider_events
 WHERE owned_payload_purged_at IS NULL
-	AND (
+		AND (
 		source_kind <> 'OWNED_ENCRYPTED_PAYLOAD'
 		OR owned_payload_legal_hold = true
 		OR owned_payload_retention_until > NOW()
-	)
+		)
+		AND (
+		  authorizing_routing_action_id IS NULL OR EXISTS (
+		    SELECT 1 FROM safeheron_transaction_routing_case_actions action
+		    JOIN safeheron_transaction_routing_case_commands command ON command.id=action.command_id
+		    JOIN safeheron_transaction_routing_cases routing
+		      ON routing.id=command.case_id AND routing.pending_command_id=command.id
+		    WHERE action.id=company_fund_provider_events.authorizing_routing_action_id
+		      AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
+		  )
+		)
 	AND (
 		event_state = 'PENDING'
 		OR (event_state = 'FAILED' AND next_attempt_at IS NOT NULL AND next_attempt_at <= NOW())
 		OR (event_state = 'LEASED' AND lease_expires_at <= NOW())
+	)
+	AND (
+	  $1::text='ALL'
+	  OR ($1::text='DISABLED' AND channel<>'SAFEHERON')
+	  OR ($1::text='ROUTING_SCOPED' AND (channel<>'SAFEHERON' OR authorized_safeheron_occurrence_key IS NOT NULL))
 	)
 ORDER BY received_at, id
 FOR UPDATE SKIP LOCKED
@@ -249,7 +311,11 @@ func (r *DBRepository) InsertProviderEvent(ctx context.Context, input ProviderEv
 		return ProviderEventInsertResult{}, err
 	}
 
-	row := r.db.QueryRowContext(ctx, insertProviderEventSQL,
+	insertSQL := insertProviderEventSQL
+	if input.AuthorizingRoutingActionID > 0 {
+		insertSQL = insertAuthorizedProviderEventSQL
+	}
+	args := []any{
 		input.Channel,
 		input.ProviderEventID,
 		input.EventType,
@@ -259,12 +325,18 @@ func (r *DBRepository) InsertProviderEvent(ctx context.Context, input ProviderEv
 		input.SourceKind,
 		nullableInt(input.SafeheronWebhookEventID),
 		input.SourcePayloadDigest,
+		nullableString(input.AuthorizedSafeheronOccurrenceKey),
 		nullableBytes(input.OwnedPayloadCiphertext),
 		nullableString(input.OwnedPayloadDigest),
 		nullableString(input.OwnedPayloadKeyVersion),
 		input.OwnedPayloadRetentionDuration.Microseconds(),
 		input.OwnedPayloadLegalHold,
-	)
+		nullablePositiveInt64(input.AuthorizingRoutingActionID),
+	}
+	if input.AuthorizingRoutingActionID > 0 {
+		args = append(args, input.AuthorizingRoutingLeaseOwner)
+	}
+	row := r.db.QueryRowContext(ctx, insertSQL, args...)
 	var id int64
 	if err := row.Scan(&id); err == nil {
 		return ProviderEventInsertResult{ID: id, Inserted: true}, nil
@@ -313,6 +385,11 @@ func (r *DBRepository) ClaimNextProviderEvent(ctx context.Context, owner string,
 	if err := r.requireDB(); err != nil {
 		return nil, err
 	}
+	switch r.safeheronProviderClaimMode {
+	case SafeheronProviderClaimAll, SafeheronProviderClaimDisabled, SafeheronProviderClaimRoutingScoped:
+	default:
+		return nil, fmt.Errorf("invalid Safeheron provider claim mode %q", r.safeheronProviderClaimMode)
+	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -325,7 +402,7 @@ func (r *DBRepository) ClaimNextProviderEvent(ctx context.Context, owner string,
 		}
 	}()
 
-	lease, err := scanProviderEventLease(tx.QueryRowContext(ctx, claimNextProviderEventSQL))
+	lease, err := scanProviderEventLease(tx.QueryRowContext(ctx, claimNextProviderEventSQL, r.safeheronProviderClaimMode))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -436,6 +513,9 @@ func (input ProviderEventInput) validate() error {
 			return fmt.Errorf("existing Safeheron webhook source cannot own a duplicate payload")
 		}
 	case ProviderEventSourceOwnedEncryptedPayload:
+		if input.AuthorizedSafeheronOccurrenceKey != "" {
+			return fmt.Errorf("owned encrypted payload cannot carry a routing occurrence authorization")
+		}
 		if input.SafeheronWebhookEventID != nil {
 			return fmt.Errorf("owned encrypted payload cannot also reference a Safeheron raw event")
 		}
@@ -454,7 +534,24 @@ func (input ProviderEventInput) validate() error {
 	default:
 		return fmt.Errorf("unsupported provider event source kind %q", input.SourceKind)
 	}
+	if input.AuthorizedSafeheronOccurrenceKey != "" && !validSafeheronOccurrenceKey(input.AuthorizedSafeheronOccurrenceKey) {
+		return fmt.Errorf("authorized Safeheron occurrence key is invalid")
+	}
+	if (input.AuthorizingRoutingActionID > 0) != (strings.TrimSpace(input.AuthorizingRoutingLeaseOwner) != "") {
+		return fmt.Errorf("routing action authorization requires both action ID and lease owner")
+	}
+	if input.AuthorizingRoutingActionID > 0 && input.AuthorizedSafeheronOccurrenceKey == "" {
+		return fmt.Errorf("routing action authorization requires an authorized Safeheron occurrence")
+	}
+	if input.AuthorizedSafeheronOccurrenceKey != "" && input.AuthorizingRoutingActionID <= 0 {
+		return fmt.Errorf("authorized Safeheron occurrence requires a routing action authorization")
+	}
 	return nil
+}
+
+func validSafeheronOccurrenceKey(value string) bool {
+	const prefix = SafeheronOccurrenceAlgorithmVersion + ":"
+	return strings.HasPrefix(value, prefix) && isLowerSHA256Hex(strings.TrimPrefix(value, prefix))
 }
 
 func validateLeaseOwner(owner string) error {
@@ -510,6 +607,8 @@ func scanProviderEventLease(row *sql.Row) (*ProviderEventLease, error) {
 		&sourceKind,
 		&rawEventID,
 		&lease.SourcePayloadDigest,
+		&lease.AuthorizedSafeheronOccurrenceKey,
+		&lease.AuthorizingRoutingActionID,
 		&ciphertext,
 		&payloadDigest,
 		&payloadKeyVersion,
@@ -547,12 +646,14 @@ func scanProviderEventLease(row *sql.Row) (*ProviderEventLease, error) {
 }
 
 type providerEventIdentity struct {
-	ID                      int64
-	EventType               string
-	SourceKind              ProviderEventSource
-	SourcePayloadDigest     string
-	SafeheronWebhookEventID sql.NullInt64
-	ProviderEventVersion    string
+	ID                               int64
+	EventType                        string
+	SourceKind                       ProviderEventSource
+	SourcePayloadDigest              string
+	SafeheronWebhookEventID          sql.NullInt64
+	ProviderEventVersion             string
+	AuthorizedSafeheronOccurrenceKey string
+	AuthorizingRoutingActionID       sql.NullInt64
 }
 
 func readProviderEventIdentity(row *sql.Row) (providerEventIdentity, error) {
@@ -567,6 +668,8 @@ func readProviderEventIdentity(row *sql.Row) (providerEventIdentity, error) {
 		&identity.SourcePayloadDigest,
 		&identity.SafeheronWebhookEventID,
 		&identity.ProviderEventVersion,
+		&identity.AuthorizedSafeheronOccurrenceKey,
+		&identity.AuthorizingRoutingActionID,
 	); err != nil {
 		return providerEventIdentity{}, err
 	}
@@ -586,6 +689,10 @@ func providerEventIdentityConflictField(input ProviderEventInput, existing provi
 		return "Safeheron raw event reference"
 	case input.ProviderEventVersion != existing.ProviderEventVersion:
 		return "provider event version"
+	case input.AuthorizedSafeheronOccurrenceKey != existing.AuthorizedSafeheronOccurrenceKey:
+		return "authorized Safeheron occurrence"
+	case input.AuthorizingRoutingActionID > 0 && (!existing.AuthorizingRoutingActionID.Valid || existing.AuthorizingRoutingActionID.Int64 != input.AuthorizingRoutingActionID):
+		return "authorizing routing action"
 	default:
 		return ""
 	}
@@ -645,6 +752,13 @@ func nullableInt(value *int) any {
 	return *value
 }
 
+func nullablePositiveInt64(value int64) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
+}
+
 func nullableTime(value *time.Time) any {
 	if value == nil {
 		return nil
@@ -694,24 +808,25 @@ type TransactionUpsertInput struct {
 	// Linkage is provider-owned structural metadata. Keys are resolved inside
 	// the upsert transaction; callers never provide database IDs or derive a
 	// parent from nullable provider account/organization metadata.
-	ParentMovementKey        string
-	ReversalOfMovementKey    string
-	ConversionGroupKey       string
-	ConversionLeg            ConversionLeg
-	ConversionGroupState     ConversionGroupState
-	FromCompanyFundAccountID *int64
-	ToCompanyFundAccountID   *int64
-	Currency                 string
-	Asset                    AssetIdentity
-	Amount                   decimal.Decimal
-	OccurredAt               *time.Time
-	LatestProviderEventID    *int64
-	RawSnapshotDigest        string
-	FirstSeenSource          TransactionSeenSource
-	Provider                 ProviderOwnedFields
-	ProviderStatusRank       int
-	ProviderDisplay          ProviderTransactionDisplayInput
-	AutomaticRisk            ProviderAutomaticRiskInput
+	ParentMovementKey          string
+	ReversalOfMovementKey      string
+	ConversionGroupKey         string
+	ConversionLeg              ConversionLeg
+	ConversionGroupState       ConversionGroupState
+	FromCompanyFundAccountID   *int64
+	ToCompanyFundAccountID     *int64
+	Currency                   string
+	Asset                      AssetIdentity
+	Amount                     decimal.Decimal
+	OccurredAt                 *time.Time
+	LatestProviderEventID      *int64
+	RawSnapshotDigest          string
+	FirstSeenSource            TransactionSeenSource
+	Provider                   ProviderOwnedFields
+	ProviderStatusRank         int
+	ProviderDisplay            ProviderTransactionDisplayInput
+	AutomaticRisk              ProviderAutomaticRiskInput
+	AuthorizingRoutingActionID int64
 }
 
 type TransactionUpsertResult struct {
@@ -921,6 +1036,9 @@ func (r *DBRepository) UpsertCompanyFundTransaction(ctx context.Context, input T
 			_ = tx.Rollback()
 		}
 	}()
+	if err := ensureCompanyRoutingAction(ctx, tx, input.AuthorizingRoutingActionID); err != nil {
+		return TransactionUpsertResult{}, err
+	}
 	incoming := input.providerFields()
 	if !incoming.Metadata.Source.valid() {
 		return TransactionUpsertResult{}, fmt.Errorf("unsupported provider fact source %q", incoming.Metadata.Source)
@@ -1027,6 +1145,29 @@ func (r *DBRepository) UpsertCompanyFundTransaction(ctx context.Context, input T
 		return TransactionUpsertResult{ID: id}, nil
 	}
 	return TransactionUpsertResult{}, fmt.Errorf("company-fund transaction %q could not be locked after concurrent insert", input.MovementKey)
+}
+
+func ensureCompanyRoutingAction(ctx context.Context, tx *sql.Tx, actionID int64) error {
+	if actionID <= 0 {
+		return nil
+	}
+	var locked int64
+	err := tx.QueryRowContext(ctx, `SELECT action.id
+FROM safeheron_transaction_routing_case_actions action
+JOIN safeheron_transaction_routing_case_commands command ON command.id=action.command_id
+JOIN safeheron_transaction_routing_cases routing
+  ON routing.id=command.case_id AND routing.pending_command_id=command.id
+WHERE action.id=$1 AND action.action_type='APPLY_COMPANY'
+  AND action.projection_kind='COMPANY' AND action.status IN ('PENDING','RETRYABLE')
+  AND command.status='PENDING'
+FOR UPDATE OF action,command,routing`, actionID).Scan(&locked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("company routing action %d is no longer authorized", actionID)
+	}
+	if err != nil {
+		return fmt.Errorf("lock company routing action %d: %w", actionID, err)
+	}
+	return nil
 }
 
 func alignSafeheronIncomingRecognitionSnapshot(
