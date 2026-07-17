@@ -6,6 +6,8 @@
 //   DATABASE_URL=... go run ./cmd/migrate                  # apply all pending
 //   DATABASE_URL=... go run ./cmd/migrate -dry-run        # status only
 //   DATABASE_URL=... go run ./cmd/migrate -rollback       # roll back last
+//   EXPECTED_MIGRATION_CEILING=050 DATABASE_URL=... \
+//     go run ./cmd/migrate -exact-version 050             # apply only 050
 //
 // In production the binary is intended to be invoked as a one-shot step
 // in the deployment pipeline, not at server boot. See
@@ -43,10 +45,13 @@ func main() {
 	rollback := flag.Bool("rollback", false, "Roll back the most recently applied migration instead of applying pending ones")
 	printCeiling := flag.Bool("print-ceiling", false, "Print the highest registered migration version and exit")
 	printVersions := flag.Bool("print-versions", false, "Print the complete registered migration version list as JSON and exit")
+	exactVersion := flag.String("exact-version", "", "Register and run exactly one approved production migration")
 	flag.Parse()
 	if *printVersions {
 		m := migration.NewMigrator(nil)
-		registerMigrations(m)
+		if err := registerSelectedMigrations(m, *exactVersion); err != nil {
+			log.Fatal("Select migrations:", err)
+		}
 		if err := json.NewEncoder(os.Stdout).Encode(m.RegisteredVersions()); err != nil {
 			log.Fatal("Print migration versions:", err)
 		}
@@ -54,9 +59,16 @@ func main() {
 	}
 	if *printCeiling {
 		m := migration.NewMigrator(nil)
-		registerMigrations(m)
+		if err := registerSelectedMigrations(m, *exactVersion); err != nil {
+			log.Fatal("Select migrations:", err)
+		}
 		fmt.Println(m.Ceiling())
 		return
+	}
+	expectedCeiling := os.Getenv("EXPECTED_MIGRATION_CEILING")
+	predecessor, err := validateExactMigrationOptions(*exactVersion, expectedCeiling, *rollback)
+	if err != nil {
+		log.Fatal("Invalid migration selection:", err)
 	}
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -78,7 +90,14 @@ func main() {
 	// Register in version order. Order matters: each migration is
 	// recorded in the `migrations` tracking table with its version, and
 	// the runner refuses to re-apply an already-recorded version.
-	registerMigrations(m)
+	if err := registerSelectedMigrations(m, *exactVersion); err != nil {
+		log.Fatal("Select migrations:", err)
+	}
+	if predecessor != "" {
+		if err := requireAppliedMigration(db, predecessor); err != nil {
+			log.Fatal("Validate exact migration predecessor:", err)
+		}
+	}
 
 	switch {
 	case *rollback:
@@ -93,7 +112,7 @@ func main() {
 		}
 		printStatus(status)
 	default:
-		if err := m.MigrateWithExpectedCeiling(os.Getenv("EXPECTED_MIGRATION_CEILING")); err != nil {
+		if err := m.MigrateWithExpectedCeiling(expectedCeiling); err != nil {
 			log.Print("Migration failed:", err)
 			os.Exit(migrationFailureExitCode(err))
 		}
@@ -103,6 +122,42 @@ func main() {
 		}
 		printStatus(status)
 	}
+}
+
+func validateExactMigrationOptions(exactVersion, expectedCeiling string, rollback bool) (string, error) {
+	if exactVersion == "" {
+		return "", nil
+	}
+	if rollback {
+		return "", fmt.Errorf("exact-version cannot be combined with rollback")
+	}
+	if expectedCeiling != exactVersion {
+		return "", fmt.Errorf("exact-version %s requires EXPECTED_MIGRATION_CEILING=%s", exactVersion, exactVersion)
+	}
+	predecessors := map[string]string{
+		"050": "049",
+		"051": "050",
+		"052": "051",
+		"053": "052",
+		"054": "053",
+		"055": "054",
+	}
+	predecessor, ok := predecessors[exactVersion]
+	if !ok {
+		return "", fmt.Errorf("unsupported exact migration version %q", exactVersion)
+	}
+	return predecessor, nil
+}
+
+func requireAppliedMigration(db *sql.DB, version string) error {
+	var applied bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM public.migrations WHERE version = $1)`, version).Scan(&applied); err != nil {
+		return fmt.Errorf("query migration %s provenance: %w", version, err)
+	}
+	if !applied {
+		return fmt.Errorf("migration %s must be applied before this exact migration", version)
+	}
+	return nil
 }
 
 func migrationFailureExitCode(err error) int {
@@ -157,6 +212,30 @@ func registerMigrationsForArtifact(m *migration.Migrator, ceiling string) error 
 	}
 	if ceiling == "055" {
 		m.Register(&migrations.AddCounterpartyNameOverride{})
+	}
+	return nil
+}
+
+func registerSelectedMigrations(m *migration.Migrator, exactVersion string) error {
+	if exactVersion == "" {
+		registerMigrations(m)
+		return nil
+	}
+	switch exactVersion {
+	case "050":
+		m.Register(&migrations.CreateCompanyFundLedger{})
+	case "051":
+		m.Register(&migrations.WidenAmountPrecision{})
+	case "052":
+		m.Register(&migrations.ExpandCompanyFundOccurrenceAndManualValuation{})
+	case "053":
+		m.Register(&migrations.EnforceSafeheronOccurrence{})
+	case "054":
+		m.Register(&migrations.AllowManualCompanyFundTransactions{})
+	case "055":
+		m.Register(&migrations.AddCounterpartyNameOverride{})
+	default:
+		return fmt.Errorf("unsupported exact migration version %q", exactVersion)
 	}
 	return nil
 }

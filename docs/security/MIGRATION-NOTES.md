@@ -96,8 +96,10 @@ a stuck run: `SELECT * FROM pg_locks WHERE locktype = 'advisory';`
 
 ## 3. How to verify production state
 
-The migrated audit reported prod schema is applied by hand via `psql`.
-The cleanest way to reconcile production with the rebuilt Go registry:
+The production schema was historically applied through more than one path, so
+its `migrations` provenance may be sparse even when the corresponding tables
+and columns already exist. Always inspect the live provenance before choosing
+an execution mode:
 
 ```bash
 # 1. From your local dev box, with the new (rotated) DATABASE_URL:
@@ -107,34 +109,35 @@ DATABASE_URL="..." go run ./cmd/migrate -dry-run
 #    Versions that say "pending" still need to be applied. Versions
 #    that say "applied" are already in `migrations` table.
 
-# 3. To apply only the pending ones (idempotent on already-applied):
-DATABASE_URL="..." go run ./cmd/migrate
+# Do not execute the default all-pending command against a sparse legacy
+# provenance history merely because dry-run reports old versions as pending.
 ```
 
-Expected behavior on a production database that was applied by hand
-without ever writing to `migrations`:
+For the company-fund production cutover, apply only the approved version and
+require its immediate predecessor to be recorded before the process opens a
+mutation path:
 
-- **001-005, 007-016, 046-049** should all show as "pending". Running
-  the migrator applies them. The DDL uses `IF NOT EXISTS` / `IF NOT
-  EXISTS` on every relevant clause, so the apply is safe on a
-  production DB that already has these tables/columns.
+```bash
+APP_ENV=production \
+EXPECTED_MIGRATION_CEILING=050 \
+DATABASE_URL="..." \
+go run ./cmd/migrate -exact-version 050
+```
 
-  In particular:
-  - **016** (AccountFrozenBalanceDefault) adds a DEFAULT to
-    `accounts.frozen_balance`. Idempotent — re-running is a no-op.
-  - **049** (CreateFundReports, formerly 016 in the pre-merge
-    working tree) does data-seeding for `fund_reports` and
-    `fund_asset_allocations`. Re-running the migrator will not
-    re-seed (it uses `ON CONFLICT (report_date) DO NOTHING` /
-    `ON CONFLICT (report_id, category) DO NOTHING`).
-  - **015** also seeds `chains` / `coins` / `coin_chains`. Same
-    `ON CONFLICT DO NOTHING` semantics — safe to re-run.
-  - **046** uses `IF NOT EXISTS` everywhere — strict no-op if 00046
-    was previously applied by hand.
+Repeat with matching values for `051`, `052`, `053`, `054`, and `055`. Exact
+mode has these invariants:
 
-- **046** will also show as "pending" if 00046 was applied by hand
-  (since hand-applied SQL did not write to the `migrations` table).
-  Re-running applies the same DDL idempotently and then records 046.
+- Only the requested migration is registered and eligible to run.
+- `EXPECTED_MIGRATION_CEILING` must equal `-exact-version`.
+- `050` requires `049`; every later version requires its immediate predecessor.
+- Historical versions below `050`, unknown versions, and rollback combinations
+  are rejected.
+- Omitting `-exact-version` preserves the existing all-pending behavior for a
+  fresh database or an environment with a fully reconciled Go migration history.
+
+Do not make a sparse legacy history look continuous by inserting synthetic
+provenance rows. A migration row claims that exact migration ran; hand-applied
+or separately generated schema is not equivalent execution evidence.
 
 ## 4. Operational model
 
