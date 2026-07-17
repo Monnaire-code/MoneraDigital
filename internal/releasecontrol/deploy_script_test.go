@@ -23,7 +23,7 @@ func TestDeployRemoteModeTrace(t *testing.T) {
 		deny []string
 	}{
 		{"migration-only", []string{"install-migrate", "migrate"}, []string{"install-server", "env-", "restart", "health"}},
-		{"workers-off-current", []string{"verify-installed-sha", "env-workers-off", "restart", "health"}, []string{"install-server", "install-migrate", "migrate"}},
+			{"workers-off-current", []string{"verify-installed-sha", "env-workers-off", "stop", "verify-inactive"}, []string{"install-server", "install-migrate", "migrate", "restart", "health"}},
 		{"server-dark", []string{"require-workers-off", "install-server", "write-manifest", "restart", "health"}, []string{"install-migrate", "migrate", "env-workers-on"}},
 		{"workers-on-installed", []string{"verify-installed-sha", "env-routing-routing-authoritative", "env-workers-on", "restart", "health"}, []string{"install-server", "install-migrate", "migrate"}},
 		{"standard", []string{"install-migrate", "migrate", "install-server", "write-manifest", "restart", "health"}, nil},
@@ -199,6 +199,7 @@ func TestDeployRemoteWorkersOffAcceptsLegacyEmbeddedSHAWithoutManifest(t *testin
 		t.Fatalf("legacy workers-off failed: %v\n%s", err, output)
 	}
 	assertFileContent(t, filepath.Join(appDir, ".env"), "COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=false\nSAFEHERON_TRANSACTION_ROUTING_MODE=capture-only\n")
+	assertFileContent(t, filepath.Join(appDir, ".service-state"), "stopped\n")
 	trace, err := os.ReadFile(tracePath)
 	if err != nil {
 		t.Fatal(err)
@@ -875,12 +876,13 @@ func TestDeployRemoteWorkersOffFailureRestoresExactEnvironmentAndManifest(t *tes
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", filepath.Join(root, "scripts", "deploy-remote.sh"), "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", sha)
-	cmd.Env = append(os.Environ(), "MONERA_DEPLOY_FAKE=1", "MONERA_DEPLOY_FAIL_ACTION=health", "MONERA_DEPLOY_APP_DIR="+appDir)
+	cmd.Env = append(os.Environ(), "MONERA_DEPLOY_FAKE=1", "MONERA_DEPLOY_FAKE_INACTIVE_FAILURE=1", "MONERA_DEPLOY_APP_DIR="+appDir)
 	if output, err := cmd.CombinedOutput(); err == nil {
 		t.Fatalf("workers-off failure unexpectedly succeeded: %s", output)
 	}
 	assertFileContent(t, filepath.Join(appDir, ".env"), environment)
 	assertFileContent(t, filepath.Join(appDir, "release-manifest.json"), manifest)
+	assertFileContent(t, filepath.Join(appDir, ".service-state"), "stopped\n")
 }
 
 func assertFileContent(t *testing.T, path, want string) {

@@ -175,10 +175,16 @@ WITH authorized AS (
   SELECT 1
   FROM safeheron_transaction_routing_case_actions action
   JOIN safeheron_transaction_routing_case_commands command ON command.id=action.command_id
-  JOIN safeheron_transaction_routing_cases routing
-    ON routing.id=command.case_id AND routing.pending_command_id=command.id
-  WHERE action.id=$16 AND action.lease_owner=$17 AND action.lease_expires_at>now()
-    AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
+	  JOIN safeheron_transaction_routing_cases routing
+	    ON routing.id=command.case_id AND routing.pending_command_id=command.id
+	  JOIN safeheron_transaction_routing_case_sources source
+	    ON source.case_id=routing.id AND source.safeheron_webhook_event_id=$8
+	  WHERE action.id=$16 AND action.lease_owner=$17 AND action.lease_expires_at>now()
+	    AND action.projection_kind='COMPANY'
+	    AND action.action_type IN ('APPLY_COMPANY','FINALIZE_COMPANY_ONLY')
+	    AND action.target_company_fund_account_id=routing.company_fund_account_id
+	    AND routing.routing_identity_key=$10
+	    AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
   FOR UPDATE OF action,command,routing
 )
 INSERT INTO company_fund_provider_events (
@@ -227,8 +233,10 @@ WHERE owned_payload_purged_at IS NULL
 		    JOIN safeheron_transaction_routing_case_commands command ON command.id=action.command_id
 		    JOIN safeheron_transaction_routing_cases routing
 		      ON routing.id=command.case_id AND routing.pending_command_id=command.id
-		    WHERE action.id=company_fund_provider_events.authorizing_routing_action_id
-		      AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
+			    WHERE action.id=company_fund_provider_events.authorizing_routing_action_id
+			      AND action.projection_kind='COMPANY'
+			      AND action.action_type IN ('APPLY_COMPANY','FINALIZE_COMPANY_ONLY')
+			      AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
 		  )
 		)
 	AND (

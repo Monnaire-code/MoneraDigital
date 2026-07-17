@@ -325,8 +325,15 @@ BEGIN
     SELECT 1
     FROM public.safeheron_transaction_routing_case_actions action
     JOIN public.safeheron_transaction_routing_case_commands command ON command.id=action.command_id
-    JOIN public.safeheron_transaction_routing_cases routing ON routing.id=command.case_id
+    JOIN public.safeheron_transaction_routing_cases routing
+      ON routing.id=command.case_id AND routing.pending_command_id=command.id
+    JOIN public.safeheron_transaction_routing_case_sources source
+      ON source.case_id=routing.id
+      AND source.safeheron_webhook_event_id=NEW.safeheron_webhook_event_id
     WHERE action.id=NEW.authorizing_routing_action_id
+      AND action.projection_kind='COMPANY'
+      AND action.action_type IN ('APPLY_COMPANY','FINALIZE_COMPANY_ONLY')
+      AND action.target_company_fund_account_id=routing.company_fund_account_id
       AND routing.routing_identity_key=NEW.authorized_safeheron_occurrence_key
   ) THEN
     RAISE EXCEPTION 'provider event routing authorization differs from action occurrence';

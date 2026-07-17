@@ -389,6 +389,8 @@ func TestCompanyFundRepositorySQLContracts(t *testing.T) {
 		"next_attempt_at = $4::TIMESTAMPTZ",
 		"$4::TIMESTAMPTZ IS NOT NULL",
 		"DEAD_LETTER",
+		"action.projection_kind='COMPANY'",
+		"action.action_type IN ('APPLY_COMPANY','FINALIZE_COMPANY_ONLY')",
 	} {
 		if !strings.Contains(claimNextProviderEventSQL+updateClaimedProviderEventSQL+finalizeProviderEventSQL+renewProviderEventLeaseSQL, contract) {
 			t.Errorf("provider-event SQL is missing %q", contract)

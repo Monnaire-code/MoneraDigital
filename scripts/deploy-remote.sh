@@ -588,9 +588,13 @@ deploy_backend() {
             require_release_state migration-057
             verify_installed_sha
             cp -p "$ENV_FILE" "$ENV_FILE.release-backup"
-            if ! set_routing_mode capture-only || ! set_workers false || ! restart_service || ! health_check; then
+            if ! set_routing_mode capture-only || ! set_workers false; then
                 mv -f "$ENV_FILE.release-backup" "$ENV_FILE"
-                recover_service_or_stop || true
+                return 1
+            fi
+            if ! stop_service || ! verify_service_inactive; then
+                mv -f "$ENV_FILE.release-backup" "$ENV_FILE"
+                stop_service || true
                 return 1
             fi
             rm -f "$ENV_FILE.release-backup"
