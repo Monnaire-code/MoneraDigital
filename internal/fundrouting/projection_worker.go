@@ -374,6 +374,8 @@ func (worker *ProjectionWorker) lookupCompanyProviderEvent(ctx context.Context, 
 ), EXISTS (
   SELECT 1 FROM company_fund_provider_events
 	WHERE safeheron_webhook_event_id=$3
+	    AND (authorized_safeheron_occurrence_key IS NULL
+	      OR authorized_safeheron_occurrence_key=$2)
 	    AND (authorizing_routing_action_id IS DISTINCT FROM $1
 	      OR authorized_safeheron_occurrence_key IS DISTINCT FROM $2)
 )`, action.ID, action.RoutingIdentityKey, action.WebhookEventID).Scan(&providerEventReady, &conflictingProviderEvent)

@@ -23,7 +23,7 @@ func TestDeployRemoteModeTrace(t *testing.T) {
 		deny []string
 	}{
 		{"migration-only", []string{"install-migrate", "migrate"}, []string{"install-server", "env-", "restart", "health"}},
-			{"workers-off-current", []string{"verify-installed-sha", "env-workers-off", "stop", "verify-inactive"}, []string{"install-server", "install-migrate", "migrate", "restart", "health"}},
+		{"workers-off-current", []string{"verify-installed-sha", "env-workers-off", "stop", "verify-inactive"}, []string{"install-server", "install-migrate", "migrate", "restart", "health"}},
 		{"server-dark", []string{"require-workers-off", "install-server", "write-manifest", "restart", "health"}, []string{"install-migrate", "migrate", "env-workers-on"}},
 		{"workers-on-installed", []string{"verify-installed-sha", "env-routing-routing-authoritative", "env-workers-on", "restart", "health"}, []string{"install-server", "install-migrate", "migrate"}},
 		{"standard", []string{"install-migrate", "migrate", "install-server", "write-manifest", "restart", "health"}, nil},
@@ -46,7 +46,7 @@ func TestDeployRemoteModeTrace(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=false\nSAFEHERON_TRANSACTION_ROUTING_MODE=capture-only\nDATABASE_URL=postgresql://test@localhost/test\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"057","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"058","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -165,6 +165,8 @@ func TestControlledReleaseStateRejectsOutOfOrderAndPersistsEveryPhase(t *testing
 	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "056")
 	assertFileContent(t, filepath.Join(appDir, "release-state.tsv"), newSHA+"\tmigration-056\n")
 	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "057")
+	run(false, "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", newSHA, "--installed-server-sha", oldSHA)
+	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "058")
 	run(true, "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", newSHA, "--installed-server-sha", oldSHA)
 	run(true, "--env", "test", "--release-mode", "server-dark", "--artifact-sha", newSHA)
 	run(true, "--env", "test", "--release-mode", "workers-on-installed", "--artifact-sha", newSHA)
@@ -243,7 +245,7 @@ func TestDeployRemoteFailureContracts(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=false\nSAFEHERON_TRANSACTION_ROUTING_MODE=capture-only\nDATABASE_URL=postgresql://test@localhost/test\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"057","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"058","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("bash", script, "--env", "test", "--release-mode", test.mode, "--artifact-sha", sha, "--expected-migration-ceiling", "A")
@@ -366,7 +368,7 @@ func TestDeployRemoteServerFailureRetainsSafeArtifactAndStops(t *testing.T) {
 		t.Fatalf("health failure unexpectedly succeeded: %s", output)
 	}
 	assertFileContent(t, filepath.Join(appDir, "monera-server"), "new-server\n")
-	assertFileContent(t, filepath.Join(appDir, "release-manifest.json"), `{"server_sha":"`+sha+`","migration_ceiling":"057","routing_mode":"capture-only","safe_artifact":true}`+"\n")
+	assertFileContent(t, filepath.Join(appDir, "release-manifest.json"), `{"server_sha":"`+sha+`","migration_ceiling":"058","routing_mode":"capture-only","safe_artifact":true}`+"\n")
 	assertFileContent(t, serviceState, "stopped\n")
 	trace, err := os.ReadFile(tracePath)
 	if err != nil {
@@ -400,7 +402,7 @@ func TestDeployRemoteWorkersOnRollbackLeavesWorkersOffAndVerifiedOrStopped(t *te
 	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=false\nSAFEHERON_TRANSACTION_ROUTING_MODE=capture-only\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"057","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"058","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", script, "--env", "test", "--release-mode", "workers-on-installed", "--artifact-sha", sha)
