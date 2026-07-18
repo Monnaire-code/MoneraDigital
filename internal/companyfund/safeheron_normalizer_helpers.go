@@ -122,7 +122,7 @@ func safeheronPrincipalDraftFor(registry *AccountRegistrySnapshot, base safehero
 		NormalizedTo:     normalizeSafeheronAddress(base.networkFamily, line.DestinationAddress),
 		Amount:           line.Amount,
 	}
-	baseTuple, normalizedIdentity, err := canonicalMovementTuple(identityInput, false)
+	_, normalizedIdentity, err := canonicalMovementTuple(identityInput, false)
 	if err != nil {
 		return safeheronPrincipalDraft{}, false, fmt.Errorf("normalize Safeheron principal identity: %w", err)
 	}
@@ -132,8 +132,6 @@ func safeheronPrincipalDraftFor(registry *AccountRegistrySnapshot, base safehero
 		toAccount:     toAccount,
 		direction:     direction,
 		identityInput: normalizedIdentity,
-		baseTuple:     baseTuple,
-		detailKey:     fmt.Sprintf("%t", line.DestinationPhishing != nil && *line.DestinationPhishing),
 	}, true, nil
 }
 

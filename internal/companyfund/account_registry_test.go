@@ -295,12 +295,15 @@ func TestPostgresAccountRegistryLoader_LoadsEnabledRowsWithExactDecimalThreshold
 	defer db.Close()
 
 	mock.ExpectBegin()
+	monitoringStartedAt := time.Date(2026, time.July, 15, 8, 0, 0, 0, time.UTC)
+	firstEnabledAt := monitoringStartedAt.Add(time.Hour)
 	mock.ExpectQuery("SELECT id, channel, COALESCE\\(provider_account_key, ''\\)").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "channel", "provider_account_key", "wallet_address", "normalized_address", "network_family",
 			"company_entity", "fund_account_name", "sub_account_name", "account_type", "account_name", "account_role", "is_enabled",
+			"monitoring_started_at", "first_enabled_at",
 		}).
-			AddRow(int64(1), "SAFEHERON", "", "0xAbC", "0xabc", "EVM", "Monera", "Treasury", "Main", "WALLET", "Safe EVM", "TREASURY", true))
+			AddRow(int64(1), "SAFEHERON", "", "0xAbC", "0xabc", "EVM", "Monera", "Treasury", "Main", "WALLET", "Safe EVM", "TREASURY", true, monitoringStartedAt, firstEnabledAt))
 	mock.ExpectQuery("SELECT id, company_fund_account_id, currency, COALESCE\\(chain_code, ''\\)").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "company_fund_account_id", "currency", "chain_code", "provider_asset_key", "asset_contract",
@@ -316,6 +319,9 @@ func TestPostgresAccountRegistryLoader_LoadsEnabledRowsWithExactDecimalThreshold
 	}
 	if len(accounts) != 1 || accounts[0].Channel != ChannelSafeheron || !accounts[0].Enabled {
 		t.Fatalf("accounts = %#v", accounts)
+	}
+	if !accounts[0].MonitoringStartedAt.Equal(monitoringStartedAt) || accounts[0].FirstEnabledAt == nil || !accounts[0].FirstEnabledAt.Equal(firstEnabledAt) {
+		t.Fatalf("account monitoring boundaries = %#v", accounts[0])
 	}
 	if len(policies) != 1 || policies[0].Dust.Threshold == nil || !policies[0].Dust.Threshold.Equal(decimal.RequireFromString("0.000000000000000001")) {
 		t.Fatalf("policies lost exact decimal threshold: %#v", policies)
@@ -337,6 +343,7 @@ func TestPostgresAccountRegistryLoader_RollsBackConsistentReadOnPolicyQueryFailu
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "channel", "provider_account_key", "wallet_address", "normalized_address", "network_family",
 			"company_entity", "fund_account_name", "sub_account_name", "account_type", "account_name", "account_role", "is_enabled",
+			"monitoring_started_at", "first_enabled_at",
 		}))
 	mock.ExpectQuery("SELECT id, company_fund_account_id, currency, COALESCE\\(chain_code, ''\\)").
 		WillReturnError(errors.New("policy query failed"))

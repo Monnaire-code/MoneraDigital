@@ -79,7 +79,7 @@ jobs:
             artifact_ref="$EVENT_SHA"
             run_id="push-${GITHUB_RUN_ID}"
             installed_server_sha=""
-            migration_ceiling=""
+            migration_ceiling="058"
             control_token=""
             baseline_digest=""
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then

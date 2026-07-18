@@ -73,7 +73,7 @@ func (resolver *RegistrySafeheronTransactionMappingResolver) ResolveSafeheronTra
 	}
 	registry := resolver.registries.Snapshot()
 	if registry == nil {
-		return SafeheronTransactionMapping{}, fmt.Errorf("Safeheron transaction mapping registry snapshot is unavailable")
+		return SafeheronTransactionMapping{}, safeheronAccountContextError("transaction mapping registry snapshot is unavailable")
 	}
 	if resolver.coins != nil {
 		return resolver.resolveCatalogSafeheronTransactionMapping(registry, snapshot)
@@ -121,7 +121,7 @@ func (resolver *RegistrySafeheronTransactionMappingResolver) resolveCatalogSafeh
 		return SafeheronTransactionMapping{}, err
 	}
 	if accountContext.Source == nil && accountContext.Destination == nil {
-		return SafeheronTransactionMapping{}, fmt.Errorf("Safeheron transaction does not belong to an enabled company account")
+		return SafeheronTransactionMapping{}, safeheronAccountContextError("transaction does not belong to an enabled company account in the current registry snapshot")
 	}
 	if networkFamily == "" {
 		networkFamily, err = safeheronAccountContextNetworkFamily(accountContext)

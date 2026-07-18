@@ -48,7 +48,7 @@ SELECT id, channel, COALESCE(provider_account_key, ''), COALESCE(wallet_address,
        COALESCE(normalized_address, ''), COALESCE(network_family, ''),
        COALESCE(company_entity, ''), COALESCE(fund_account_name, ''),
        COALESCE(sub_account_name, ''), COALESCE(account_type, ''), account_name,
-       COALESCE(account_role, ''), is_enabled
+       COALESCE(account_role, ''), is_enabled, monitoring_started_at, first_enabled_at
 FROM company_fund_accounts
 WHERE is_enabled = true
 ORDER BY id`
@@ -104,6 +104,7 @@ func loadRegistryAccounts(ctx context.Context, queryer accountRegistryQueryer) (
 	for rows.Next() {
 		var account CompanyFundAccount
 		var channel string
+		var firstEnabledAt sql.NullTime
 		if err := rows.Scan(
 			&account.ID,
 			&channel,
@@ -118,10 +119,17 @@ func loadRegistryAccounts(ctx context.Context, queryer accountRegistryQueryer) (
 			&account.AccountName,
 			&account.AccountRole,
 			&account.Enabled,
+			&account.MonitoringStartedAt,
+			&firstEnabledAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan enabled company-fund account: %w", err)
 		}
 		account.Channel = Channel(channel)
+		account.MonitoringStartedAt = account.MonitoringStartedAt.UTC()
+		if firstEnabledAt.Valid {
+			value := firstEnabledAt.Time.UTC()
+			account.FirstEnabledAt = &value
+		}
 		accounts = append(accounts, account)
 	}
 	if err := rows.Err(); err != nil {
@@ -642,7 +650,12 @@ func buildAccountRegistrySnapshot(accounts []CompanyFundAccount, policies []Acco
 }
 
 func cloneCompanyFundAccount(source CompanyFundAccount) CompanyFundAccount {
-	return source
+	clone := source
+	if source.FirstEnabledAt != nil {
+		value := *source.FirstEnabledAt
+		clone.FirstEnabledAt = &value
+	}
+	return clone
 }
 
 func cloneAccountAssetPolicy(source AccountAssetPolicy) AccountAssetPolicy {

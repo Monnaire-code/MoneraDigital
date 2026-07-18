@@ -15,6 +15,7 @@ import (
 	"monera-digital/internal/config"
 	"monera-digital/internal/container"
 	"monera-digital/internal/db"
+	"monera-digital/internal/fundrouting"
 	"monera-digital/internal/logger"
 	"monera-digital/internal/middleware"
 	"monera-digital/internal/routes"
@@ -33,6 +34,10 @@ var version = "dev"
 func main() {
 	// Load configuration
 	cfg := config.Load()
+	routingMode, err := fundrouting.ParseMode(cfg.SafeheronTransactionRoutingMode)
+	if err != nil {
+		panic(err)
+	}
 
 	// Initialize logger - use ENV variable for proper environment detection
 	env := os.Getenv("ENV")
@@ -56,7 +61,8 @@ func main() {
 	logger.Info("Starting Monera Digital API server",
 		"port", cfg.Port,
 		"environment", env,
-		"version", version)
+		"version", version,
+		"safeheron_transaction_routing_mode", routingMode)
 
 	// Initialize encryption key for activation codes
 	if cfg.EncryptionKey != "" {

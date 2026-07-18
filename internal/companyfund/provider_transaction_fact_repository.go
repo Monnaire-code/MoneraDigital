@@ -408,10 +408,10 @@ func normalizedProviderFactExtras(value []byte) (string, error) {
 }
 
 // immutableProviderTransactionFactConflict compares every persisted business
-// field that participates in an idempotent fact. The database-generated ID and
-// timestamps are deliberately excluded: they describe storage, not provider
-// fact identity. It returns the first conflicting field for an actionable
-// quarantine/error message.
+// field that participates in an idempotent fact. Database-generated metadata
+// is excluded, including the source event ID: batch movements can authorize
+// separate provider events for the same verified payload and parent fact. The
+// incoming event's channel and digest are verified before this comparison.
 func immutableProviderTransactionFactConflict(existing ProviderTransactionFact, input ProviderTransactionFactInput, canonicalInputExtras string) (string, error) {
 	checks := []struct {
 		field string
@@ -423,7 +423,6 @@ func immutableProviderTransactionFactConflict(existing ProviderTransactionFact, 
 		{"provider_group_id", existing.ProviderGroupID == input.ProviderGroupID},
 		{"fact_identity_key", existing.FactIdentityKey == input.FactIdentityKey},
 		{"fact_version", existing.FactVersion == input.FactVersion},
-		{"source_provider_event_id", existing.SourceEventID == input.SourceProviderEventID},
 		{"source_payload_digest", existing.SourcePayloadDigest == input.SourcePayloadDigest},
 		{"provider_occurred_at", equalProviderFactTime(existing.ProviderOccurredAt, input.ProviderOccurredAt)},
 		{"provider_amount", equalProviderFactDecimal(existing.ProviderAmount, input.ProviderAmount)},

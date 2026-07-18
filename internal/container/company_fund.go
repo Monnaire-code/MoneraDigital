@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/viper"
 
 	"monera-digital/internal/companyfund"
+	"monera-digital/internal/fundrouting"
 	"monera-digital/internal/handlers"
 	"monera-digital/internal/safeheron"
 )
@@ -215,6 +216,12 @@ func withCompanyFund(ctx context.Context, config companyFundRuntimeConfig) Conta
 		}
 
 		repository := companyfund.NewDBRepository(c.DB)
+		switch c.SafeheronRoutingMode {
+		case fundrouting.ModeCaptureOnly:
+			repository.SetSafeheronProviderClaimMode(companyfund.SafeheronProviderClaimDisabled)
+		case fundrouting.ModeRoutingAuthoritative:
+			repository.SetSafeheronProviderClaimMode(companyfund.SafeheronProviderClaimRoutingScoped)
+		}
 		payloadService, err := companyfund.NewOwnedProviderPayloadService(repository, payloadCipher, time.Now)
 		if err != nil {
 			log.Printf("company-fund runtime disabled: owned payload service could not be initialized")
@@ -333,9 +340,18 @@ func finalizeCompanyFundRuntime(c *Container) {
 
 	var safeReconciler *companyfund.SafeheronTransactionHistoryReconciler
 	if safeHistoryClient != nil && syncAdapter != nil {
+		var historyIngester companyfund.SafeheronHistoryOwnedProviderEventIngestor = c.CompanyFundOwnedPayloadService
+		if c.SafeheronRoutingMode == fundrouting.ModeCaptureOnly || c.SafeheronRoutingMode == fundrouting.ModeRoutingAuthoritative {
+			routingHistoryIngester, historyErr := fundrouting.NewHistoryInboxIngester(c.DB)
+			if historyErr != nil {
+				log.Printf("company-fund Safeheron routing history inbox disabled: %v", historyErr)
+			} else {
+				historyIngester = routingHistoryIngester
+			}
+		}
 		safeReconciler, err = companyfund.NewSafeheronTransactionHistoryReconciler(
 			safeHistoryClient,
-			c.CompanyFundOwnedPayloadService,
+			historyIngester,
 			syncAdapter,
 			companyfund.SafeheronTransactionHistoryReconcilerConfig{
 				PageSize:          int32(companyFundPositiveIntOrDefault(config.SafeheronHistoryPageSize, defaultCompanyFundSafeheronHistoryPageSize)),
@@ -764,6 +780,9 @@ func wireCompanyFundSafeheronBridge(c *Container, eligibility ...companyfund.Saf
 	}
 	if c.RateLimiter != nil {
 		c.RateLimiter.SkipPath(companyFundSafeheronWebhookPath)
+	}
+	if c.SafeheronRoutingMode == fundrouting.ModeCaptureOnly || c.SafeheronRoutingMode == fundrouting.ModeRoutingAuthoritative {
+		return
 	}
 	if len(eligibility) != 1 || eligibility[0] == nil || c.CompanyFundSafeheronNormalizer == nil || c.CompanyFundRepository == nil || c.DepositEventRepo == nil {
 		return

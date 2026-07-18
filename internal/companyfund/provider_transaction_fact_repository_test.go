@@ -63,23 +63,25 @@ func TestInsertProviderTransactionFact_PersistsExactDecimals(t *testing.T) {
 	assertCompanyFundMockExpectations(t, mock)
 }
 
-func TestInsertProviderTransactionFact_DuplicateReadsExistingFact(t *testing.T) {
+func TestInsertProviderTransactionFact_DuplicateFromAnotherMovementEventReadsExistingFact(t *testing.T) {
 	db, mock := newCompanyFundMockDB(t)
 	defer db.Close()
 
-	input := newProviderTransactionFactInput()
+	existing := newProviderTransactionFactInput()
+	incoming := existing
+	incoming.SourceProviderEventID++
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta(selectProviderEventForFactSQL)).
-		WithArgs(input.SourceProviderEventID).
-		WillReturnRows(sqlmock.NewRows([]string{"channel", "source_payload_digest"}).AddRow(input.Channel, input.SourcePayloadDigest))
+		WithArgs(incoming.SourceProviderEventID).
+		WillReturnRows(sqlmock.NewRows([]string{"channel", "source_payload_digest"}).AddRow(incoming.Channel, incoming.SourcePayloadDigest))
 	mock.ExpectQuery(regexp.QuoteMeta(insertProviderTransactionFactSQL)).
 		WillReturnRows(sqlmock.NewRows(providerTransactionFactColumnNames()))
 	mock.ExpectQuery(regexp.QuoteMeta(selectProviderTransactionFactByIdentitySQL)).
-		WithArgs(input.Channel, input.FactIdentityKey, input.FactVersion).
-		WillReturnRows(providerTransactionFactRows(72, input))
+		WithArgs(incoming.Channel, incoming.FactIdentityKey, incoming.FactVersion).
+		WillReturnRows(providerTransactionFactRows(72, existing))
 	mock.ExpectCommit()
 
-	result, err := NewDBRepository(db).InsertProviderTransactionFact(context.Background(), input)
+	result, err := NewDBRepository(db).InsertProviderTransactionFact(context.Background(), incoming)
 	if err != nil {
 		t.Fatalf("InsertProviderTransactionFact() duplicate error = %v", err)
 	}

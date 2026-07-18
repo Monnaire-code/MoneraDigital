@@ -15,6 +15,7 @@ import (
 	"monera-digital/internal/companyfund"
 	"monera-digital/internal/config"
 	"monera-digital/internal/coreapi"
+	"monera-digital/internal/fundrouting"
 	"monera-digital/internal/handlers"
 	"monera-digital/internal/middleware"
 	"monera-digital/internal/repository"
@@ -62,6 +63,12 @@ func WithEncryption(key string) ContainerOption {
 // for placing them with correct permissions before startup.
 func WithSafeheronPool(ctx context.Context) ContainerOption {
 	return func(c *Container) {
+		routingMode, err := fundrouting.ParseMode(viper.GetString("SAFEHERON_TRANSACTION_ROUTING_MODE"))
+		if err != nil {
+			panic(err)
+		}
+		c.SafeheronRoutingMode = routingMode
+		c.safeheronRuntimeContext = ctx
 		baseURL := viper.GetString("SAFEHERON_API_BASE_URL")
 		apiKey := viper.GetString("SAFEHERON_API_KEY")
 		privPath := viper.GetString("SAFEHERON_PRIVATE_KEY_PATH")
@@ -162,6 +169,8 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 
 		// Deposit pipeline: webhook handler (sync) + worker (async).
 		depRepo := deposit.NewRepository(c.DB)
+		depRepo.SetTransactionClaimsEnabled(false)
+		depRepo.SetRoutingProjectionClaimsEnabled(routingMode == fundrouting.ModeRoutingAuthoritative)
 		c.DepositEventRepo = depRepo
 		c.DepositPipeline = deposit.NewService(depRepo, registry, c.AlertService.Send)
 		wireDepositCompanyFundRouting(c)
@@ -265,14 +274,21 @@ type Container struct {
 	Repository *repository.Repository
 
 	// Safeheron Phase 1 模块
-	WalletRegistry          *walletconfig.Registry
-	PoolManager             *pool.Manager
-	PoolReplenisher         *pool.Replenisher
-	DepositEventRepo        deposit.Repository
-	DepositPipeline         *deposit.Service
-	DepositWorker           *deposit.Worker
-	SafeheronWebhookHandler *handlers.SafeheronWebhookHandler
-	AlertService            *alert.AlertService
+	WalletRegistry              *walletconfig.Registry
+	PoolManager                 *pool.Manager
+	PoolReplenisher             *pool.Replenisher
+	DepositEventRepo            deposit.Repository
+	DepositPipeline             *deposit.Service
+	DepositWorker               *deposit.Worker
+	SafeheronWebhookHandler     *handlers.SafeheronWebhookHandler
+	AlertService                *alert.AlertService
+	SafeheronRoutingMode        fundrouting.Mode
+	FundRoutingRepository       *fundrouting.Repository
+	FundRoutingWorker           *fundrouting.Worker
+	FundRoutingProjectionWorker *fundrouting.ProjectionWorker
+	FundRoutingReconciler       *fundrouting.Reconciler
+	FundRoutingAlertNotifier    *fundrouting.AlertNotifier
+	FundRoutingAlertEscalator   *fundrouting.AlertEscalator
 
 	// Company-fund runtime. These dependencies intentionally remain independent
 	// of the customer wallet pool and its Redis/cache lifecycle. The runtime is
@@ -302,6 +318,7 @@ type Container struct {
 	companyFundRuntimeFinalized bool
 	companyFundAuxCancel        context.CancelFunc
 	companyFundAuxDone          chan struct{}
+	safeheronRuntimeContext     context.Context
 
 	// 服务
 	AuthService       *services.AuthService
@@ -392,6 +409,7 @@ func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Contai
 	// Safeheron option can be before or after WithCompanyFund. Finalization
 	// starts no background work until all dependencies have been assembled.
 	finalizeCompanyFundRuntime(c)
+	finalizeSafeheronRouting(c)
 
 	// 注入TwoFactorService依赖（如果在选项函数中已初始化）
 	if c.TwoFAService != nil {

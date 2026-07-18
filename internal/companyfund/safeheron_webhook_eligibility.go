@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"monera-digital/internal/safeheron"
 )
@@ -174,7 +175,7 @@ func (registry *AccountRegistry) CurrentSafeheronWebhookEligibilityFingerprint()
 
 // safeheronWebhookEligibilityConfigurationFingerprint hashes only the enabled
 // Safeheron configuration that can influence raw-event eligibility: normalized
-// address/network/provider-account identities. Asset policies and provider
+// address/network/provider-account identities and the monitoring boundary. Asset policies and provider
 // catalog contents cannot change account ownership. The canonical content is
 // sorted and excludes LoadedAt, so a cache
 // refresh with the same settings produces the same value.
@@ -197,7 +198,11 @@ func safeheronWebhookEligibilityConfigurationFingerprint(snapshot *AccountRegist
 		if addressKey == "" || providerAccountKey != account.ProviderAccountKey {
 			return "", fmt.Errorf("invalid enabled Safeheron account in webhook eligibility fingerprint")
 		}
-		accountKey := lengthDelimitedTuple([]string{addressKey, providerAccountKey})
+		monitoringStartedAt := ""
+		if !account.MonitoringStartedAt.IsZero() {
+			monitoringStartedAt = account.MonitoringStartedAt.UTC().Format(time.RFC3339Nano)
+		}
+		accountKey := lengthDelimitedTuple([]string{addressKey, providerAccountKey, monitoringStartedAt})
 		records = append(records, lengthDelimitedTuple([]string{"account", accountKey}))
 	}
 	sort.Strings(records)

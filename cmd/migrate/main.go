@@ -32,7 +32,7 @@ import (
 )
 
 var version = "dev"
-var artifactMigrationCeiling = "055"
+var artifactMigrationCeiling = "058"
 
 const controlledCommitOutcomeIndeterminateExitCode = 75
 
@@ -141,6 +141,9 @@ func validateExactMigrationOptions(exactVersion, expectedCeiling string, rollbac
 		"053": "052",
 		"054": "053",
 		"055": "054",
+		"056": "055",
+		"057": "056",
+		"058": "057",
 	}
 	predecessor, ok := predecessors[exactVersion]
 	if !ok {
@@ -179,7 +182,7 @@ func registerMigrations(m *migration.Migrator) {
 }
 
 func registerMigrationsForArtifact(m *migration.Migrator, ceiling string) error {
-	if ceiling != "052" && ceiling != "053" && ceiling != "054" && ceiling != "055" {
+	if ceiling != "052" && ceiling != "053" && ceiling != "054" && ceiling != "055" && ceiling != "056" && ceiling != "057" && ceiling != "058" {
 		return fmt.Errorf("unsupported compiled migration ceiling %q", ceiling)
 	}
 	m.Register(&migrations.CreateUsersTable{})
@@ -204,14 +207,23 @@ func registerMigrationsForArtifact(m *migration.Migrator, ceiling string) error 
 	m.Register(&migrations.CreateCompanyFundLedger{})
 	m.Register(&migrations.WidenAmountPrecision{})
 	m.Register(&migrations.ExpandCompanyFundOccurrenceAndManualValuation{})
-	if ceiling == "053" || ceiling == "054" || ceiling == "055" {
+	if ceiling == "053" || ceiling == "054" || ceiling == "055" || ceiling == "056" || ceiling == "057" || ceiling == "058" {
 		m.Register(&migrations.EnforceSafeheronOccurrence{})
 	}
-	if ceiling == "054" || ceiling == "055" {
+	if ceiling == "054" || ceiling == "055" || ceiling == "056" || ceiling == "057" || ceiling == "058" {
 		m.Register(&migrations.AllowManualCompanyFundTransactions{})
 	}
-	if ceiling == "055" {
+	if ceiling == "055" || ceiling == "056" || ceiling == "057" || ceiling == "058" {
 		m.Register(&migrations.AddCounterpartyNameOverride{})
+	}
+	if ceiling == "056" || ceiling == "057" || ceiling == "058" {
+		m.Register(&migrations.UnifySafeheronAddressOwnership{})
+	}
+	if ceiling == "057" || ceiling == "058" {
+		m.Register(&migrations.CreateSafeheronRoutingCases{})
+	}
+	if ceiling == "058" {
+		m.Register(&migrations.ScopeSafeheronProviderEventsByOccurrence{})
 	}
 	return nil
 }
@@ -234,6 +246,12 @@ func registerSelectedMigrations(m *migration.Migrator, exactVersion string) erro
 		m.Register(&migrations.AllowManualCompanyFundTransactions{})
 	case "055":
 		m.Register(&migrations.AddCounterpartyNameOverride{})
+	case "056":
+		m.Register(&migrations.UnifySafeheronAddressOwnership{})
+	case "057":
+		m.Register(&migrations.CreateSafeheronRoutingCases{})
+	case "058":
+		m.Register(&migrations.ScopeSafeheronProviderEventsByOccurrence{})
 	default:
 		return fmt.Errorf("unsupported exact migration version %q", exactVersion)
 	}
