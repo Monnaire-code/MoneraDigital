@@ -98,22 +98,22 @@ jobs:
             trap 'rm -rf /tmp/monera-production-deploy' EXIT
             case "$PHASE" in
               migration-056)
-                "$PACKAGE/deploy-remote.sh" --env production --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 056
+                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 056
                 ;;
               migration-057)
-                "$PACKAGE/deploy-remote.sh" --env production --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 057
+                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 057
                 ;;
               migration-058)
-                "$PACKAGE/deploy-remote.sh" --env production --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 058
+                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 058
                 ;;
               workers-off-current)
-                "$PACKAGE/deploy-remote.sh" --env production --release-mode workers-off-current --artifact-sha "$RELEASE_SHA" --installed-server-sha "$INSTALLED_SHA"
+                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode workers-off-current --artifact-sha "$RELEASE_SHA" --installed-server-sha "$INSTALLED_SHA"
                 ;;
               server-dark)
-                "$PACKAGE/deploy-remote.sh" --env production --release-mode server-dark --artifact-sha "$RELEASE_SHA"
+                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode server-dark --artifact-sha "$RELEASE_SHA"
                 ;;
               workers-on-installed)
-                "$PACKAGE/deploy-remote.sh" --env production --release-mode workers-on-installed --artifact-sha "$RELEASE_SHA"
+                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode workers-on-installed --artifact-sha "$RELEASE_SHA"
                 ;;
               *) echo "ERROR: unsupported phase $PHASE" >&2; exit 1 ;;
             esac

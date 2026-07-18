@@ -49,6 +49,16 @@ func TestRemoteMigrationUsesOneExactVersion(t *testing.T) {
 	}
 }
 
+func TestProductionWorkflowUsesInstalledServerPort(t *testing.T) {
+	content, err := os.ReadFile("../../.github/workflows/deploy-backend-prod.yml")
+	if err != nil {
+		t.Fatalf("read production workflow: %v", err)
+	}
+	if !strings.Contains(string(content), `--port 8081`) {
+		t.Fatal("production workflow must health-check the installed server port")
+	}
+}
+
 func TestProductionReleasePersistsAndEnforcesPhaseOrder(t *testing.T) {
 	content, err := os.ReadFile("../../scripts/deploy-remote.sh")
 	if err != nil {
