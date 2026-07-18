@@ -173,13 +173,15 @@ func TestProjectionWorkerPostgresCreatesOneAuthorizedProviderEventPerBatchOccurr
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	var webhookID int64
+	caseIDs := make([]int64, 0, 2)
+	commandIDs := make([]int64, 0, 2)
+	t.Cleanup(func() {
+		cleanupBatchProjectionTestData(t, db, webhookID, caseIDs, commandIDs)
+	})
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	address := "0x00000000000000000000000000000000000000e2"
-	accountID, err := ensureRoutingTestAccount(db, "__routing_batch_provider_fixture__", address, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	accountID, address := enabledRoutingTestAccount(t, db)
 	snapshot := routingSnapshot()
 	snapshot.TxKey = "routing-provider-batch-" + suffix
 	snapshot.TxHash = "0xbatch" + suffix
@@ -193,7 +195,6 @@ func TestProjectionWorkerPostgresCreatesOneAuthorizedProviderEventPerBatchOccurr
 	snapshot.CreateTime = time.Now().Add(-time.Minute).UnixMilli()
 	payload, _ := json.Marshal(map[string]any{"eventType": "TRANSACTION_STATUS_CHANGED", "eventDetail": snapshot})
 	digest := strings.Repeat("b", 64)
-	var webhookID int64
 	if err := db.QueryRow(`INSERT INTO safeheron_webhook_events
   (event_id,event_type,safeheron_tx_key,raw_payload,payload_digest,process_status)
 VALUES ($1,'TRANSACTION_STATUS_CHANGED',$2,$3::jsonb,$4,'DONE') RETURNING id`,
@@ -205,30 +206,14 @@ VALUES ($1,'TRANSACTION_STATUS_CHANGED',$2,$3::jsonb,$4,'DONE') RETURNING id`,
 		WebhookEventID: webhookID, EventType: "TRANSACTION_STATUS_CHANGED", PayloadDigest: digest,
 		NetworkFamily: "EVM", Snapshot: snapshot,
 	})
+	for _, result := range results {
+		caseIDs = append(caseIDs, result.CaseID)
+		commandIDs = append(commandIDs, result.CommandID)
+	}
 	if err != nil || len(results) != 2 {
 		t.Fatalf("RouteVerifiedEvent() = %#v, %v; want two batch occurrences", results, err)
 	}
-	caseIDs := make([]int64, 0, len(results))
-	commandIDs := make([]int64, 0, len(results))
 	providerEventIDs := make([]int64, 0, len(results))
-	t.Cleanup(func() {
-		_, _ = db.Exec(`DELETE FROM company_fund_provider_events WHERE safeheron_webhook_event_id=$1`, webhookID)
-		for _, caseID := range caseIDs {
-			_, _ = db.Exec(`UPDATE safeheron_transaction_routing_cases SET pending_command_id=NULL WHERE id=$1`, caseID)
-			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_alerts WHERE case_id=$1`, caseID)
-		}
-		for _, commandID := range commandIDs {
-			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_case_actions WHERE command_id=$1`, commandID)
-			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_case_commands WHERE id=$1`, commandID)
-		}
-		for _, caseID := range caseIDs {
-			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_case_sources WHERE case_id=$1`, caseID)
-			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_cases WHERE id=$1`, caseID)
-		}
-		_, _ = db.Exec(`DELETE FROM company_fund_safeheron_raw_event_exclusions WHERE safeheron_webhook_event_id=$1`, webhookID)
-		_, _ = db.Exec(`DELETE FROM safeheron_webhook_events WHERE id=$1`, webhookID)
-		_, _ = db.Exec(`UPDATE company_fund_accounts SET is_enabled=false WHERE id=$1`, accountID)
-	})
 
 	worker, err := NewProjectionWorker(db, companyfund.NewDBRepository(db))
 	if err != nil {
@@ -239,8 +224,6 @@ VALUES ($1,'TRANSACTION_STATUS_CHANGED',$2,$3::jsonb,$4,'DONE') RETURNING id`,
 		if result.Decision.Decision != DecisionCompany {
 			t.Fatalf("batch decision = %#v; want COMPANY", result.Decision)
 		}
-		caseIDs = append(caseIDs, result.CaseID)
-		commandIDs = append(commandIDs, result.CommandID)
 		var action projectionAction
 		if err := db.QueryRow(`SELECT action.id,routing.routing_identity_key
 FROM safeheron_transaction_routing_case_actions action
@@ -292,5 +275,48 @@ FROM company_fund_provider_events WHERE safeheron_webhook_event_id=$1 ORDER BY i
 	}
 	if len(providerEventIDs) != 2 {
 		t.Fatalf("provider events = %v; want one per batch occurrence", providerEventIDs)
+	}
+}
+
+func enabledRoutingTestAccount(t *testing.T, db *sql.DB) (int64, string) {
+	t.Helper()
+	var id int64
+	var address string
+	err := db.QueryRow(`SELECT id, normalized_address
+FROM company_fund_accounts
+WHERE channel='SAFEHERON' AND network_family='EVM' AND is_enabled=true
+ORDER BY id LIMIT 1`).Scan(&id, &address)
+	if err == sql.ErrNoRows {
+		t.Skip("PostgreSQL routing coverage requires an existing enabled Safeheron EVM company account")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id, address
+}
+
+func cleanupBatchProjectionTestData(t *testing.T, db *sql.DB, webhookID int64, caseIDs, commandIDs []int64) {
+	t.Helper()
+	cleanupExec(t, db, `DELETE FROM company_fund_provider_events WHERE safeheron_webhook_event_id=$1`, webhookID)
+	for _, caseID := range caseIDs {
+		cleanupExec(t, db, `UPDATE safeheron_transaction_routing_cases SET pending_command_id=NULL WHERE id=$1`, caseID)
+		cleanupExec(t, db, `DELETE FROM safeheron_transaction_routing_alerts WHERE case_id=$1`, caseID)
+	}
+	for _, commandID := range commandIDs {
+		cleanupExec(t, db, `DELETE FROM safeheron_transaction_routing_case_actions WHERE command_id=$1`, commandID)
+		cleanupExec(t, db, `DELETE FROM safeheron_transaction_routing_case_commands WHERE id=$1`, commandID)
+	}
+	for _, caseID := range caseIDs {
+		cleanupExec(t, db, `DELETE FROM safeheron_transaction_routing_case_sources WHERE case_id=$1`, caseID)
+		cleanupExec(t, db, `DELETE FROM safeheron_transaction_routing_cases WHERE id=$1`, caseID)
+	}
+	cleanupExec(t, db, `DELETE FROM company_fund_safeheron_raw_event_exclusions WHERE safeheron_webhook_event_id=$1`, webhookID)
+	cleanupExec(t, db, `DELETE FROM safeheron_webhook_events WHERE id=$1`, webhookID)
+}
+
+func cleanupExec(t *testing.T, db *sql.DB, query string, args ...any) {
+	t.Helper()
+	if _, err := db.Exec(query, args...); err != nil {
+		t.Errorf("cleanup PostgreSQL routing fixture: %v", err)
 	}
 }
