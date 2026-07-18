@@ -118,7 +118,7 @@ func (normalizer *SafeheronProviderEventNormalizer) normalizeTransactionStatusEv
 	}
 	registry := normalizer.registries.Snapshot()
 	if registry == nil {
-		return ProviderEventNormalizationResult{}, safeheronPermanentNormalizationError("Safeheron account registry snapshot is unavailable")
+		return ProviderEventNormalizationResult{}, safeheronAccountContextError("account registry snapshot is unavailable")
 	}
 	eventID := lease.ID
 	result, err := NormalizeSafeheronProviderEvent(SafeheronNormalizationInput{
