@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       release_phase:
-        description: "受控发布阶段（按 056 → 057 → workers-off → server-dark → workers-on 顺序执行）"
+        description: "受控发布阶段（按 056 → 057 → 058 → workers-off → server-dark → workers-on 顺序执行）"
         required: true
         type: choice
         options:
           - migration-056
           - migration-057
+          - migration-058
           - workers-off-current
           - server-dark
           - workers-on-installed
@@ -101,6 +102,9 @@ jobs:
                 ;;
               migration-057)
                 "$PACKAGE/deploy-remote.sh" --env production --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 057
+                ;;
+              migration-058)
+                "$PACKAGE/deploy-remote.sh" --env production --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 058
                 ;;
               workers-off-current)
                 "$PACKAGE/deploy-remote.sh" --env production --release-mode workers-off-current --artifact-sha "$RELEASE_SHA" --installed-server-sha "$INSTALLED_SHA"

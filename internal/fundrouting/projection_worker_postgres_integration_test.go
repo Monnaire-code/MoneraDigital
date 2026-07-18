@@ -11,6 +11,8 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"monera-digital/internal/companyfund"
+	"monera-digital/internal/safeheron"
 )
 
 func TestProjectionWorkerPostgresRequeuesAuthorizedDeadProviderEvent(t *testing.T) {
@@ -155,5 +157,140 @@ authorizing_routing_action_id,source_payload_digest FROM company_fund_provider_e
 	second, err := worker.requeueCompanyProviderEvent(context.Background(), action)
 	if err != nil || second {
 		t.Fatalf("second requeueCompanyProviderEvent() = %v, %v; want idempotent no-op", second, err)
+	}
+}
+
+func TestProjectionWorkerPostgresCreatesOneAuthorizedProviderEventPerBatchOccurrence(t *testing.T) {
+	if os.Getenv("RUN_FUND_ROUTING_POSTGRES_INTEGRATION") != "1" {
+		t.Skip("set RUN_FUND_ROUTING_POSTGRES_INTEGRATION=1 to run PostgreSQL routing coverage")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		t.Fatal("DATABASE_URL is required")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	address := "0x00000000000000000000000000000000000000e2"
+	accountID, err := ensureRoutingTestAccount(db, "__routing_batch_provider_fixture__", address, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := routingSnapshot()
+	snapshot.TxKey = "routing-provider-batch-" + suffix
+	snapshot.TxHash = "0xbatch" + suffix
+	snapshot.SourceAddress = "0x00000000000000000000000000000000000000a2"
+	snapshot.DestinationAddress = ""
+	snapshot.DestinationAddressList = []safeheron.TransactionDestinationAddress{
+		{Address: address, Amount: "0.010"},
+		{Address: address, Amount: "0.011"},
+	}
+	snapshot.TxAmount = "0.021"
+	snapshot.CreateTime = time.Now().Add(-time.Minute).UnixMilli()
+	payload, _ := json.Marshal(map[string]any{"eventType": "TRANSACTION_STATUS_CHANGED", "eventDetail": snapshot})
+	digest := strings.Repeat("b", 64)
+	var webhookID int64
+	if err := db.QueryRow(`INSERT INTO safeheron_webhook_events
+  (event_id,event_type,safeheron_tx_key,raw_payload,payload_digest,process_status)
+VALUES ($1,'TRANSACTION_STATUS_CHANGED',$2,$3::jsonb,$4,'DONE') RETURNING id`,
+		"routing-provider-batch-event-"+suffix, snapshot.TxKey, payload, digest).Scan(&webhookID); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := NewRepository(db).RouteVerifiedEvent(context.Background(), VerifiedEventInput{
+		WebhookEventID: webhookID, EventType: "TRANSACTION_STATUS_CHANGED", PayloadDigest: digest,
+		NetworkFamily: "EVM", Snapshot: snapshot,
+	})
+	if err != nil || len(results) != 2 {
+		t.Fatalf("RouteVerifiedEvent() = %#v, %v; want two batch occurrences", results, err)
+	}
+	caseIDs := make([]int64, 0, len(results))
+	commandIDs := make([]int64, 0, len(results))
+	providerEventIDs := make([]int64, 0, len(results))
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM company_fund_provider_events WHERE safeheron_webhook_event_id=$1`, webhookID)
+		for _, caseID := range caseIDs {
+			_, _ = db.Exec(`UPDATE safeheron_transaction_routing_cases SET pending_command_id=NULL WHERE id=$1`, caseID)
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_alerts WHERE case_id=$1`, caseID)
+		}
+		for _, commandID := range commandIDs {
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_case_actions WHERE command_id=$1`, commandID)
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_case_commands WHERE id=$1`, commandID)
+		}
+		for _, caseID := range caseIDs {
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_case_sources WHERE case_id=$1`, caseID)
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_cases WHERE id=$1`, caseID)
+		}
+		_, _ = db.Exec(`DELETE FROM company_fund_safeheron_raw_event_exclusions WHERE safeheron_webhook_event_id=$1`, webhookID)
+		_, _ = db.Exec(`DELETE FROM safeheron_webhook_events WHERE id=$1`, webhookID)
+		_, _ = db.Exec(`UPDATE company_fund_accounts SET is_enabled=false WHERE id=$1`, accountID)
+	})
+
+	worker, err := NewProjectionWorker(db, companyfund.NewDBRepository(db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	occurrences := make(map[string]struct{}, 2)
+	for _, result := range results {
+		if result.Decision.Decision != DecisionCompany {
+			t.Fatalf("batch decision = %#v; want COMPANY", result.Decision)
+		}
+		caseIDs = append(caseIDs, result.CaseID)
+		commandIDs = append(commandIDs, result.CommandID)
+		var action projectionAction
+		if err := db.QueryRow(`SELECT action.id,routing.routing_identity_key
+FROM safeheron_transaction_routing_case_actions action
+JOIN safeheron_transaction_routing_case_commands command ON command.id=action.command_id
+JOIN safeheron_transaction_routing_cases routing ON routing.id=command.case_id
+WHERE action.command_id=$1 AND action.action_type='APPLY_COMPANY'`, result.CommandID).
+			Scan(&action.ID, &action.RoutingIdentityKey); err != nil {
+			t.Fatal(err)
+		}
+		action.Type = "APPLY_COMPANY"
+		action.CaseID = result.CaseID
+		action.CommandID = result.CommandID
+		action.WebhookEventID = int(webhookID)
+		action.EventType = "TRANSACTION_STATUS_CHANGED"
+		action.PayloadDigest = digest
+		action.TargetCompanyID = sql.NullInt64{Int64: accountID, Valid: true}
+		if _, err := db.Exec(`UPDATE safeheron_transaction_routing_case_actions
+SET lease_owner=$2,lease_expires_at=now()+interval '1 minute' WHERE id=$1`, action.ID, worker.workerID); err != nil {
+			t.Fatal(err)
+		}
+		state, proceed, err := worker.prepareCompanyProviderEvent(context.Background(), action)
+		if err != nil || !proceed || state != "PENDING" {
+			t.Fatalf("prepare occurrence %s = state %q proceed %v err %v", action.RoutingIdentityKey, state, proceed, err)
+		}
+		occurrences[action.RoutingIdentityKey] = struct{}{}
+	}
+	if len(occurrences) != 2 {
+		t.Fatalf("authorized occurrences = %v; want two distinct occurrence keys", occurrences)
+	}
+	rows, err := db.Query(`SELECT id,authorized_safeheron_occurrence_key
+FROM company_fund_provider_events WHERE safeheron_webhook_event_id=$1 ORDER BY id`, webhookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var occurrence string
+		if err := rows.Scan(&id, &occurrence); err != nil {
+			t.Fatal(err)
+		}
+		providerEventIDs = append(providerEventIDs, id)
+		if _, ok := occurrences[occurrence]; !ok {
+			t.Fatalf("unexpected provider occurrence %q", occurrence)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(providerEventIDs) != 2 {
+		t.Fatalf("provider events = %v; want one per batch occurrence", providerEventIDs)
 	}
 }
