@@ -124,7 +124,10 @@ func TestProjectionWorkerBlocksCompanyResultOwnedByDifferentAccount(t *testing.T
 		PayloadDigest: "digest", TargetCompanyID: sql.NullInt64{Int64: 7, Valid: true},
 	}
 	mock.ExpectQuery("SELECT EXISTS").WithArgs(int64(9), "occurrence-1", 31).
-		WillReturnRows(sqlmock.NewRows([]string{"ready", "conflict"}).AddRow(false, false))
+		WillReturnRows(sqlmock.NewRows([]string{"ready", "conflict"}).AddRow(true, false))
+	mock.ExpectQuery(`SELECT event_state, COALESCE\(last_error,''\)`).
+		WithArgs(int64(9), "occurrence-1").
+		WillReturnRows(sqlmock.NewRows([]string{"event_state", "last_error"}).AddRow("PROCESSED", ""))
 	mock.ExpectQuery("SELECT movement.id").
 		WithArgs("occurrence-1", int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "exact_account", "exact_asset", "exact_amount", "exact_source", "exact_destination", "exact_direction"}).
@@ -133,7 +136,9 @@ func TestProjectionWorkerBlocksCompanyResultOwnedByDifferentAccount(t *testing.T
 	mock.ExpectQuery("SELECT action.id FROM safeheron_transaction_routing_case_actions action").
 		WithArgs(int64(9), worker.workerID, int64(12), int64(11)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(9))
-	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").
+		WithArgs(int64(9), "COMPANY_RESULT_CONFLICT", "company movement result does not match routing target account").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_commands").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO safeheron_transaction_routing_alerts").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -142,12 +147,8 @@ func TestProjectionWorkerBlocksCompanyResultOwnedByDifferentAccount(t *testing.T
 	if err := worker.applyCompany(context.Background(), action); err != nil {
 		t.Fatalf("applyCompany: %v", err)
 	}
-	if len(inserter.inputs) != 1 {
-		t.Fatalf("provider event inputs = %#v", inserter.inputs)
-	}
-	input := inserter.inputs[0]
-	if input.ProviderEventID != "routing-company:9" || input.AuthorizedSafeheronOccurrenceKey != action.RoutingIdentityKey {
-		t.Fatalf("scoped provider event = %#v", input)
+	if len(inserter.inputs) != 0 {
+		t.Fatalf("processed provider event must be reused: %#v", inserter.inputs)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -168,17 +169,162 @@ func TestProjectionWorkerReusesRecoveryBoundProviderEvent(t *testing.T) {
 	}
 	mock.ExpectQuery("SELECT EXISTS").WithArgs(int64(9), "occurrence-1", 0).
 		WillReturnRows(sqlmock.NewRows([]string{"ready", "conflict"}).AddRow(true, false))
-	mock.ExpectQuery("SELECT movement.id").WithArgs("occurrence-1", int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "exact_account", "exact_asset", "exact_amount", "exact_source", "exact_destination", "exact_direction"}))
+	mock.ExpectQuery(`SELECT event_state, COALESCE\(last_error,''\)`).
+		WithArgs(int64(9), "occurrence-1").
+		WillReturnRows(sqlmock.NewRows([]string{"event_state", "last_error"}).AddRow("PENDING", ""))
 	mock.ExpectQuery("SELECT attempt_count FROM safeheron_transaction_routing_case_actions").
 		WithArgs(int64(9), worker.workerID).
 		WillReturnRows(sqlmock.NewRows([]string{"attempt_count"}).AddRow(0))
-	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").
+		WithArgs(int64(9), "WAITING_COMPANY_PROVIDER_EVENT", "", worker.workerID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := worker.applyCompany(context.Background(), action); err != nil {
 		t.Fatal(err)
 	}
 	if len(inserter.inputs) != 0 {
 		t.Fatalf("recovery-bound provider event must be reused: %#v", inserter.inputs)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProjectionWorkerDoesNotCompleteBeforeProviderEventIsProcessed(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	worker, _ := NewProjectionWorker(db, &projectionEventInserterStub{})
+	action := projectionAction{
+		ID: 9, Type: "APPLY_COMPANY", CaseID: 11, CommandID: 12,
+		RoutingIdentityKey: "occurrence-1", TargetCompanyID: sql.NullInt64{Int64: 7, Valid: true},
+	}
+	mock.ExpectQuery("SELECT EXISTS").WithArgs(int64(9), "occurrence-1", 0).
+		WillReturnRows(sqlmock.NewRows([]string{"ready", "conflict"}).AddRow(true, false))
+	mock.ExpectQuery(`SELECT event_state, COALESCE\(last_error,''\)`).
+		WithArgs(int64(9), "occurrence-1").
+		WillReturnRows(sqlmock.NewRows([]string{"event_state", "last_error"}).AddRow("LEASED", ""))
+	mock.ExpectQuery("SELECT attempt_count FROM safeheron_transaction_routing_case_actions").
+		WithArgs(int64(9), worker.workerID).
+		WillReturnRows(sqlmock.NewRows([]string{"attempt_count"}).AddRow(0))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").
+		WithArgs(int64(9), "WAITING_COMPANY_PROVIDER_EVENT", "", worker.workerID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := worker.applyCompany(context.Background(), action); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProjectionWorkerDeadLetterBlocksCommandInsteadOfWaitingForever(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	worker, _ := NewProjectionWorker(db, &projectionEventInserterStub{})
+	action := projectionAction{
+		ID: 9, Type: "APPLY_COMPANY", CaseID: 11, CommandID: 12,
+		RoutingIdentityKey: "occurrence-1", TargetCompanyID: sql.NullInt64{Int64: 7, Valid: true},
+	}
+	mock.ExpectQuery("SELECT EXISTS").WithArgs(int64(9), "occurrence-1", 0).
+		WillReturnRows(sqlmock.NewRows([]string{"ready", "conflict"}).AddRow(true, false))
+	mock.ExpectQuery(`SELECT event_state, COALESCE\(last_error,''\)`).
+		WithArgs(int64(9), "occurrence-1").
+		WillReturnRows(sqlmock.NewRows([]string{"event_state", "last_error"}).
+			AddRow("DEAD_LETTER", "permanent company-fund provider event processing failure: Safeheron transaction mapping is unavailable"))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT action.id FROM safeheron_transaction_routing_case_actions action").
+		WithArgs(int64(9), worker.workerID, int64(12), int64(11)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(9))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").
+		WithArgs(int64(9), "COMPANY_PROVIDER_EVENT_DEAD_LETTER", "Safeheron transaction mapping is unavailable").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_commands").WithArgs(int64(12)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").WithArgs(int64(12), int64(9)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO safeheron_transaction_routing_alerts").
+		WithArgs(int64(11), "command:12:action:9", "COMPANY_PROVIDER_EVENT_DEAD_LETTER").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	if err := worker.applyCompany(context.Background(), action); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProjectionWorkerProcessedProviderEventWithoutMovementBlocksCommand(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	worker, _ := NewProjectionWorker(db, &projectionEventInserterStub{})
+	action := projectionAction{
+		ID: 9, Type: "APPLY_COMPANY", CaseID: 11, CommandID: 12,
+		RoutingIdentityKey: "occurrence-1", TargetCompanyID: sql.NullInt64{Int64: 7, Valid: true},
+	}
+	mock.ExpectQuery("SELECT EXISTS").WithArgs(int64(9), "occurrence-1", 0).
+		WillReturnRows(sqlmock.NewRows([]string{"ready", "conflict"}).AddRow(true, false))
+	mock.ExpectQuery(`SELECT event_state, COALESCE\(last_error,''\)`).
+		WithArgs(int64(9), "occurrence-1").
+		WillReturnRows(sqlmock.NewRows([]string{"event_state", "last_error"}).AddRow("PROCESSED", ""))
+	mock.ExpectQuery("SELECT movement.id").WithArgs("occurrence-1", int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "exact_account", "exact_asset", "exact_amount", "exact_source", "exact_destination", "exact_direction"}))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT action.id FROM safeheron_transaction_routing_case_actions action").
+		WithArgs(int64(9), worker.workerID, int64(12), int64(11)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(9))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").
+		WithArgs(int64(9), "COMPANY_PROVIDER_EVENT_RESULT_MISSING", "processed company provider event has no matching financial movement").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_commands").WithArgs(int64(12)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions").WithArgs(int64(12), int64(9)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO safeheron_transaction_routing_alerts").
+		WithArgs(int64(11), "command:12:action:9", "COMPANY_PROVIDER_EVENT_RESULT_MISSING").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	if err := worker.applyCompany(context.Background(), action); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProjectionWorkerRequeuesAuthorizedDeadLetterForSameOccurrence(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	worker, _ := NewProjectionWorker(db, &projectionEventInserterStub{})
+	action := projectionAction{
+		ID: 19, Type: "APPLY_COMPANY", CaseID: 11, CommandID: 22,
+		RoutingIdentityKey: "occurrence-1", WebhookEventID: 31, PayloadDigest: "digest",
+		TargetCompanyID: sql.NullInt64{Int64: 7, Valid: true},
+	}
+	mock.ExpectQuery("SELECT EXISTS").WithArgs(int64(19), "occurrence-1", 31).
+		WillReturnRows(sqlmock.NewRows([]string{"ready", "conflict"}).AddRow(false, true))
+	mock.ExpectQuery("UPDATE company_fund_provider_events event").
+		WithArgs(int64(19), 31, "occurrence-1", "digest", int64(11), int64(22), int64(7), worker.workerID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(16))
+	mock.ExpectQuery("SELECT attempt_count FROM safeheron_transaction_routing_case_actions").
+		WithArgs(int64(19), worker.workerID).
+		WillReturnRows(sqlmock.NewRows([]string{"attempt_count"}).AddRow(0))
+	mock.ExpectExec("SET status='RETRYABLE'").
+		WithArgs(int64(19), "WAITING_COMPANY_PROVIDER_EVENT", "", worker.workerID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := worker.applyCompany(context.Background(), action); err != nil {
+		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -199,6 +345,9 @@ func TestProjectionWorkerQuarantinesConflictingLegacyProviderEvent(t *testing.T)
 	}
 	mock.ExpectQuery("SELECT EXISTS").WithArgs(int64(9), "occurrence-1", 31).
 		WillReturnRows(sqlmock.NewRows([]string{"ready", "conflict"}).AddRow(false, true))
+	mock.ExpectQuery("UPDATE company_fund_provider_events event").
+		WithArgs(int64(9), 31, "occurrence-1", "", int64(11), int64(12), int64(7), worker.workerID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT action.id FROM safeheron_transaction_routing_case_actions action").
 		WithArgs(int64(9), worker.workerID, int64(12), int64(11)).

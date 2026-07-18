@@ -179,6 +179,22 @@ func TestSafeheronProviderEventNormalizer_MakesMalformedOrUnmappedInputPermanent
 	}
 }
 
+func TestSafeheronProviderEventNormalizer_RetriesAccountConfigurationLag(t *testing.T) {
+	input := testSafeheronNormalizationInput(t)
+	configurationError := &SafeheronAccountContextConfigurationError{Reason: "enabled account is not visible in the current registry snapshot"}
+	resolver := &safeheronTransactionMappingResolverStub{err: configurationError}
+	normalizer := newSafeheronProviderEventNormalizerForTest(t, resolver, input.Registry)
+
+	result, err := normalizer.NormalizeProviderEvent(
+		context.Background(),
+		testSafeheronProviderEventLease("TRANSACTION_STATUS_CHANGED"),
+		testSafeheronTransactionStatusPayload(t, input.Snapshot),
+	)
+	if !errors.Is(err, configurationError) || errors.Is(err, ErrProviderEventPermanent) || result.Ignored {
+		t.Fatalf("NormalizeProviderEvent() = %#v, %v; want retriable configuration error", result, err)
+	}
+}
+
 type safeheronTransactionMappingResolverStub struct {
 	mapping   SafeheronTransactionMapping
 	err       error

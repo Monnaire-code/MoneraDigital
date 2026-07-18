@@ -2,11 +2,91 @@ package companyfund
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"monera-digital/internal/safeheron"
 )
+
+func TestRegistrySafeheronTransactionMappingResolver_TreatsStaleRegistryAsRetriableConfiguration(t *testing.T) {
+	registry, err := buildAccountRegistrySnapshot(nil, nil, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeSafeheronCoinLister{coins: []safeheron.Coin{
+		{CoinKey: "USDT_BEP20", Symbol: "USDT", BlockChain: "BSC", BlockchainType: "EVM", TokenIdentifier: "0x55d398326f99059ff775485246999027b3197955"},
+	}}
+	catalog, err := NewSafeheronCoinCatalog(client, SafeheronCoinCatalogConfig{})
+	if err != nil || catalog.Refresh(context.Background()) != nil {
+		t.Fatalf("catalog setup: %v", err)
+	}
+	resolver, err := NewRegistrySafeheronTransactionMappingResolver(
+		safeheronRegistrySnapshotProviderStub{snapshot: registry},
+		catalog,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = resolver.ResolveSafeheronTransactionMapping(context.Background(), safeheron.TransactionSnapshot{
+		CoinKey: "USDT_BEP20", DestinationAccountKey: "new-safeheron-account", DestinationAddress: "0xc4f60c9b02edabba16c9df0afaccec8acf67381f",
+	})
+	var configurationError *SafeheronAccountContextConfigurationError
+	if !errors.As(err, &configurationError) || !configurationError.Retriable() {
+		t.Fatalf("ResolveSafeheronTransactionMapping() error = %v, want retriable account configuration error", err)
+	}
+}
+
+func TestRegistrySafeheronTransactionMappingResolver_TreatsMissingSnapshotAsRetriableConfiguration(t *testing.T) {
+	resolver, err := NewRegistrySafeheronTransactionMappingResolver(safeheronRegistrySnapshotProviderStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolver.ResolveSafeheronTransactionMapping(context.Background(), safeheron.TransactionSnapshot{CoinKey: "USDT_BEP20"})
+	var configurationError *SafeheronAccountContextConfigurationError
+	if !errors.As(err, &configurationError) || !configurationError.Retriable() {
+		t.Fatalf("ResolveSafeheronTransactionMapping() error = %v, want retriable account configuration error", err)
+	}
+}
+
+func TestRegistrySafeheronTransactionMappingResolver_SucceedsAfterRegistryRefresh(t *testing.T) {
+	var accounts []CompanyFundAccount
+	registry := NewAccountRegistry(accountRegistryLoaderFunc(func(context.Context) ([]CompanyFundAccount, []AccountAssetPolicy, error) {
+		return accounts, nil, nil
+	}), time.Minute)
+	if err := registry.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeSafeheronCoinLister{coins: []safeheron.Coin{
+		{CoinKey: "USDT_BEP20", Symbol: "USDT", BlockChain: "BSC", BlockchainType: "EVM", TokenIdentifier: "0x55d398326f99059ff775485246999027b3197955"},
+	}}
+	catalog, err := NewSafeheronCoinCatalog(client, SafeheronCoinCatalogConfig{})
+	if err != nil || catalog.Refresh(context.Background()) != nil {
+		t.Fatalf("catalog setup: %v", err)
+	}
+	resolver, err := NewRegistrySafeheronTransactionMappingResolver(registry, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := safeheron.TransactionSnapshot{
+		CoinKey: "USDT_BEP20", DestinationAccountKey: "new-safeheron-account", DestinationAddress: "0xc4f60c9b02edabba16c9df0afaccec8acf67381f",
+	}
+	if _, err := resolver.ResolveSafeheronTransactionMapping(context.Background(), snapshot); err == nil {
+		t.Fatal("stale empty registry must not resolve a company transaction")
+	}
+	accounts = []CompanyFundAccount{{
+		ID: 77, Channel: ChannelSafeheron, ProviderAccountKey: "new-safeheron-account",
+		NormalizedAddress: "0xc4f60c9b02edabba16c9df0afaccec8acf67381f", NetworkFamily: "EVM", Enabled: true,
+	}}
+	if err := registry.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := resolver.ResolveSafeheronTransactionMapping(context.Background(), snapshot)
+	if err != nil || mapping.NetworkFamily != "EVM" || mapping.PrincipalAsset.Asset.Currency != "USDT" {
+		t.Fatalf("ResolveSafeheronTransactionMapping() after refresh = %#v, %v", mapping, err)
+	}
+}
 
 func TestRegistrySafeheronRuntimeResolvers_UseExactConfiguredAccountAndAssetPolicyKeys(t *testing.T) {
 	input := testSafeheronNormalizationInput(t)
