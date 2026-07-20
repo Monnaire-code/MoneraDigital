@@ -85,6 +85,48 @@ func TestDeployRemoteModeTrace(t *testing.T) {
 	}
 }
 
+func TestDeployRemoteHealthCheckSuppressesTransientCurlErrors(t *testing.T) {
+	root := repositoryRoot(t)
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin")
+	counterPath := filepath.Join(tmp, "curl-count")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	curl := `#!/usr/bin/env bash
+count=0
+if [[ -f "$HEALTH_CURL_COUNTER" ]]; then
+  count=$(cat "$HEALTH_CURL_COUNTER")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$HEALTH_CURL_COUNTER"
+if (( count < 3 )); then
+  echo 'curl: (7) Failed to connect to 127.0.0.1 port 8086' >&2
+  exit 7
+fi
+printf '{"ok":true}'
+`
+	curlPath := filepath.Join(binDir, "curl")
+	if err := os.WriteFile(curlPath, []byte(curl), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	command := `deploy_script="$1"; shift; source "$deploy_script"; PORT=8086; sleep() { :; }; health_check`
+	cmd := exec.Command("bash", "-c", command, "health-check", filepath.Join(root, "scripts", "deploy-remote.sh"))
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "HEALTH_CURL_COUNTER="+counterPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("health check failed: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), "curl: (7)") {
+		t.Fatalf("transient curl error leaked into successful deploy output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "Waiting for service health check (attempt 1/8)") {
+		t.Fatalf("retry wait marker missing from output:\n%s", output)
+	}
+}
+
 func TestDeployRemoteRejectsStalePackageIdentityBeforeSideEffects(t *testing.T) {
 	t.Parallel()
 	root := repositoryRoot(t)

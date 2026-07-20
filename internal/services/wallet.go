@@ -409,7 +409,7 @@ func (s *WalletService) GetAddressIncomeHistory(ctx context.Context, userID int,
 // 优先从 Core API 获取，如果失败则从本地数据库获取
 func (s *WalletService) GetWalletAddress(ctx context.Context, userID int, req dto.GetWalletAddressRequest) (*dto.WalletAddress, error) {
 	logger.Info("[DEBUG-DEPOSIT] GetWalletAddress called", "userId", userID, "productCode", req.ProductCode, "currency", req.Currency)
-	
+
 	// 优先从 Core API 获取 (use full format for Core API)
 	if s.coreAPIClient != nil {
 		coreCurrency := currency.ToFullFormat(req.Currency)
@@ -419,8 +419,8 @@ func (s *WalletService) GetWalletAddress(ctx context.Context, userID int, req dt
 			ProductCode: req.ProductCode,
 			Currency:    coreCurrency,
 		})
-		logger.Info("[DEBUG-DEPOSIT] Core API response", "address", addressInfo.Address, "addressType", addressInfo.AddressType, "error", err)
-		if err == nil {
+		if err == nil && addressInfo != nil {
+			logger.Info("[DEBUG-DEPOSIT] Core API response", "address", addressInfo.Address, "addressType", addressInfo.AddressType)
 			// Validate that returned address matches requested network
 			if isAddressValidForCurrency(addressInfo.Address, req.Currency) {
 				return &dto.WalletAddress{
@@ -431,8 +431,9 @@ func (s *WalletService) GetWalletAddress(ctx context.Context, userID int, req dt
 			}
 			logger.Warn("[DEBUG-DEPOSIT] Address does not match requested currency, falling back to database", "address", addressInfo.Address, "currency", req.Currency)
 		}
-		// 如果 Core API 返回错误，继续尝试从本地数据库获取
-		logger.Info("Core API GetAddress failed, falling back to local database", "error", err.Error())
+		// Core API failure, an empty response, or a network mismatch all fall
+		// back to the locally recorded wallet without dereferencing a nil error.
+		logger.Info("Core API GetAddress did not provide a usable address, falling back to local database", "error", err)
 	}
 
 	// 从本地数据库获取钱包信息作为降级方案
@@ -497,7 +498,6 @@ func convertUserWalletToRequest(uw *models.UserWallet) *models.WalletCreationReq
 		Addresses:   sql.NullString{String: string(addressesJSON), Valid: true},
 	}
 }
-
 
 // isAddressValidForCurrency checks if an address matches the expected network
 func isAddressValidForCurrency(address, currency string) bool {

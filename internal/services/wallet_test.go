@@ -10,12 +10,40 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"monera-digital/internal/coreapi"
+	"monera-digital/internal/dto"
 	"monera-digital/internal/logger"
 	"monera-digital/internal/models"
 )
 
 func init() {
 	_ = logger.Init("test")
+}
+
+func TestWalletService_GetWalletAddress_FallsBackAfterMismatchedCoreAddress(t *testing.T) {
+	mockRepo := new(MockWalletRepository)
+	mockCoreAPI := new(MockCoreAPIClient)
+	service := NewWalletService(mockRepo, mockCoreAPI)
+
+	const localAddress = "0x1111111111111111111111111111111111111111"
+	mockCoreAPI.On("GetAddress", mock.Anything, mock.MatchedBy(func(request coreapi.GetAddressRequest) bool {
+		return request.UserID == "123" && request.ProductCode == "C_SPOT" && request.Currency == "USDT_ERC20"
+	})).Return(&coreapi.AddressInfo{Address: "TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW"}, nil).Once()
+	mockRepo.On("GetActiveWalletByUserID", mock.Anything, 123).Return(&models.WalletCreationRequest{
+		Status:    models.WalletCreationStatusSuccess,
+		Address:   sql.NullString{String: localAddress, Valid: true},
+		Addresses: sql.NullString{String: `{"USDT_ERC20":"` + localAddress + `"}`, Valid: true},
+	}, nil).Once()
+	mockRepo.On("GetUserWalletsByUserID", mock.Anything, 123).Return([]*models.UserWallet{}, nil).Once()
+
+	address, err := service.GetWalletAddress(context.Background(), 123, dto.GetWalletAddressRequest{
+		ProductCode: "C_SPOT",
+		Currency:    "USDT_ERC20",
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, localAddress, address.Address)
+	mockCoreAPI.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
 }
 
 func TestWalletService_AddAddress_Success(t *testing.T) {

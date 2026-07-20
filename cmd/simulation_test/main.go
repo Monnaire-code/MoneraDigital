@@ -162,7 +162,7 @@ func main() {
 	printFinalReport(report)
 }
 
-func runScenario(wealthRepo *postgres.WealthRepository, accountRepo *postgres.AccountRepository, database *sql.DB, scenario TestScenario) ScenarioResult {
+func runScenario(wealthRepo *postgres.WealthRepository, accountRepo repository.AccountV2, database *sql.DB, scenario TestScenario) ScenarioResult {
 	result := ScenarioResult{
 		ScenarioName: scenario.Name,
 		UserID:       scenario.UserID,

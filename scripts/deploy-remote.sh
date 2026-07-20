@@ -35,7 +35,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$MODE" ]] || { echo "ERROR: specify --env test or --frontend" >&2; exit 1; }
+if [[ -z "$MODE" && "${BASH_SOURCE[0]}" == "$0" ]]; then
+    echo "ERROR: specify --env test or --frontend" >&2
+    exit 1
+fi
 
 trace() {
     if [[ -n "${MONERA_DEPLOY_TRACE:-}" ]]; then
@@ -332,13 +335,18 @@ health_check() {
         [[ ! -f "$SERVICE_STATE_FILE" || "$(cat "$SERVICE_STATE_FILE")" == "running" ]]
         return
     fi
-    local _
-    for _ in {1..8}; do
-        if curl -fsS --max-time 4 "http://127.0.0.1:${PORT}/api/health" >/dev/null; then
+    local attempt curl_output
+    for attempt in {1..8}; do
+        if curl_output=$(curl -fsS --max-time 4 "http://127.0.0.1:${PORT}/api/health" 2>&1); then
             return 0
         fi
-        sleep 5
+        if (( attempt < 8 )); then
+            echo "Waiting for service health check (attempt ${attempt}/8)" >&2
+            sleep 5
+        fi
     done
+    echo "ERROR: service health check failed after 8 attempts" >&2
+    [[ -z "$curl_output" ]] || echo "$curl_output" >&2
     sudo journalctl -u "$SERVICE_NAME" --no-pager -n 80 || true
     return 1
 }

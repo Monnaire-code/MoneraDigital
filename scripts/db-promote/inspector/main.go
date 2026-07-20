@@ -88,7 +88,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `inspector — fund_reports migration 016 tool
+	fmt.Fprint(os.Stderr, `inspector — fund_reports migration 016 tool
 
 Subcommands:
   preflight   read-only pre-deploy check (env, DB reachability, source migration)
