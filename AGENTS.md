@@ -11,9 +11,9 @@
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Shadcn UI (Radix Primitives)
 - **Backend**: Golang (Go) - **Mandatory for all interfaces, database access, and operations.**
-- **Database**: PostgreSQL (Neon) + Drizzle ORM
+- **Database**: PostgreSQL (Neon); production schema is owned by Go migrations under `internal/migration/migrations/`
 - **External Core System**: Monnaire Core API (Account Management)
-- **State/Cache**: Redis (Upstash)
+- **State/Cache**: PostgreSQL is authoritative; Redis/Upstash is optional acceleration where the code provides a fallback
 - **Testing**: Vitest (Unit/Integration), Playwright (E2E)
 - **Language**: TypeScript (Frontend), Go (Backend)
 
@@ -139,16 +139,18 @@ npm test src/lib/auth-service.test.ts  # 运行特定测试文件
 npm test src/__tests__/           # 运行 __tests__ 目录下的测试
 npm test -- --coverage            # 运行测试并生成覆盖率报告
 npm test -- --testNamePattern="login"  # 运行匹配模式的测试
-npm test -- --grep "2FA"          # 运行包含特定文本的测试
 npm run test:ui                   # Vitest UI 界面
 npm run test:e2e                  # E2E 测试 (Playwright)
 ```
 
 ### 数据库命令
 ```bash
-npm run db:push                   # 推送数据库架构
-npm run db:generate               # 生成数据库迁移文件
+go run ./cmd/migrate -dry-run
+EXPECTED_MIGRATION_CEILING=<version> go run ./cmd/migrate -exact-version <version>
 ```
+
+- Stage/production 只允许执行本次发布的受控单版本迁移，不得使用默认全量 pending 入口。
+- `npm run db:push` / `npm run db:generate` 属于历史前端工具，不是共享生产 schema 的发布方式。
 
 ### 辅助命令
 ```bash
@@ -268,7 +270,7 @@ function updateUser(user, name) {
 
 **小文件优先于大文件**：
 - 高内聚，低耦合
-- 典型 200-400 行，最大 800 行
+- 典型 200-400 行，单文件建议不超过 2000 行；超限时需评估职责是否过于分散，不做机械拆分
 - 函数保持精简 (< 50 行)
 - 嵌套层次最多 4 层
 
@@ -280,14 +282,17 @@ src/
 ├── components/
 │   ├── ui/                   # Shadcn/Radix UI 组件
 │   └── DashboardLayout.tsx   # 布局组件
-├── db/
-│   ├── schema.ts             # Drizzle 架构定义
-│   └── migrations/           # 数据库迁移
 ├── lib/                      # 仅 UI 工具和表单验证
 ├── pages/                    # 路由页面 (React Router)
 ├── hooks/                    # 自定义 React hooks
 ├── __tests__/                # 测试文件
 └── i18n/                     # 国际化
+
+internal/
+├── companyfund/              # 公司资金采集、幂等合并、风险、估值和对账
+├── handlers/                 # Go HTTP handlers
+├── migration/migrations/     # 共享数据库的受控 Go migrations
+└── wallet/                   # 客户钱包和充值流水线
 ```
 
 ## 组件模式
@@ -302,7 +307,7 @@ src/
 
 ## 测试要求
 
-- **覆盖率**: 新代码维持 **80% 测试覆盖率**
+- **覆盖率**: 新增或修改的业务逻辑必须完整覆盖其行为分支，目标代码覆盖率以 **100%** 为目标
 - **测试方法**: 测试驱动开发 (TDD) - 先写测试
 - **测试类型**: 单元测试 (Vitest), 集成测试, E2E 测试 (Playwright)
 - **测试文件**: 使用 `.test.ts` 后缀，与源文件放在一起
@@ -313,7 +318,7 @@ src/
 3. 编写最小实现 (绿色)
 4. 运行测试 - 应该通过
 5. 重构 (改进)
-6. 验证覆盖率 (80%+)
+6. 验证新增/修改行为分支已完整覆盖
 
 ### 测试文件位置
 - **单元测试**: `src/lib/*/*.test.ts`, `src/__tests__/*`
@@ -330,7 +335,7 @@ src/
 - [ ] XSS 防护 (HTML 清理)
 - [ ] CSRF 保护启用
 - [ ] 认证/授权验证
-- [ ] 所有端点限流
+- [ ] 公网或高风险端点已限流，或有明确的不限流理由
 - [ ] 错误消息不泄露敏感数据
 
 **密钥管理**: 始终使用 `process.env.VARIABLE_NAME`，绝不硬编码。
@@ -365,17 +370,9 @@ export function useDebounce<T>(value: T, delay: number): T {
 
 ## 代理工作流
 
-**主动使用代理**:
-- **planner** - 复杂功能，重构
-- **tdd-guide** - 新功能，错误修复 (先写测试)
-- **code-reviewer** - 编写代码后
-- **security-reviewer** - 提交前安全分析
-- **build-error-resolver** - 构建失败时
-- **e2e-runner** - 关键用户流程
-- **refactor-cleaner** - 死代码清理
-- **architect** - 架构决策
-
-**始终使用并行任务执行**处理独立操作。
+- 小型、本地、边界清晰的任务直接执行，不为了形式引入额外编排。
+- 涉及新功能或 Bug 修复时使用 TDD；需要审查、诊断或端到端验收时，使用当前已安装的对应 skill。
+- 只有独立子任务确有吞吐收益时才并行；有依赖的操作顺序执行。
 
 ---
 
@@ -411,21 +408,22 @@ export function useDebounce<T>(value: T, delay: number): T {
 
 ---
 
-## 数据库 (Drizzle ORM)
+## 数据库（Go Migrations）
 - **表名**: `snake_case`，复数形式 (`users`, `withdrawal_addresses`)
 - **列名**: `snake_case` (`created_at`, `user_id`)
 - **外键**: `tableName_id` 后缀
-- **类型**: 使用 `$inferSelect` 和 `$inferInsert`
+- **Schema 所有权**: 生产共享 schema 只由 `internal/migration/migrations/` 中的 Go migration 修改
+- **发布边界**: Stage/production 只执行本次新增的受控单版本迁移，不重放历史全量迁移
+- **本地测试**: 使用当前环境的 `DATABASE_URL`，不强制 `_test` 数据库命名；测试数据由用例自行隔离和清理
 
 ## Git 工作流
 
-**提交格式**: `<类型>: <描述>`
-类型: feat, fix, refactor, docs, test, chore, perf, ci
+**提交格式**: 使用 Lore Commit Protocol；首行说明为什么做此变更，并根据实际情况记录 `Constraint` / `Rejected` / `Confidence` / `Scope-risk` / `Directive` / `Tested` / `Not-tested` trailers。
 
 **功能实现流程**:
-1. 首先规划 (使用 **planner**)
-2. TDD 方法 (使用 **tdd-guide**)
-3. 代码审查 (使用 **code-reviewer**)
+1. 明确领域边界、验收标准和依赖关系
+2. TDD 方法（先红后绿）
+3. 代码审查和针对性回归验证
 4. 提交推送与详细消息
 
 ### 统一 Serverless Function 架构（强制）
@@ -549,7 +547,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 - **单一职责**: 每个模块只做一件事
 
 ### 2. 测试要求
-- **覆盖率**: 所有新功能代码必须测试，保证 **100% 测试率**
+- **覆盖率**: 新增或修改的业务逻辑必须完整覆盖其行为分支，目标代码覆盖率以 **100%** 为目标
 - **TDD 方法**: 先写测试，再写实现代码
 - **回归测试**: 修复后必须验证不影响其他功能
 
@@ -558,9 +556,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 - **最小化**: 只改必要的代码，不做大规模重构
 
 ### 4. 提案流程
-- **新功能**: 使用 **openspec** 生成功能提案并实现
-- **Bug 修复**: 使用 **openspec** 生成修复提案
-- **任何代码变更**: 都必须包含此提示词要求
+- **OpenSpec**: 新功能和 Bug 修复不强制使用 OpenSpec；需要耐久规格时由用户或计划明确指定
+- **任何代码变更**: 保持目标清晰、改动最小，完成时说明验证证据
 
 ---
 
@@ -569,7 +566,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 完成任务前检查：
 - [ ] 代码可读性好，命名清晰
 - [ ] 函数精简 (< 50 行)
-- [ ] 文件集中 (< 800 行)
+- [ ] 文件职责集中（建议 < 2000 行；不做无业务收益的机械拆分）
 - [ ] 无深层嵌套 (> 4 层)
 - [ ] 错误处理完善
 - [ ] 无 console.log 语句
@@ -580,7 +577,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 ## Go 后端约定 (`internal/`)
 - **包名**: 小写，无下划线，无复数
-- **文件**: 小写 + 下划线，≤ 300 行
+- **文件**: 小写 + 下划线；建议 ≤ 2000 行，超限时优先按真实领域责任拆分
 - **Context**: 第一个参数，仅用于 I/O
 - **错误**: 始终处理，业务错误不 panic
 - **工具**: 提交前运行 `gofmt -w .` 和 `go vet ./...`
@@ -620,7 +617,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 ## Developer Environment Tips
 
 - **Setup**: Copy `.env.example` to `.env`, then run `npm install`
-- **Port**: Vite dev server runs on port 8080 by default
+- **Ports**: Vite dev server uses 5001; project scripts and deployed Go services use 8081 unless an explicit `PORT` override is provided
 - **Database**: Database schema is managed by Go backend (`internal/migration/`)
 - **Tests**: Run `npm test` before committing
 
