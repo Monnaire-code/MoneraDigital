@@ -22,17 +22,48 @@ const (
 	MovementIdentityAlgorithmVersion = "v1"
 )
 
-// Channel identifies the custody or banking provider that supplied a fact.
-type Channel string
+// TransactionSource identifies how a company-fund movement or provider-owned
+// record entered the ledger. It is deliberately distinct from AccountChannel:
+// an account integration kind must not widen the accepted transaction sources.
+type TransactionSource string
 
 const (
-	ChannelSafeheron Channel = "SAFEHERON"
-	ChannelAirwallex Channel = "AIRWALLEX"
-	ChannelManual    Channel = "MANUAL"
+	TransactionSourceSafeheron TransactionSource = "SAFEHERON"
+	TransactionSourceAirwallex TransactionSource = "AIRWALLEX"
+	TransactionSourceManual    TransactionSource = "MANUAL"
 )
 
-func (c Channel) Valid() bool {
-	return c == ChannelSafeheron || c == ChannelAirwallex || c == ChannelManual
+func (s TransactionSource) Valid() bool {
+	return s == TransactionSourceSafeheron || s == TransactionSourceAirwallex || s == TransactionSourceManual
+}
+
+// Channel is retained as a compatibility alias for TransactionSource while
+// provider, risk, valuation, and transaction call sites migrate terminology.
+// New account-facing code must use AccountChannel instead.
+type Channel = TransactionSource
+
+const (
+	ChannelSafeheron = TransactionSourceSafeheron
+	ChannelAirwallex = TransactionSourceAirwallex
+	ChannelManual    = TransactionSourceManual
+)
+
+// AccountChannel identifies the integration kind of a CompanyFundAccount.
+// It intentionally excludes MANUAL, which is a TransactionSource rather than
+// an account integration. Additional account channels are added independently
+// of transaction/provider source validation.
+type AccountChannel string
+
+const (
+	AccountChannelSafeheron AccountChannel = "SAFEHERON"
+	AccountChannelAirwallex AccountChannel = "AIRWALLEX"
+	// AccountChannelOther is a manually maintained company account. It has no
+	// provider ingestion, sync, risk, or valuation automation.
+	AccountChannelOther AccountChannel = "OTHER"
+)
+
+func (c AccountChannel) Valid() bool {
+	return c == AccountChannelSafeheron || c == AccountChannelAirwallex || c == AccountChannelOther
 }
 
 // TransferMode describes the provider shape, separate from the accounting
@@ -564,7 +595,7 @@ type BTCCrossResult struct {
 
 type CompanyFundAccount struct {
 	ID                  int64
-	Channel             Channel
+	Channel             AccountChannel
 	ProviderAccountKey  string
 	WalletAddress       string
 	NormalizedAddress   string

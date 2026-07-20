@@ -124,7 +124,7 @@ func (s *AccountRegistrySnapshot) safeheronAddressCandidates(networkFamily, addr
 	ids := make([]int64, 0)
 	byID := make(map[int64]CompanyFundAccount)
 	for _, account := range s.accountsByID {
-		if account.Channel != ChannelSafeheron || !account.Enabled {
+		if account.Channel != AccountChannelSafeheron || !account.Enabled {
 			continue
 		}
 		configuredAddress := account.NormalizedAddress

@@ -8,8 +8,8 @@ import (
 
 func TestResolveSafeheronAccountContext_AccountOwnershipPrecedesAssetPolicy(t *testing.T) {
 	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
-		{ID: 1, Channel: ChannelSafeheron, ProviderAccountKey: "vault-evm", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
-		{ID: 2, Channel: ChannelSafeheron, ProviderAccountKey: "vault-tron", NormalizedAddress: "TAbC", NetworkFamily: "TRON", Enabled: true},
+		{ID: 1, Channel: AccountChannelSafeheron, ProviderAccountKey: "vault-evm", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
+		{ID: 2, Channel: AccountChannelSafeheron, ProviderAccountKey: "vault-tron", NormalizedAddress: "TAbC", NetworkFamily: "TRON", Enabled: true},
 	}, nil, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -33,10 +33,10 @@ func TestResolveSafeheronAccountContext_AccountOwnershipPrecedesAssetPolicy(t *t
 
 func TestResolveSafeheronAccountContext_KeyOnlyAndMismatchAreFailClosed(t *testing.T) {
 	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
-		{ID: 1, Channel: ChannelSafeheron, ProviderAccountKey: "shared-vault", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
-		{ID: 2, Channel: ChannelSafeheron, ProviderAccountKey: "shared-vault", NormalizedAddress: "0xdef", NetworkFamily: "EVM", Enabled: true},
-		{ID: 3, Channel: ChannelSafeheron, ProviderAccountKey: "unique-vault", NormalizedAddress: "0x123", NetworkFamily: "EVM", Enabled: true},
-		{ID: 4, Channel: ChannelSafeheron, ProviderAccountKey: "disabled-vault", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: false},
+		{ID: 1, Channel: AccountChannelSafeheron, ProviderAccountKey: "shared-vault", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
+		{ID: 2, Channel: AccountChannelSafeheron, ProviderAccountKey: "shared-vault", NormalizedAddress: "0xdef", NetworkFamily: "EVM", Enabled: true},
+		{ID: 3, Channel: AccountChannelSafeheron, ProviderAccountKey: "unique-vault", NormalizedAddress: "0x123", NetworkFamily: "EVM", Enabled: true},
+		{ID: 4, Channel: AccountChannelSafeheron, ProviderAccountKey: "disabled-vault", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: false},
 	}, nil, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -61,9 +61,9 @@ func TestResolveSafeheronAccountContext_KeyOnlyAndMismatchAreFailClosed(t *testi
 
 func TestResolveSafeheronAccountContext_UnknownNetworkAmbiguityAndInternalTransfer(t *testing.T) {
 	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
-		{ID: 1, Channel: ChannelSafeheron, ProviderAccountKey: "evm", NormalizedAddress: "same", NetworkFamily: "EVM", Enabled: true},
-		{ID: 2, Channel: ChannelSafeheron, ProviderAccountKey: "tron", NormalizedAddress: "same", NetworkFamily: "TRON", Enabled: true},
-		{ID: 3, Channel: ChannelSafeheron, ProviderAccountKey: "to", NormalizedAddress: "0xto", NetworkFamily: "EVM", Enabled: true},
+		{ID: 1, Channel: AccountChannelSafeheron, ProviderAccountKey: "evm", NormalizedAddress: "same", NetworkFamily: "EVM", Enabled: true},
+		{ID: 2, Channel: AccountChannelSafeheron, ProviderAccountKey: "tron", NormalizedAddress: "same", NetworkFamily: "TRON", Enabled: true},
+		{ID: 3, Channel: AccountChannelSafeheron, ProviderAccountKey: "to", NormalizedAddress: "0xto", NetworkFamily: "EVM", Enabled: true},
 	}, nil, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -93,9 +93,9 @@ func TestSafeheronAccountContext_EdgeContracts(t *testing.T) {
 		t.Fatal("nil snapshot must fail closed")
 	}
 	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
-		{ID: 1, Channel: ChannelSafeheron, ProviderAccountKey: "evm-a", WalletAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
-		{ID: 2, Channel: ChannelSafeheron, ProviderAccountKey: "evm-b", NormalizedAddress: "0xdef", NetworkFamily: "EVM", Enabled: true},
-		{ID: 3, Channel: ChannelAirwallex, ProviderAccountKey: "fiat", NormalizedAddress: "0xabc", Enabled: true},
+		{ID: 1, Channel: AccountChannelSafeheron, ProviderAccountKey: "evm-a", WalletAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
+		{ID: 2, Channel: AccountChannelSafeheron, ProviderAccountKey: "evm-b", NormalizedAddress: "0xdef", NetworkFamily: "EVM", Enabled: true},
+		{ID: 3, Channel: AccountChannelAirwallex, ProviderAccountKey: "fiat", NormalizedAddress: "0xabc", Enabled: true},
 	}, nil, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)

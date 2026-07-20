@@ -14,8 +14,8 @@ import (
 func testSafeheronNormalizationInput(t *testing.T) SafeheronNormalizationInput {
 	t.Helper()
 	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
-		{ID: 1, Channel: ChannelSafeheron, ProviderAccountKey: "vault-from", NormalizedAddress: "0xfrom", NetworkFamily: "EVM", CompanyEntity: "Monera Singapore", FundAccountName: "Treasury", SubAccountName: "Main", AccountType: "VAULT", AccountName: "Treasury EVM", Enabled: true},
-		{ID: 2, Channel: ChannelSafeheron, ProviderAccountKey: "vault-to", NormalizedAddress: "0xto", NetworkFamily: "EVM", CompanyEntity: "Monera Hong Kong", FundAccountName: "Operations", SubAccountName: "Settlement", AccountType: "VAULT", AccountName: "Operations EVM", Enabled: true},
+		{ID: 1, Channel: AccountChannelSafeheron, ProviderAccountKey: "vault-from", NormalizedAddress: "0xfrom", NetworkFamily: "EVM", CompanyEntity: "Monera Singapore", FundAccountName: "Treasury", SubAccountName: "Main", AccountType: "VAULT", AccountName: "Treasury EVM", Enabled: true},
+		{ID: 2, Channel: AccountChannelSafeheron, ProviderAccountKey: "vault-to", NormalizedAddress: "0xto", NetworkFamily: "EVM", CompanyEntity: "Monera Hong Kong", FundAccountName: "Operations", SubAccountName: "Settlement", AccountType: "VAULT", AccountName: "Operations EVM", Enabled: true},
 	}, []AccountAssetPolicy{
 		testSafeheronAssetPolicy(11, 1, testSafeheronPrincipalAsset(), "2"),
 		testSafeheronAssetPolicy(12, 1, testSafeheronFeeAsset(), "0.001"),

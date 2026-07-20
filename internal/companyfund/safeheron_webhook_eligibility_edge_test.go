@@ -129,8 +129,8 @@ func TestSafeheronWebhookTransactionMappingAndHistoryRegistryEdges(t *testing.T)
 	}
 
 	conflictingRegistry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
-		{ID: 1, Channel: ChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
-		{ID: 2, Channel: ChannelSafeheron, NormalizedAddress: "TAbC", NetworkFamily: "TRON", Enabled: true},
+		{ID: 1, Channel: AccountChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
+		{ID: 2, Channel: AccountChannelSafeheron, NormalizedAddress: "TAbC", NetworkFamily: "TRON", Enabled: true},
 	}, []AccountAssetPolicy{
 		{ID: 11, AccountID: 1, Asset: AssetIdentity{Currency: "USDT", ChainCode: "ETHEREUM", ProviderAssetKey: "USDT_ERC20"}, Enabled: true},
 		{ID: 12, AccountID: 2, Asset: AssetIdentity{Currency: "TRX", ChainCode: "TRON", ProviderAssetKey: "TRON_TRX"}, Enabled: true},

@@ -351,7 +351,7 @@ func testAirwallexSyncRunAdapterInput() AirwallexFinancialTransactionsSyncRunInp
 		PageSize:             2,
 	}
 	input.WindowKey = airwallexFinancialTransactionsSyncRunInput(AirwallexFinancialTransactionsReconcileInput{
-		Account:            CompanyFundAccount{ID: input.CompanyFundAccountID, Channel: input.Channel, ProviderAccountKey: input.ProviderAccountKey, Enabled: true},
+		Account:            CompanyFundAccount{ID: input.CompanyFundAccountID, Channel: AccountChannelAirwallex, ProviderAccountKey: input.ProviderAccountKey, Enabled: true},
 		ProviderAccountKey: input.ProviderAccountKey,
 		WindowStart:        input.WindowStart,
 		WindowEnd:          input.WindowEnd,
@@ -372,7 +372,7 @@ func testSafeheronSyncRunAdapterInput() SafeheronTransactionHistorySyncRunInput 
 		WindowEnd:            time.Date(2026, time.July, 10, 16, 0, 0, 0, time.UTC),
 	}
 	input.WindowKey = safeheronTransactionHistorySyncRunInput(SafeheronTransactionHistoryReconcileInput{
-		Account:            CompanyFundAccount{ID: input.CompanyFundAccountID, Channel: input.Channel, ProviderAccountKey: input.ProviderAccountKey, Enabled: true},
+		Account:            CompanyFundAccount{ID: input.CompanyFundAccountID, Channel: AccountChannelSafeheron, ProviderAccountKey: input.ProviderAccountKey, Enabled: true},
 		ProviderAccountKey: input.ProviderAccountKey,
 		WindowStart:        input.WindowStart,
 		WindowEnd:          input.WindowEnd,

@@ -233,7 +233,7 @@ write_manifest() {
     local tmp
     tmp=$(mktemp "$APP_DIR/.release-manifest.XXXXXX")
     if [[ "$RELEASE_MODE" == "server-dark" ]]; then
-        printf '{"server_sha":"%s","migration_ceiling":"058","routing_mode":"capture-only","safe_artifact":true}\n' "$ARTIFACT_SHA" > "$tmp"
+        printf '{"server_sha":"%s","migration_ceiling":"059","routing_mode":"capture-only","safe_artifact":true}\n' "$ARTIFACT_SHA" > "$tmp"
     else
         printf '{"server_sha":"%s"}\n' "$ARTIFACT_SHA" > "$tmp"
     fi
@@ -244,7 +244,7 @@ write_manifest() {
 require_safe_dark_manifest() {
     [[ -f "$MANIFEST_FILE" ]] || { echo "ERROR: release manifest is missing" >&2; return 1; }
     grep -Eq '"server_sha"[[:space:]]*:[[:space:]]*"'"$ARTIFACT_SHA"'"' "$MANIFEST_FILE" &&
-        grep -Eq '"migration_ceiling"[[:space:]]*:[[:space:]]*"058"' "$MANIFEST_FILE" &&
+        grep -Eq '"migration_ceiling"[[:space:]]*:[[:space:]]*"059"' "$MANIFEST_FILE" &&
         grep -Eq '"routing_mode"[[:space:]]*:[[:space:]]*"capture-only"' "$MANIFEST_FILE" &&
         grep -Eq '"safe_artifact"[[:space:]]*:[[:space:]]*true' "$MANIFEST_FILE" || {
         echo "ERROR: installed server is not a validated dark release artifact" >&2
@@ -576,6 +576,8 @@ deploy_backend() {
                 require_release_state migration-056
             elif [[ "$EXPECTED_MIGRATION_CEILING" == "058" ]]; then
                 require_release_state migration-057
+            elif [[ "$EXPECTED_MIGRATION_CEILING" == "059" ]]; then
+                require_release_state migration-058
             fi
             install_binary monera-migrate
             install_binary company-fund-release
@@ -586,10 +588,12 @@ deploy_backend() {
                 write_release_state migration-057
             elif [[ "$EXPECTED_MIGRATION_CEILING" == "058" ]]; then
                 write_release_state migration-058
+            elif [[ "$EXPECTED_MIGRATION_CEILING" == "059" ]]; then
+                write_release_state migration-059
             fi
             ;;
         workers-off-current)
-            require_release_state migration-058
+            require_release_state migration-059
             verify_installed_sha
             cp -p "$ENV_FILE" "$ENV_FILE.release-backup"
             if ! set_routing_mode capture-only || ! set_workers false; then

@@ -312,7 +312,7 @@ func TestAirwallexFinancialTransactionNormalizer_MapsFeeAdjustmentReversalAndCon
 				input.FinancialTransaction.TransactionType = "CONVERSION_LEG"
 				input.FinancialTransaction.Amount = json.RawMessage("-100")
 				input.FinancialTransaction.ClientRate = json.RawMessage("0.00725")
-				input.CounterpartyCompanyAccount = &CompanyFundAccount{ID: 8, Channel: ChannelAirwallex, ProviderAccountKey: "awx-jpy", Enabled: true}
+				input.CounterpartyCompanyAccount = &CompanyFundAccount{ID: 8, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-jpy", Enabled: true}
 				input.ConfiguredAccountSide = AirwallexConfiguredAccountSideFrom
 				input.Relationship.ConversionGroupKey = "conversion_1"
 				input.Relationship.ConversionLeg = ConversionLegSell
@@ -520,7 +520,7 @@ func validAirwallexFinancialTransactionInput() AirwallexFinancialTransactionNorm
 		ProviderAccountKey: "awx-usd",
 		ConfiguredAccount: CompanyFundAccount{
 			ID:                 7,
-			Channel:            ChannelAirwallex,
+			Channel:            AccountChannelAirwallex,
 			ProviderAccountKey: "awx-usd",
 			CompanyEntity:      "Monera Ltd",
 			FundAccountName:    "Operating",

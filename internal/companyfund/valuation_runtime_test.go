@@ -460,7 +460,7 @@ func newCurrentRateRefresherRegistryWithAccount(t *testing.T, accountID int64, p
 	t.Helper()
 	registry := NewAccountRegistry(accountRegistryLoaderFunc(func(context.Context) ([]CompanyFundAccount, []AccountAssetPolicy, error) {
 		return []CompanyFundAccount{{
-			ID: accountID, Channel: ChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true,
+			ID: accountID, Channel: AccountChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true,
 		}}, policies, nil
 	}), time.Minute)
 	if err := registry.Refresh(context.Background()); err != nil {

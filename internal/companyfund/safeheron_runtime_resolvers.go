@@ -212,7 +212,7 @@ func registrySafeheronAssetMapping(registry *AccountRegistrySnapshot, coinKey st
 	)
 	for accountID, policies := range registry.policiesByAccount {
 		account, exists := registry.accountsByID[accountID]
-		if !exists || !account.Enabled || account.Channel != ChannelSafeheron {
+		if !exists || !account.Enabled || account.Channel != AccountChannelSafeheron {
 			continue
 		}
 		candidateNetwork := normalizeNetworkFamily(account.NetworkFamily)

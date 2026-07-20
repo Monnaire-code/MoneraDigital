@@ -343,7 +343,7 @@ func TestCompanyFundRuntime_AirwallexWebhookWakeReconcilesOnlyTheOneScopedAccoun
 	}
 
 	multiAccountSnapshot, err := buildAccountRegistrySnapshot(append(accounts, CompanyFundAccount{
-		ID: 23, Channel: ChannelAirwallex, ProviderAccountKey: "awx-secondary", Enabled: true,
+		ID: 23, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-secondary", Enabled: true,
 	}), nil, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -570,11 +570,11 @@ func companyFundRuntimeSnapshotSource(t *testing.T, accounts []CompanyFundAccoun
 func validCompanyFundRuntimeAccounts() []CompanyFundAccount {
 	return []CompanyFundAccount{
 		{
-			ID: 11, Channel: ChannelSafeheron, ProviderAccountKey: "safe-vault-main", NetworkFamily: "EVM",
+			ID: 11, Channel: AccountChannelSafeheron, ProviderAccountKey: "safe-vault-main", NetworkFamily: "EVM",
 			NormalizedAddress: "0x0000000000000000000000000000000000000011", Enabled: true,
 			MonitoringStartedAt: time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC),
 		},
-		{ID: 22, Channel: ChannelAirwallex, ProviderAccountKey: "awx-main", Enabled: true},
+		{ID: 22, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-main", Enabled: true},
 	}
 }
 

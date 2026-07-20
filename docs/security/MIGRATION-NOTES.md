@@ -124,7 +124,7 @@ DATABASE_URL="..." \
 go run ./cmd/migrate -exact-version 050
 ```
 
-Repeat with matching values for `051`, `052`, `053`, `054`, and `055`. Exact
+Repeat with matching values for each approved successor through `059`. Exact
 mode has these invariants:
 
 - Only the requested migration is registered and eligible to run.

@@ -22,7 +22,7 @@ func companyFundSyncRunAdapterInputForSafeheron(input SafeheronTransactionHistor
 	expectedInput := SafeheronTransactionHistoryReconcileInput{
 		Account: CompanyFundAccount{
 			ID:                 input.CompanyFundAccountID,
-			Channel:            ChannelSafeheron,
+			Channel:            AccountChannelSafeheron,
 			ProviderAccountKey: input.ProviderAccountKey,
 			Enabled:            true,
 		},
@@ -75,7 +75,7 @@ func companyFundSyncRunAdapterInputForAirwallex(input AirwallexFinancialTransact
 	expectedInput := AirwallexFinancialTransactionsReconcileInput{
 		Account: CompanyFundAccount{
 			ID:                 input.CompanyFundAccountID,
-			Channel:            ChannelAirwallex,
+			Channel:            AccountChannelAirwallex,
 			ProviderAccountKey: input.ProviderAccountKey,
 			Enabled:            true,
 		},

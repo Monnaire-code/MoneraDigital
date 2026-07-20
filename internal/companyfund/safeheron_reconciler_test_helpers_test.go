@@ -29,7 +29,7 @@ func newSafeheronTransactionHistoryReconcilerForTest(
 func validSafeheronTransactionHistoryReconcileInput() SafeheronTransactionHistoryReconcileInput {
 	return SafeheronTransactionHistoryReconcileInput{
 		Account: CompanyFundAccount{
-			ID: 11, Channel: ChannelSafeheron, ProviderAccountKey: "safe-vault-main", Enabled: true,
+			ID: 11, Channel: AccountChannelSafeheron, ProviderAccountKey: "safe-vault-main", Enabled: true,
 		},
 		ProviderAccountKey: "safe-vault-main",
 		WindowStart:        time.Date(2026, time.July, 9, 16, 0, 0, 0, time.UTC),

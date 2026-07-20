@@ -90,6 +90,27 @@ func TestGetCompanyFundTransactionValuationCandidate_ReturnsNilForMissingRow(t *
 	assertCompanyFundMockExpectations(t, mock)
 }
 
+func TestCompanyFundValuationCandidateQueriesExcludeOtherAccountMovements(t *testing.T) {
+	for name, query := range map[string]string{
+		"single": selectCompanyFundTransactionValuationCandidateSQL,
+		"repair": selectCompanyFundValuationRepairCandidatesSQL,
+		"cursor": selectCompanyFundValuationRepairCandidatesAfterSQL,
+	} {
+		lower := strings.ToLower(query)
+		for _, required := range []string{
+			"not exists",
+			"from company_fund_accounts as account",
+			"account.channel = 'other'",
+			"account.id = movement.from_company_fund_account_id",
+			"account.id = movement.to_company_fund_account_id",
+		} {
+			if !strings.Contains(lower, required) {
+				t.Errorf("%s valuation candidate query missing OTHER exclusion %q", name, required)
+			}
+		}
+	}
+}
+
 func companyFundValuationCandidateColumnNames() []string {
 	return []string{
 		"id", "channel", "movement_kind", "transaction_direction", "currency", "amount", "chain_code", "provider_asset_key", "asset_contract", "is_unrecognized_asset",

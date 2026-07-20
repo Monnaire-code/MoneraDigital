@@ -124,7 +124,7 @@ func loadRegistryAccounts(ctx context.Context, queryer accountRegistryQueryer) (
 		); err != nil {
 			return nil, fmt.Errorf("scan enabled company-fund account: %w", err)
 		}
-		account.Channel = Channel(channel)
+		account.Channel = AccountChannel(channel)
 		account.MonitoringStartedAt = account.MonitoringStartedAt.UTC()
 		if firstEnabledAt.Valid {
 			value := firstEnabledAt.Time.UTC()
@@ -585,10 +585,20 @@ func buildAccountRegistrySnapshot(accounts []CompanyFundAccount, policies []Acco
 		if _, exists := snapshot.accountsByID[account.ID]; exists {
 			return nil, fmt.Errorf("duplicate enabled company-fund account ID %d", account.ID)
 		}
+		if !account.Channel.Valid() {
+			return nil, fmt.Errorf("enabled company-fund account %d has unsupported account channel %q", account.ID, account.Channel)
+		}
+		// OTHER accounts are deliberately visible to the management application
+		// through the shared database, but they cannot enter this provider-facing
+		// registry. Keeping them out of accountsByID also excludes any accidental
+		// asset policy from automatic risk and valuation paths.
+		if account.Channel == AccountChannelOther {
+			continue
+		}
 		snapshot.accountsByID[account.ID] = account
 
 		switch account.Channel {
-		case ChannelSafeheron:
+		case AccountChannelSafeheron:
 			address := account.NormalizedAddress
 			if strings.TrimSpace(address) == "" {
 				address = account.WalletAddress
@@ -617,7 +627,7 @@ func buildAccountRegistrySnapshot(accounts []CompanyFundAccount, policies []Acco
 					snapshot.safeheronByProviderKey[providerAccountKey], account,
 				)
 			}
-		case ChannelAirwallex:
+		case AccountChannelAirwallex:
 			key := strings.TrimSpace(account.ProviderAccountKey)
 			if key == "" {
 				delete(snapshot.accountsByID, account.ID)
@@ -629,7 +639,7 @@ func buildAccountRegistrySnapshot(accounts []CompanyFundAccount, policies []Acco
 			snapshot.airwallexByAccountKey[key] = account
 		default:
 			delete(snapshot.accountsByID, account.ID)
-			return nil, fmt.Errorf("enabled company-fund account %d has unsupported channel %q", account.ID, account.Channel)
+			return nil, fmt.Errorf("enabled company-fund account %d has unsupported account channel %q", account.ID, account.Channel)
 		}
 	}
 
