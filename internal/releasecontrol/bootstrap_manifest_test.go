@@ -36,8 +36,7 @@ func TestBuildBootstrapManifestFromRealGitRefs(t *testing.T) {
 	if manifest.HeadWorkflow.BlobSHA != manifest.MainWorkflow.BlobSHA {
 		t.Fatalf("head workflow evidence = %+v", manifest.HeadWorkflow)
 	}
-	if manifest.MainWorkflow.InputSchemaHash != manifest.StageWorkflow.InputSchemaHash ||
-		manifest.MainWorkflow.ControlHash != manifest.StageWorkflow.ControlHash {
+	if manifest.MainWorkflow.DeployHash != manifest.StageWorkflow.DeployHash {
 		t.Fatalf("workflow contract mismatch: %+v", manifest)
 	}
 	if !strings.Contains(strings.ToLower(manifest.PromotionWarning), "user") {
@@ -70,7 +69,7 @@ func TestBuildBootstrapManifestRejectsWorkflowDriftAndMissingRefs(t *testing.T) 
 	t.Parallel()
 	repo := newBootstrapGitRepository(t)
 	runGit(t, repo.path, "checkout", "-b", "stage-drift", repo.bootstrapSHA)
-	workflow := strings.Replace(bootstrapWorkflowFixture(), "timeout-minutes: 5", "timeout-minutes: 6", 1)
+	workflow := strings.Replace(bootstrapWorkflowFixture(), "timeout-minutes: 25", "timeout-minutes: 26", 1)
 	writeGitFile(t, repo.path, StageWorkflowPath, workflow)
 	runGit(t, repo.path, "add", StageWorkflowPath)
 	runGit(t, repo.path, "commit", "-m", "drift workflow input")
@@ -212,39 +211,19 @@ func runGit(t *testing.T, repo string, args ...string) string {
 }
 
 func bootstrapWorkflowFixture() string {
-	return `name: Stage release
+	return `name: Deploy Backend to Stage
 on:
   push:
     branches: [stage]
-  workflow_dispatch:
-    inputs:
-      mode:
-        required: true
-        type: choice
-        options: [migration-only, workers-off-current, server-dark, workers-on-installed, standard]
-      artifact_ref:
-        required: true
-        type: string
-      run_id:
-        required: true
-        type: string
-      installed_server_sha:
-        required: false
-        type: string
-      expected_migration_ceiling:
-        required: false
-        type: string
 jobs:
-  control-preflight:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Validate control
-        run: echo control
   deploy-stage:
-    needs: control-preflight
     environment: stage
     runs-on: ubuntu-latest
-    steps: []
+    timeout-minutes: 25
+    env:
+      EXPECTED_MIGRATION_CEILING: "060"
+    steps:
+      - name: Execute standard stage deploy
+        run: echo standard
 `
 }

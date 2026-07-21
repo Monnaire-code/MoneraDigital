@@ -23,12 +23,11 @@ type BootstrapManifestInput struct {
 }
 
 type WorkflowEvidence struct {
-	Ref             string `json:"ref"`
-	CommitSHA       string `json:"commit_sha"`
-	BlobSHA         string `json:"blob_sha"`
-	ContentSHA256   string `json:"content_sha256"`
-	InputSchemaHash string `json:"input_schema_hash"`
-	ControlHash     string `json:"control_hash"`
+	Ref           string `json:"ref"`
+	CommitSHA     string `json:"commit_sha"`
+	BlobSHA       string `json:"blob_sha"`
+	ContentSHA256 string `json:"content_sha256"`
+	DeployHash    string `json:"deploy_hash"`
 }
 
 type BootstrapManifest struct {
@@ -90,8 +89,7 @@ func BuildBootstrapManifest(ctx context.Context, input BootstrapManifestInput) (
 	if err != nil {
 		return BootstrapManifest{}, fmt.Errorf("stage workflow: %w", err)
 	}
-	if mainWorkflow.InputSchemaHash != stageWorkflow.InputSchemaHash || mainWorkflow.ControlHash != stageWorkflow.ControlHash ||
-		headWorkflow.InputSchemaHash != mainWorkflow.InputSchemaHash || headWorkflow.ControlHash != mainWorkflow.ControlHash {
+	if mainWorkflow.DeployHash != stageWorkflow.DeployHash || headWorkflow.DeployHash != mainWorkflow.DeployHash {
 		return BootstrapManifest{}, errors.New("main/stage workflow contract hashes do not match")
 	}
 	return BootstrapManifest{
@@ -157,7 +155,7 @@ func (repository gitRepository) workflowEvidence(ctx context.Context, ref string
 	contentHash := sha256.Sum256(content)
 	return WorkflowEvidence{
 		Ref: ref, CommitSHA: commitSHA, BlobSHA: fields[2], ContentSHA256: hex.EncodeToString(contentHash[:]),
-		InputSchemaHash: contract.InputSchemaHash, ControlHash: contract.ControlHash,
+		DeployHash: contract.DeployHash,
 	}, nil
 }
 

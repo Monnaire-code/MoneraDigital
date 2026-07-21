@@ -37,6 +37,43 @@ func TestRepositoryRouteVerifiedEventPersistsOpenCaseSourceAlertAndDoneAtomicall
 	if len(result) != 1 || result[0].CaseID != 11 || result[0].Decision.Decision != DecisionOpen {
 		t.Fatalf("route result = %#v", result)
 	}
+	if result[0].Decision.Reason != ReasonOwnershipUnknown {
+		t.Fatalf("expected OWNERSHIP_UNKNOWN immediate-alert path, got %#v", result[0].Decision)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestRepositoryRouteVerifiedEventSkipsImmediateOpenAlertWhenStatusNotTerminal(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	input := routingEventInput()
+	input.Snapshot.TransactionStatus = "CONFIRMING"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("FROM safeheron_address_ownerships").WithArgs("EVM", "0xsource").WillReturnRows(ownershipRows())
+	mock.ExpectQuery("FROM safeheron_address_ownerships").WithArgs("EVM", "0xdest").WillReturnRows(ownershipRows())
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO safeheron_transaction_routing_cases")).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(14)))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO safeheron_transaction_routing_case_sources")).WillReturnResult(sqlmock.NewResult(1, 1))
+	// No OPEN alert insert: STATUS_NOT_TERMINAL is quiet until SLA escalation.
+	mock.ExpectExec("UPDATE safeheron_webhook_events").WithArgs(input.WebhookEventID).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result, err := repo.RouteVerifiedEvent(context.Background(), input)
+	if err != nil {
+		t.Fatalf("RouteVerifiedEvent: %v", err)
+	}
+	if len(result) != 1 || result[0].CaseID != 14 || result[0].Decision.Decision != DecisionOpen {
+		t.Fatalf("route result = %#v", result)
+	}
+	if result[0].Decision.Reason != ReasonStatusNotTerminal {
+		t.Fatalf("expected STATUS_NOT_TERMINAL, got %#v", result[0].Decision)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
 	}

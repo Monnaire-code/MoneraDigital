@@ -21,9 +21,8 @@ func NewAlertEscalator(db *sql.DB) (*AlertEscalator, error) {
 	return &AlertEscalator{db: db, interval: time.Minute}, nil
 }
 
-func (e *AlertEscalator) ProcessOne(ctx context.Context) (bool, error) {
-	var alertID int64
-	err := e.db.QueryRowContext(ctx, `WITH thresholds(level,minimum_age,severity) AS (
+func openCaseSLAEscalationSQL() string {
+	return `WITH thresholds(level,minimum_age,severity) AS (
   VALUES (1,interval '1 hour','ERROR'::varchar),
          (2,interval '24 hours','CRITICAL'::varchar)
 ), candidate AS (
@@ -45,7 +44,12 @@ SELECT case_id,'SLA_ESCALATION','sla:level:' || level::text,severity,
        jsonb_build_object('level',level,'reason_code',reason_code)
 FROM candidate
 ON CONFLICT (case_id,alert_type,transition_key) DO NOTHING
-RETURNING id`).Scan(&alertID)
+RETURNING id`
+}
+
+func (e *AlertEscalator) ProcessOne(ctx context.Context) (bool, error) {
+	var alertID int64
+	err := e.db.QueryRowContext(ctx, openCaseSLAEscalationSQL()).Scan(&alertID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

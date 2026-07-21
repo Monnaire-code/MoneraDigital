@@ -1,38 +1,9 @@
 name: Deploy Backend to Stage
-run-name: >-
-  Deploy Backend Stage / ${{ github.event_name == 'workflow_dispatch' && inputs.run_id || format('push-{0}', github.run_id) }}
+run-name: Deploy Backend Stage / push-${{ github.run_id }}
 
 on:
   push:
     branches: [stage]
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: Release operation
-        required: true
-        type: choice
-        options:
-          - migration-only
-          - workers-off-current
-          - server-dark
-          - workers-on-installed
-          - standard
-      artifact_ref:
-        description: Exact 40-character commit SHA to deploy
-        required: true
-        type: string
-      run_id:
-        description: Cutover run id matching the configured lock
-        required: true
-        type: string
-      installed_server_sha:
-        description: Exact currently installed SHA; required only for workers-off-current
-        required: false
-        type: string
-      expected_migration_ceiling:
-        description: Required for migration-only; ignored by other modes
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -42,171 +13,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  control-preflight:
-    name: Validate stage release control
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      mode: ${{ steps.control.outputs.mode }}
-      artifact_ref: ${{ steps.control.outputs.artifact_ref }}
-      run_id: ${{ steps.control.outputs.run_id }}
-      installed_server_sha: ${{ steps.control.outputs.installed_server_sha }}
-      expected_migration_ceiling: ${{ steps.control.outputs.expected_migration_ceiling }}
-      control_token: ${{ steps.control.outputs.control_token }}
-      baseline_digest: ${{ steps.control.outputs.baseline_digest }}
-    steps:
-      - name: Validate event, ref, inputs, and repository lock
-        id: control
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_REF: ${{ github.ref }}
-          EVENT_SHA: ${{ github.sha }}
-          INPUT_MODE: ${{ inputs.mode }}
-          INPUT_ARTIFACT_REF: ${{ inputs.artifact_ref }}
-          INPUT_RUN_ID: ${{ inputs.run_id }}
-          INPUT_INSTALLED_SERVER_SHA: ${{ inputs.installed_server_sha }}
-          INPUT_MIGRATION_CEILING: ${{ inputs.expected_migration_ceiling }}
-          CONTROL_LOCK: ${{ vars.COMPANY_FUND_STAGE_CUTOVER_LOCK_CONTROL }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          [[ "$EVENT_REF" == "refs/heads/stage" ]] || { echo "ERROR: only refs/heads/stage may deploy"; exit 1; }
-
-          if [[ "$EVENT_NAME" == "push" ]]; then
-            [[ -z "$CONTROL_LOCK" ]] || { echo "ERROR: stage push blocked by cutover lock"; exit 1; }
-            mode="standard"
-            artifact_ref="$EVENT_SHA"
-            run_id="push-${GITHUB_RUN_ID}"
-            installed_server_sha=""
-            migration_ceiling="060"
-            control_token=""
-            baseline_digest=""
-          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            mode="$INPUT_MODE"
-            artifact_ref="$INPUT_ARTIFACT_REF"
-            run_id="$INPUT_RUN_ID"
-            installed_server_sha="$INPUT_INSTALLED_SERVER_SHA"
-            migration_ceiling="$INPUT_MIGRATION_CEILING"
-            [[ "$mode" =~ ^(migration-only|workers-off-current|server-dark|workers-on-installed|standard)$ ]] || { echo "ERROR: invalid mode"; exit 1; }
-            [[ "$artifact_ref" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: artifact_ref must be a full lowercase SHA"; exit 1; }
-            [[ "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo "ERROR: invalid run_id"; exit 1; }
-            [[ "$CONTROL_LOCK" =~ ^([A-Za-z0-9][A-Za-z0-9._-]{0,127})@([0-9a-f]{64})$ ]] || { echo "ERROR: repository control token must be run_id@64hex"; exit 1; }
-            [[ "$run_id" == "${BASH_REMATCH[1]}" ]] || { echo "ERROR: repository control run mismatch"; exit 1; }
-            control_token="$CONTROL_LOCK"
-            baseline_digest="${BASH_REMATCH[2]}"
-            if [[ "$mode" == "migration-only" ]]; then
-              [[ "$migration_ceiling" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo "ERROR: migration-only requires a ceiling"; exit 1; }
-            fi
-            if [[ "$mode" == "workers-off-current" ]]; then
-              [[ "$installed_server_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: workers-off-current requires installed_server_sha"; exit 1; }
-            else
-              [[ -z "$installed_server_sha" ]] || { echo "ERROR: installed_server_sha is valid only for workers-off-current"; exit 1; }
-            fi
-
-            stage_head="$EVENT_SHA"
-            if [[ "$artifact_ref" != "$stage_head" ]]; then
-              comparison=$(curl -fsS \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/compare/${artifact_ref}...${stage_head}")
-              comparison_status=$(jq -er '.status' <<<"$comparison")
-              [[ "$comparison_status" == "ahead" ]] || { echo "ERROR: artifact_ref is not a reachable stage ancestor"; exit 1; }
-            fi
-            if [[ "$mode" == "standard" && "$run_id" == *_FINAL ]]; then
-              [[ "$artifact_ref" == "$stage_head" ]] || { echo "ERROR: FINAL standard must use exact stage HEAD"; exit 1; }
-            fi
-          else
-            echo "ERROR: unsupported event $EVENT_NAME"
-            exit 1
-          fi
-
-          [[ "$artifact_ref" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: resolved artifact is not a full SHA"; exit 1; }
-          {
-            echo "mode=$mode"
-            echo "artifact_ref=$artifact_ref"
-            echo "run_id=$run_id"
-            echo "installed_server_sha=$installed_server_sha"
-            echo "expected_migration_ceiling=$migration_ceiling"
-            echo "control_token=$control_token"
-            echo "baseline_digest=$baseline_digest"
-          } >> "$GITHUB_OUTPUT"
-
   deploy-stage:
-    name: Execute approved stage release
-    needs: control-preflight
-    if: needs.control-preflight.result == 'success' && github.ref == 'refs/heads/stage'
+    name: Standard stage deploy
+    if: github.ref == 'refs/heads/stage'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: stage
     env:
-      RELEASE_MODE: ${{ needs.control-preflight.outputs.mode }}
-      ARTIFACT_REF: ${{ needs.control-preflight.outputs.artifact_ref }}
-      RELEASE_RUN_ID: ${{ needs.control-preflight.outputs.run_id }}
-      INSTALLED_SERVER_SHA: ${{ needs.control-preflight.outputs.installed_server_sha }}
-      EXPECTED_MIGRATION_CEILING: ${{ needs.control-preflight.outputs.expected_migration_ceiling }}
-
+      ARTIFACT_REF: ${{ github.sha }}
+      EXPECTED_MIGRATION_CEILING: "060"
     steps:
-      - name: Revalidate approved stage controls
-        shell: bash
-        env:
-          ENV_LOCK: ${{ vars.COMPANY_FUND_STAGE_CUTOVER_LOCK }}
-          ENV_STARTED: ${{ vars.COMPANY_FUND_STAGE_CUTOVER_STARTED_AT }}
-          PREFLIGHT_CONTROL_TOKEN: ${{ needs.control-preflight.outputs.control_token }}
-          PREFLIGHT_BASELINE_DIGEST: ${{ needs.control-preflight.outputs.baseline_digest }}
-          REPO_LOCK_AFTER_APPROVAL: ${{ vars.COMPANY_FUND_STAGE_CUTOVER_LOCK_CONTROL }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          approved_stage_head=$(curl -fsS \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/ref/heads/stage" | jq -er '.object.sha')
-
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            [[ "$REPO_LOCK_AFTER_APPROVAL" == "$PREFLIGHT_CONTROL_TOKEN" ]] || { echo "ERROR: repository control token changed after approval"; exit 1; }
-            [[ "$REPO_LOCK_AFTER_APPROVAL" =~ ^([A-Za-z0-9][A-Za-z0-9._-]{0,127})@([0-9a-f]{64})$ ]] || { echo "ERROR: approved repository control token is invalid"; exit 1; }
-            [[ "${BASH_REMATCH[1]}" == "$RELEASE_RUN_ID" ]] || { echo "ERROR: approved repository control run mismatch"; exit 1; }
-            [[ "${BASH_REMATCH[2]}" == "$PREFLIGHT_BASELINE_DIGEST" ]] || { echo "ERROR: trusted baseline digest changed after approval"; exit 1; }
-            [[ "$ENV_LOCK" == "$RELEASE_RUN_ID" ]] || { echo "ERROR: stage environment lock mismatch"; exit 1; }
-            [[ "$ENV_STARTED" =~ ^([^@]+)@([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z)@([0-9a-f]{64})$ ]] || { echo "ERROR: cutover started tuple must be run@RFC3339Z@64hex"; exit 1; }
-            started_run="${BASH_REMATCH[1]}"
-            started_at="${BASH_REMATCH[2]}"
-            started_digest="${BASH_REMATCH[4]}"
-            [[ "$started_run" == "$RELEASE_RUN_ID" ]] || { echo "ERROR: cutover started run mismatch"; exit 1; }
-            date -u -d "$started_at" >/dev/null 2>&1 || { echo "ERROR: invalid cutover started timestamp"; exit 1; }
-            [[ "$started_digest" == "$PREFLIGHT_BASELINE_DIGEST" ]] || { echo "ERROR: cutover baseline digest mismatch"; exit 1; }
-
-            if [[ "$ARTIFACT_REF" != "$approved_stage_head" ]]; then
-              comparison_status=$(curl -fsS \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/compare/${ARTIFACT_REF}...${approved_stage_head}" | jq -er '.status')
-              [[ "$comparison_status" == "ahead" ]] || { echo "ERROR: approved artifact is no longer stage-reachable"; exit 1; }
-            fi
-            if [[ "$RELEASE_MODE" == "standard" && "$RELEASE_RUN_ID" == *_FINAL ]]; then
-              [[ "$ARTIFACT_REF" == "$approved_stage_head" ]] || { echo "ERROR: FINAL standard must use exact approved stage HEAD"; exit 1; }
-            fi
-          else
-            [[ -z "$PREFLIGHT_CONTROL_TOKEN" && -z "$PREFLIGHT_BASELINE_DIGEST" && -z "$REPO_LOCK_AFTER_APPROVAL" && -z "$ENV_LOCK" && -z "$ENV_STARTED" ]] || {
-              echo "ERROR: standard push blocked by stage release controls"
-              exit 1
-            }
-          fi
-
-      - name: Checkout exact approved artifact
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # v6.0.3
+      - name: Checkout stage HEAD
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
-          ref: ${{ needs.control-preflight.outputs.artifact_ref }}
+          ref: ${{ github.sha }}
 
-      - name: Verify exact checkout
+      - name: Verify checkout SHA
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$ARTIFACT_REF" ]] || { echo "ERROR: checkout SHA mismatch"; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$ARTIFACT_REF" ]] || {
+            echo "ERROR: checkout SHA mismatch" >&2
+            exit 1
+          }
 
       - name: Verify stage secrets
         env:
@@ -214,44 +43,40 @@ jobs:
           STAGE_USER: ${{ secrets.STAGE_USER }}
           STAGE_SSH_KEY: ${{ secrets.STAGE_SSH_KEY }}
         run: |
-          [[ -n "$STAGE_HOST" && -n "$STAGE_USER" && -n "$STAGE_SSH_KEY" ]] || { echo "ERROR: missing stage secrets"; exit 1; }
+          [[ -n "$STAGE_HOST" && -n "$STAGE_USER" && -n "$STAGE_SSH_KEY" ]] || {
+            echo "ERROR: missing stage secrets" >&2
+            exit 1
+          }
 
       - name: Setup Go
-        if: env.RELEASE_MODE == 'standard' || env.RELEASE_MODE == 'migration-only' || env.RELEASE_MODE == 'server-dark'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build exact release package
-        if: env.RELEASE_MODE == 'standard' || env.RELEASE_MODE == 'migration-only' || env.RELEASE_MODE == 'server-dark' || env.RELEASE_MODE == 'workers-off-current'
+      - name: Build standard release package
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p deploy/package
           cp scripts/deploy-remote.sh deploy/package/deploy-remote.sh
           printf '%s\n' "$ARTIFACT_REF" > deploy/package/artifact-sha
-          if [[ "$RELEASE_MODE" == "standard" || "$RELEASE_MODE" == "migration-only" ]]; then
-            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-              -ldflags="-s -w -X main.version=${ARTIFACT_REF}" \
-              -o deploy/package/monera-migrate ./cmd/migrate
-            gzip -f deploy/package/monera-migrate
-            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-              -ldflags="-s -w" \
-              -o deploy/package/company-fund-release ./cmd/company-fund-release
-            gzip -f deploy/package/company-fund-release
-          fi
-          if [[ "$RELEASE_MODE" == "standard" || "$RELEASE_MODE" == "server-dark" ]]; then
-            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-              -ldflags="-s -w -X main.version=${ARTIFACT_REF}" \
-              -o deploy/package/monera-server ./cmd/server
-            gzip -f deploy/package/monera-server
-          fi
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w -X main.version=${ARTIFACT_REF}" \
+            -o deploy/package/monera-migrate ./cmd/migrate
+          gzip -f deploy/package/monera-migrate
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w" \
+            -o deploy/package/company-fund-release ./cmd/company-fund-release
+          gzip -f deploy/package/company-fund-release
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w -X main.version=${ARTIFACT_REF}" \
+            -o deploy/package/monera-server ./cmd/server
+          gzip -f deploy/package/monera-server
           tar -czf deploy/release.tgz -C deploy/package .
 
-      - name: Copy approved stage package
-        if: env.RELEASE_MODE == 'standard' || env.RELEASE_MODE == 'migration-only' || env.RELEASE_MODE == 'server-dark' || env.RELEASE_MODE == 'workers-off-current'
-        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345  # v1.0.0
+      - name: Copy stage package
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ secrets.STAGE_HOST }}
           username: ${{ secrets.STAGE_USER }}
@@ -260,12 +85,10 @@ jobs:
           target: /tmp/monera-stage-deploy-${{ github.run_id }}-${{ github.run_attempt }}
           strip_components: 1
 
-      - name: Execute stage release mode
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1.2.5
+      - name: Execute standard stage deploy
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
-          RELEASE_MODE: ${{ env.RELEASE_MODE }}
           ARTIFACT_REF: ${{ env.ARTIFACT_REF }}
-          INSTALLED_SERVER_SHA: ${{ env.INSTALLED_SERVER_SHA }}
           EXPECTED_MIGRATION_CEILING: ${{ env.EXPECTED_MIGRATION_CEILING }}
           DEPLOY_ROOT: /tmp/monera-stage-deploy-${{ github.run_id }}-${{ github.run_attempt }}
         with:
@@ -273,39 +96,20 @@ jobs:
           username: ${{ secrets.STAGE_USER }}
           key: ${{ secrets.STAGE_SSH_KEY }}
           command_timeout: 20m
-          envs: RELEASE_MODE,ARTIFACT_REF,INSTALLED_SERVER_SHA,EXPECTED_MIGRATION_CEILING,DEPLOY_ROOT
+          envs: ARTIFACT_REF,EXPECTED_MIGRATION_CEILING,DEPLOY_ROOT
           script: |
             set -euo pipefail
             APP_DIR=/opt/monera-digital
             DEPLOY_SRC="$DEPLOY_ROOT/package"
             trap 'rm -rf "$DEPLOY_ROOT"' EXIT
-            case "$RELEASE_MODE" in
-              standard|migration-only|server-dark|workers-off-current)
-                [[ -f "$DEPLOY_ROOT/release.tgz" ]] || { echo "ERROR: exact approved release archive is missing"; exit 1; }
-                rm -rf "$DEPLOY_SRC"
-                mkdir -p "$DEPLOY_SRC"
-                tar -xzf "$DEPLOY_ROOT/release.tgz" -C "$DEPLOY_SRC"
-                runner="$DEPLOY_SRC/deploy-remote.sh"
-                [[ -f "$runner" ]] || { echo "ERROR: exact approved release runner is missing"; exit 1; }
-                ;;
-              workers-on-installed)
-                rm -rf "$DEPLOY_SRC"
-                mkdir -p "$DEPLOY_SRC"
-                runner="$APP_DIR/deploy-remote.sh"
-                [[ -f "$runner" ]] || { echo "ERROR: trusted installed release runner is missing"; exit 1; }
-                ;;
-              *)
-                echo "ERROR: unsupported release mode"
-                exit 1
-                ;;
-            esac
-            release_args=(
-              --env test
-              --release-mode "$RELEASE_MODE"
-              --artifact-sha "$ARTIFACT_REF"
+            [[ -f "$DEPLOY_ROOT/release.tgz" ]] || { echo "ERROR: release archive missing" >&2; exit 1; }
+            rm -rf "$DEPLOY_SRC"
+            mkdir -p "$DEPLOY_SRC"
+            tar -xzf "$DEPLOY_ROOT/release.tgz" -C "$DEPLOY_SRC"
+            runner="$DEPLOY_SRC/deploy-remote.sh"
+            [[ -f "$runner" ]] || { echo "ERROR: deploy runner missing" >&2; exit 1; }
+            MONERA_DEPLOY_SRC="$DEPLOY_SRC" bash "$runner" \
+              --env test \
+              --release-mode standard \
+              --artifact-sha "$ARTIFACT_REF" \
               --expected-migration-ceiling "$EXPECTED_MIGRATION_CEILING"
-            )
-            if [[ -n "$INSTALLED_SERVER_SHA" ]]; then
-              release_args+=(--installed-server-sha "$INSTALLED_SERVER_SHA")
-            fi
-            MONERA_DEPLOY_SRC="$DEPLOY_SRC" bash "$runner" "${release_args[@]}"

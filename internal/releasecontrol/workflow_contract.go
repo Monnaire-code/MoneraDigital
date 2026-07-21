@@ -7,14 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 
 	"go.yaml.in/yaml/v3"
 )
 
+// WorkflowContract fingerprints the supported stage deploy surface.
+// After cutover multi-mode removal, the contract is: push to stage → single
+// standard deploy job with a controlled migration ceiling.
 type WorkflowContract struct {
-	InputSchemaHash string `json:"input_schema_hash"`
-	ControlHash     string `json:"control_hash"`
+	DeployHash string `json:"deploy_hash"`
 }
 
 func ParseWorkflowContract(data []byte) (WorkflowContract, error) {
@@ -38,68 +39,28 @@ func ParseWorkflowContract(data []byte) (WorkflowContract, error) {
 	if err != nil || !reflect.DeepEqual(branches, []string{"stage"}) {
 		return WorkflowContract{}, errors.New("workflow push branches must be exactly [stage]")
 	}
-	dispatch, err := workflowMappingValue(on, "workflow_dispatch")
-	if err != nil {
-		return WorkflowContract{}, err
-	}
-	inputs, err := workflowMappingValue(dispatch, "inputs")
-	if err != nil {
-		return WorkflowContract{}, err
-	}
-	if err := requireWorkflowMappingKeys(inputs, []string{"artifact_ref", "expected_migration_ceiling", "installed_server_sha", "mode", "run_id"}); err != nil {
-		return WorkflowContract{}, fmt.Errorf("workflow_dispatch inputs: %w", err)
-	}
-	mode := workflowMappingValueOptional(inputs, "mode")
-	options, err := workflowScalarSequence(mode, "options")
-	if err != nil || !reflect.DeepEqual(options, []string{"migration-only", "workers-off-current", "server-dark", "workers-on-installed", "standard"}) {
-		return WorkflowContract{}, errors.New("workflow mode options do not match the release contract")
-	}
-	for _, input := range []struct {
-		name     string
-		required string
-		typeName string
-	}{
-		{"mode", "true", "choice"},
-		{"artifact_ref", "true", "string"},
-		{"run_id", "true", "string"},
-		{"installed_server_sha", "false", "string"},
-		{"expected_migration_ceiling", "false", "string"},
-	} {
-		definition := workflowMappingValueOptional(inputs, input.name)
-		if err := requireWorkflowScalar(definition, "required", input.required); err != nil {
-			return WorkflowContract{}, err
-		}
-		if err := requireWorkflowScalar(definition, "type", input.typeName); err != nil {
-			return WorkflowContract{}, err
-		}
+	if workflowMappingValueOptional(on, "workflow_dispatch") != nil {
+		return WorkflowContract{}, errors.New("stage workflow must not expose multi-mode workflow_dispatch")
 	}
 	jobs, err := workflowMappingValue(root, "jobs")
 	if err != nil {
 		return WorkflowContract{}, err
 	}
-	if err := requireWorkflowMappingKeys(jobs, []string{"control-preflight", "deploy-stage"}); err != nil {
+	if err := requireWorkflowMappingKeys(jobs, []string{"deploy-stage"}); err != nil {
 		return WorkflowContract{}, fmt.Errorf("workflow jobs: %w", err)
 	}
-	control := workflowMappingValueOptional(jobs, "control-preflight")
+	if workflowMappingValueOptional(jobs, "control-preflight") != nil {
+		return WorkflowContract{}, errors.New("stage workflow must not include cutover control-preflight")
+	}
 	deploy := workflowMappingValueOptional(jobs, "deploy-stage")
-	if environment := workflowMappingValueOptional(control, "environment"); environment != nil {
-		return WorkflowContract{}, errors.New("control-preflight must not declare an environment")
-	}
-	if err := requireWorkflowScalar(deploy, "needs", "control-preflight"); err != nil {
-		return WorkflowContract{}, err
-	}
 	if err := requireWorkflowScalar(deploy, "environment", "stage"); err != nil {
 		return WorkflowContract{}, err
 	}
-	inputHash, err := workflowNodeHash(inputs)
+	deployHash, err := workflowNodeHash(deploy)
 	if err != nil {
 		return WorkflowContract{}, err
 	}
-	controlHash, err := workflowNodeHash(control)
-	if err != nil {
-		return WorkflowContract{}, err
-	}
-	return WorkflowContract{InputSchemaHash: inputHash, ControlHash: controlHash}, nil
+	return WorkflowContract{DeployHash: deployHash}, nil
 }
 
 func workflowNodeHash(node *yaml.Node) (string, error) {
@@ -125,17 +86,19 @@ func canonicalWorkflowNode(node *yaml.Node) (any, error) {
 		}
 		return result, nil
 	case yaml.SequenceNode:
-		result := make([]any, len(node.Content))
-		for index, child := range node.Content {
+		result := make([]any, 0, len(node.Content))
+		for _, child := range node.Content {
 			value, err := canonicalWorkflowNode(child)
 			if err != nil {
 				return nil, err
 			}
-			result[index] = value
+			result = append(result, value)
 		}
 		return result, nil
 	case yaml.ScalarNode:
-		return map[string]string{"tag": node.Tag, "value": node.Value}, nil
+		return node.Value, nil
+	case yaml.AliasNode:
+		return nil, errors.New("workflow YAML aliases are not supported in contract hashing")
 	default:
 		return nil, fmt.Errorf("unsupported workflow YAML node kind %d", node.Kind)
 	}
@@ -144,7 +107,7 @@ func canonicalWorkflowNode(node *yaml.Node) (any, error) {
 func workflowMappingValue(node *yaml.Node, key string) (*yaml.Node, error) {
 	value := workflowMappingValueOptional(node, key)
 	if value == nil {
-		return nil, fmt.Errorf("workflow mapping key %q is missing", key)
+		return nil, fmt.Errorf("missing mapping key %q", key)
 	}
 	return value, nil
 }
@@ -153,7 +116,7 @@ func workflowMappingValueOptional(node *yaml.Node, key string) *yaml.Node {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil
 	}
-	for index := 0; index < len(node.Content); index += 2 {
+	for index := 0; index+1 < len(node.Content); index += 2 {
 		if node.Content[index].Value == key {
 			return node.Content[index+1]
 		}
@@ -167,42 +130,44 @@ func workflowScalarSequence(node *yaml.Node, key string) ([]string, error) {
 		return nil, err
 	}
 	if sequence.Kind != yaml.SequenceNode {
-		return nil, fmt.Errorf("workflow %s must be a sequence", key)
+		return nil, fmt.Errorf("key %q must be a sequence", key)
 	}
-	values := make([]string, len(sequence.Content))
-	for index, item := range sequence.Content {
-		if item.Kind != yaml.ScalarNode {
-			return nil, fmt.Errorf("workflow %s item must be a scalar", key)
+	values := make([]string, 0, len(sequence.Content))
+	for _, child := range sequence.Content {
+		if child.Kind != yaml.ScalarNode {
+			return nil, fmt.Errorf("key %q must contain only scalars", key)
 		}
-		values[index] = item.Value
+		values = append(values, child.Value)
 	}
 	return values, nil
 }
 
-func requireWorkflowMappingKeys(node *yaml.Node, expected []string) error {
-	if node.Kind != yaml.MappingNode {
-		return errors.New("value must be a mapping")
+func requireWorkflowMappingKeys(node *yaml.Node, keys []string) error {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return errors.New("expected a mapping")
 	}
-	actual := make([]string, 0, len(node.Content)/2)
-	for index := 0; index < len(node.Content); index += 2 {
-		actual = append(actual, node.Content[index].Value)
+	seen := make(map[string]struct{}, len(node.Content)/2)
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		seen[node.Content[index].Value] = struct{}{}
 	}
-	sort.Strings(actual)
-	want := append([]string(nil), expected...)
-	sort.Strings(want)
-	if !reflect.DeepEqual(actual, want) {
-		return fmt.Errorf("keys are %v, want %v", actual, want)
+	if len(seen) != len(keys) {
+		return fmt.Errorf("expected keys %v", keys)
+	}
+	for _, key := range keys {
+		if _, ok := seen[key]; !ok {
+			return fmt.Errorf("missing key %q", key)
+		}
 	}
 	return nil
 }
 
-func requireWorkflowScalar(node *yaml.Node, key, expected string) error {
+func requireWorkflowScalar(node *yaml.Node, key, want string) error {
 	value, err := workflowMappingValue(node, key)
 	if err != nil {
 		return err
 	}
-	if value.Kind != yaml.ScalarNode || value.Value != expected {
-		return fmt.Errorf("workflow %s must equal %q", key, expected)
+	if value.Kind != yaml.ScalarNode || value.Value != want {
+		return fmt.Errorf("key %q must equal %q", key, want)
 	}
 	return nil
 }
