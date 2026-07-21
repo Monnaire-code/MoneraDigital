@@ -45,3 +45,11 @@ _Avoid_: Account Channel
 **Manual Transaction**:
 A company-fund ledger movement entered by an authorized finance operator and recorded with the Manual Transaction Source. It may reference any Enabled Account, including an Other Account.
 _Avoid_: Other Transaction
+
+**Voided Manual Transaction**:
+A Manual Transaction that finance has voided so it no longer counts on the Effective Book. The ledger row remains stored with void metadata for audit; it is not physically removed.
+_Avoid_: Deleted Transaction, Soft-deleted Transaction as formal domain names (UI may still say “delete”)
+
+**Effective Book**:
+The company-fund ledger movements that still count for finance views and balances. A Voided Manual Transaction is excluded from the Effective Book.
+_Avoid_: Treating every stored historical row as current book activity

@@ -46,7 +46,7 @@ func TestDeployRemoteModeTrace(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=false\nSAFEHERON_TRANSACTION_ROUTING_MODE=capture-only\nDATABASE_URL=postgresql://test@localhost/test\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"059","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"060","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -206,14 +206,14 @@ func TestControlledReleaseStateRejectsOutOfOrderAndPersistsEveryPhase(t *testing
 			t.Fatalf("out-of-order controlled phase succeeded: %s", output)
 		}
 	}
-	run(false, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "059")
+	run(false, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "060")
 	if err := os.WriteFile(filepath.Join(appDir, "release-state.tsv"), []byte(oldSHA+"\tworkers-on-installed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	run(false, "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", newSHA, "--installed-server-sha", oldSHA)
-	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "059")
-	assertFileContent(t, filepath.Join(appDir, "release-state.tsv"), newSHA+"\tmigration-059\n")
-	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "059")
+	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "060")
+	assertFileContent(t, filepath.Join(appDir, "release-state.tsv"), newSHA+"\tmigration-060\n")
+	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "060")
 	run(true, "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", newSHA, "--installed-server-sha", oldSHA)
 	run(true, "--env", "test", "--release-mode", "server-dark", "--artifact-sha", newSHA)
 	run(true, "--env", "test", "--release-mode", "workers-on-installed", "--artifact-sha", newSHA)
@@ -242,12 +242,12 @@ func TestControlledReleaseStartsWithTheCurrentExactMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("bash", filepath.Join(root, "scripts", "deploy-remote.sh"), "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "059")
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "deploy-remote.sh"), "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "060")
 	cmd.Env = append(os.Environ(), "MONERA_DEPLOY_FAKE=1", "MONERA_DEPLOY_ENFORCE_RELEASE_STATE=1", "MONERA_DEPLOY_APP_DIR="+appDir, "MONERA_DEPLOY_SRC="+deployDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("current exact migration failed after a completed release: %v\n%s", err, output)
 	}
-	assertFileContent(t, filepath.Join(appDir, "release-state.tsv"), newSHA+"\tmigration-059\n")
+	assertFileContent(t, filepath.Join(appDir, "release-state.tsv"), newSHA+"\tmigration-060\n")
 }
 
 func TestDeployRemoteWorkersOffAcceptsLegacyEmbeddedSHAWithoutManifest(t *testing.T) {
@@ -321,7 +321,7 @@ func TestDeployRemoteFailureContracts(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=false\nSAFEHERON_TRANSACTION_ROUTING_MODE=capture-only\nDATABASE_URL=postgresql://test@localhost/test\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"059","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"060","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("bash", script, "--env", "test", "--release-mode", test.mode, "--artifact-sha", sha, "--expected-migration-ceiling", "A")
@@ -444,7 +444,7 @@ func TestDeployRemoteServerFailureRetainsSafeArtifactAndStops(t *testing.T) {
 		t.Fatalf("health failure unexpectedly succeeded: %s", output)
 	}
 	assertFileContent(t, filepath.Join(appDir, "monera-server"), "new-server\n")
-	assertFileContent(t, filepath.Join(appDir, "release-manifest.json"), `{"server_sha":"`+sha+`","migration_ceiling":"059","routing_mode":"capture-only","safe_artifact":true}`+"\n")
+	assertFileContent(t, filepath.Join(appDir, "release-manifest.json"), `{"server_sha":"`+sha+`","migration_ceiling":"060","routing_mode":"capture-only","safe_artifact":true}`+"\n")
 	assertFileContent(t, serviceState, "stopped\n")
 	trace, err := os.ReadFile(tracePath)
 	if err != nil {
@@ -478,7 +478,7 @@ func TestDeployRemoteWorkersOnRollbackLeavesWorkersOffAndVerifiedOrStopped(t *te
 	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=false\nSAFEHERON_TRANSACTION_ROUTING_MODE=capture-only\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"059","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+sha+`","migration_ceiling":"060","routing_mode":"capture-only","safe_artifact":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", script, "--env", "test", "--release-mode", "workers-on-installed", "--artifact-sha", sha)

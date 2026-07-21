@@ -45,8 +45,8 @@ func TestStageWorkflowStructure(t *testing.T) {
 			t.Errorf("control-preflight missing %q", required)
 		}
 	}
-	if !strings.Contains(controlScript, `migration_ceiling="059"`) {
-		t.Error("stage push must pass the exact approved migration ceiling 059")
+	if !strings.Contains(controlScript, `migration_ceiling="060"`) {
+		t.Error("stage push must pass the exact approved migration ceiling 060")
 	}
 	if strings.Contains(controlScript, `migration_ceiling=""`) {
 		t.Error("stage push must not fall back to the default full pending migration path")
