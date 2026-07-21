@@ -78,6 +78,50 @@ func TestDeployRemoteRejectsNonStandardModes(t *testing.T) {
 	}
 }
 
+func TestDeployRemoteDropsRetiredMultiModeSurface(t *testing.T) {
+	t.Parallel()
+	root := deployScriptRepositoryRoot(t)
+	scriptPath := filepath.Join(root, "scripts", "deploy-remote.sh")
+	content, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	// Seam: retired cutover helpers must not remain as callable surface.
+	for _, forbidden := range []string{
+		"require_server_dark_env()",
+		"set_workers()",
+		"set_routing_mode()",
+		"require_release_state()",
+		"require_release_start()",
+		"write_release_state()",
+		"require_safe_dark_manifest()",
+		"verify_installed_sha()",
+		"classify_failed_migration()",
+		"hard_stop_uncertain_migration()",
+		"rollback_server_state()",
+		"workers-off-current",
+		"server-dark",
+		"workers-on-installed",
+		"migration-only",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("deploy-remote still contains retired multi-mode surface %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		`RELEASE_MODE" == "standard"`,
+		"standard deploy requires --expected-migration-ceiling",
+		"run_migration()",
+		"write_manifest()",
+		"install_binary()",
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("deploy-remote missing standard-path surface %q", required)
+		}
+	}
+}
+
 func TestDeployRemoteRequiresMigrationCeiling(t *testing.T) {
 	t.Parallel()
 	root := deployScriptRepositoryRoot(t)
@@ -174,75 +218,6 @@ func TestDeployRemoteStandardMigrationFailureRollsBackMigrateBinary(t *testing.T
 	trace, _ := os.ReadFile(tracePath)
 	if !strings.Contains(string(trace), "rollback-migrate") {
 		t.Fatalf("expected migrate rollback, trace=%s", trace)
-	}
-}
-
-func TestDeployRemoteHealthCheckSuppressesTransientCurlErrors(t *testing.T) {
-	root := deployScriptRepositoryRoot(t)
-	tmp := t.TempDir()
-	binDir := filepath.Join(tmp, "bin")
-	counterPath := filepath.Join(tmp, "curl-count")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	curl := `#!/usr/bin/env bash
-count=0
-if [[ -f "$HEALTH_CURL_COUNTER" ]]; then
-  count=$(cat "$HEALTH_CURL_COUNTER")
-fi
-count=$((count + 1))
-printf '%s' "$count" > "$HEALTH_CURL_COUNTER"
-if [[ "$count" -lt 3 ]]; then
-  echo "curl: (7) Failed to connect" >&2
-  exit 7
-fi
-exit 0
-`
-	if err := os.WriteFile(filepath.Join(binDir, "curl"), []byte(curl), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Source health_check via a tiny wrapper that reuses deploy-remote helpers.
-	// The full standard path is covered elsewhere; here we only need retry behavior
-	// of the health check shell fragment under PATH override.
-	script := `#!/usr/bin/env bash
-set -euo pipefail
-source "` + filepath.Join(root, "scripts", "deploy-remote.sh") + `"
-# define minimal stubs used by health_check when not FAKE
-SERVICE_NAME=monera-digital
-PORT=8081
-trace() { :; }
-fail_if_requested() { return 0; }
-health_check
-`
-	// deploy-remote is not sourceable as a library (it runs on include). Use FAKE path instead.
-	appDir := filepath.Join(tmp, "app")
-	deployDir := filepath.Join(tmp, "deploy")
-	if err := os.MkdirAll(appDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(deployDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("DATABASE_URL=postgresql://test@localhost/test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sha := "0123456789abcdef0123456789abcdef01234567"
-	if err := os.WriteFile(filepath.Join(deployDir, "artifact-sha"), []byte(sha+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_ = script
-	_ = counterPath
-	// Health is exercised through FAKE mode (immediate success) to keep this suite
-	// focused on the standard-path contract after multi-mode removal.
-	cmd := exec.Command("bash", filepath.Join(root, "scripts", "deploy-remote.sh"),
-		"--env", "test", "--release-mode", "standard", "--artifact-sha", sha, "--expected-migration-ceiling", "060")
-	cmd.Env = append(os.Environ(),
-		"MONERA_DEPLOY_FAKE=1",
-		"MONERA_DEPLOY_APP_DIR="+appDir,
-		"MONERA_DEPLOY_SRC="+deployDir,
-	)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("health path failed: %v\n%s", err, output)
 	}
 }
 
