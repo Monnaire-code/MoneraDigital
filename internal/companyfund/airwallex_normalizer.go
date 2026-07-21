@@ -638,7 +638,7 @@ func (source AirwallexFinancialTransactionSourceMetadata) validate() error {
 }
 
 func validateAirwallexConfiguredAccount(source CompanyFundAccount, providerAccountKey string) (CompanyFundAccount, string, error) {
-	if source.ID <= 0 || source.Channel != ChannelAirwallex || !source.Enabled {
+	if source.ID <= 0 || source.Channel != AccountChannelAirwallex || !source.Enabled {
 		return CompanyFundAccount{}, "", fmt.Errorf("configured Airwallex account must be enabled with a positive ID")
 	}
 	configuredKey, err := normalizeAirwallexNormalizationRequired("configured Airwallex provider account key", source.ProviderAccountKey, maxProviderFactAccountKeyBytes)

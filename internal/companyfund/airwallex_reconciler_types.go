@@ -175,7 +175,7 @@ func ResolveAirwallexSingleAccountScope(snapshot *AccountRegistrySnapshot, login
 	var selected CompanyFundAccount
 	found := false
 	for _, account := range snapshot.Accounts() {
-		if account.Channel != ChannelAirwallex || !account.Enabled {
+		if account.Channel != AccountChannelAirwallex || !account.Enabled {
 			continue
 		}
 		if found {

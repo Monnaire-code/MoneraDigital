@@ -21,13 +21,8 @@ func TestInterestScheduler_CalculateDailyInterest_Success(t *testing.T) {
 	mockWealthRepo := new(MockWealthRepository)
 	mockAccountRepo := new(MockAccountRepositoryV2)
 	mockJournalRepo := new(MockJournalRepository)
-
-	scheduler := &InterestScheduler{
-		repo:        mockWealthRepo,
-		accountRepo: mockAccountRepo,
-		journalRepo: mockJournalRepo,
-		metrics:     NewSchedulerMetrics(),
-	}
+	mockDailyInterestRepo := new(MockDailyInterestRepository)
+	scheduler := NewInterestScheduler(mockWealthRepo, mockAccountRepo, mockJournalRepo, mockDailyInterestRepo)
 
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
@@ -56,8 +51,9 @@ func TestInterestScheduler_CalculateDailyInterest_Success(t *testing.T) {
 	}, nil)
 
 	mockWealthRepo.On("UpdateInterestAccrued", mock.Anything, int64(1), mock.AnythingOfType("string")).Return(nil)
+	mockDailyInterestRepo.On("CreateWithDate", mock.Anything, mock.AnythingOfType("*repository.DailyInterestModel"), (*time.Time)(nil)).Return(nil)
 
-	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background())
+	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background(), nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, ordersProcessed)
@@ -66,6 +62,7 @@ func TestInterestScheduler_CalculateDailyInterest_Success(t *testing.T) {
 	hasInterest, _ := utils.GT(totalInterest, "0")
 	assert.True(t, hasInterest)
 	mockWealthRepo.AssertExpectations(t)
+	mockDailyInterestRepo.AssertExpectations(t)
 }
 
 func TestInterestScheduler_CalculateDailyInterest_NoActiveOrders(t *testing.T) {
@@ -82,7 +79,7 @@ func TestInterestScheduler_CalculateDailyInterest_NoActiveOrders(t *testing.T) {
 
 	mockWealthRepo.On("GetActiveOrders", mock.Anything).Return([]*repository.WealthOrderModel{}, nil)
 
-	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background())
+	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background(), nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, ordersProcessed)
@@ -118,7 +115,7 @@ func TestInterestScheduler_CalculateDailyInterest_SkipStartDate(t *testing.T) {
 		},
 	}, nil)
 
-	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background())
+	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background(), nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, ordersProcessed)
@@ -155,7 +152,7 @@ func TestInterestScheduler_CalculateDailyInterest_SkipAlreadyAccrued(t *testing.
 		},
 	}, nil)
 
-	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background())
+	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background(), nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, ordersProcessed)
@@ -177,7 +174,7 @@ func TestInterestScheduler_CalculateDailyInterest_DatabaseError(t *testing.T) {
 
 	mockWealthRepo.On("GetActiveOrders", mock.Anything).Return(nil, assert.AnError)
 
-	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background())
+	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background(), nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, 0, ordersProcessed)
@@ -222,7 +219,7 @@ func TestInterestScheduler_CalculateDailyInterest_AccrueError(t *testing.T) {
 
 	mockWealthRepo.On("AccrueInterest", mock.Anything, int64(1), mock.AnythingOfType("string"), today).Return(assert.AnError)
 
-	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background())
+	ordersProcessed, totalInterest, err := scheduler.CalculateDailyInterest(context.Background(), nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, ordersProcessed)

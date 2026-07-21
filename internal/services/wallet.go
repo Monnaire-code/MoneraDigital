@@ -409,7 +409,7 @@ func (s *WalletService) GetAddressIncomeHistory(ctx context.Context, userID int,
 // 优先从 Core API 获取，如果失败则从本地数据库获取
 func (s *WalletService) GetWalletAddress(ctx context.Context, userID int, req dto.GetWalletAddressRequest) (*dto.WalletAddress, error) {
 	logger.Info("[DEBUG-DEPOSIT] GetWalletAddress called", "userId", userID, "productCode", req.ProductCode, "currency", req.Currency)
-	
+
 	// 优先从 Core API 获取 (use full format for Core API)
 	if s.coreAPIClient != nil {
 		coreCurrency := currency.ToFullFormat(req.Currency)
@@ -419,8 +419,8 @@ func (s *WalletService) GetWalletAddress(ctx context.Context, userID int, req dt
 			ProductCode: req.ProductCode,
 			Currency:    coreCurrency,
 		})
-		logger.Info("[DEBUG-DEPOSIT] Core API response", "address", addressInfo.Address, "addressType", addressInfo.AddressType, "error", err)
-		if err == nil {
+		if err == nil && addressInfo != nil {
+			logger.Info("[DEBUG-DEPOSIT] Core API response", "address", addressInfo.Address, "addressType", addressInfo.AddressType)
 			// Validate that returned address matches requested network
 			if isAddressValidForCurrency(addressInfo.Address, req.Currency) {
 				return &dto.WalletAddress{
@@ -431,8 +431,9 @@ func (s *WalletService) GetWalletAddress(ctx context.Context, userID int, req dt
 			}
 			logger.Warn("[DEBUG-DEPOSIT] Address does not match requested currency, falling back to database", "address", addressInfo.Address, "currency", req.Currency)
 		}
-		// 如果 Core API 返回错误，继续尝试从本地数据库获取
-		logger.Info("Core API GetAddress failed, falling back to local database", "error", err.Error())
+		// Core API failure, an empty response, or a network mismatch all fall
+		// back to the locally recorded wallet without dereferencing a nil error.
+		logger.Info("Core API GetAddress did not provide a usable address, falling back to local database", "error", err)
 	}
 
 	// 从本地数据库获取钱包信息作为降级方案
@@ -444,32 +445,27 @@ func (s *WalletService) GetWalletAddress(ctx context.Context, userID int, req dt
 		return nil, fmt.Errorf("wallet not found")
 	}
 
-	// 解析 addresses JSON 并获取对应 currency 的地址
+	// 解析 addresses JSON，仅获取请求币种明确绑定的地址。
 	var address string
 	if wallet.Addresses.Valid && wallet.Addresses.String != "" {
 		addresses := make(map[string]string)
 		if err := json.Unmarshal([]byte(wallet.Addresses.String), &addresses); err != nil {
 			logger.Info("Failed to parse addresses JSON", "error", err.Error())
 		} else {
-			// 优先查找对应 currency 的地址
 			address = addresses[req.Currency]
-			// 如果找不到，尝试查找任一地址
-			if address == "" {
-				for _, v := range addresses {
-					address = v
-					break
-				}
+			fullCurrency := currency.ToFullFormat(req.Currency)
+			if address == "" && fullCurrency != req.Currency {
+				address = addresses[fullCurrency]
 			}
 		}
 	}
-
-	// 如果没有找到地址，尝试使用单一的 address 字段
-	if address == "" && wallet.Address.Valid && wallet.Address.String != "" {
+	if address == "" && wallet.Currency != "" && wallet.Address.Valid &&
+		currency.ToFullFormat(wallet.Currency) == currency.ToFullFormat(req.Currency) {
 		address = wallet.Address.String
 	}
 
-	if address == "" {
-		return nil, fmt.Errorf("wallet address not found")
+	if !isAddressValidForCurrency(address, req.Currency) {
+		return nil, fmt.Errorf("wallet address not found for currency %s", req.Currency)
 	}
 
 	return &dto.WalletAddress{
@@ -498,26 +494,26 @@ func convertUserWalletToRequest(uw *models.UserWallet) *models.WalletCreationReq
 	}
 }
 
-
-// isAddressValidForCurrency checks if an address matches the expected network
-func isAddressValidForCurrency(address, currency string) bool {
+// isAddressValidForCurrency checks if an address matches the expected network.
+func isAddressValidForCurrency(address, currencyCode string) bool {
 	if address == "" {
 		return false
 	}
 
-	// TRC20 addresses start with T
-	if currency == "USDT_TRC20" || currency == "TRC20" {
+	fullCurrency := currency.ToFullFormat(currencyCode)
+	network := currency.NetworkFromCurrency(fullCurrency)
+	if network == "" {
+		network = currency.NormalizeNetwork(currencyCode)
+	}
+
+	switch network {
+	case "TRC20", "TRON_TESTNET", "TRX(SHASTA)_TRON_TESTNET":
 		return len(address) == 34 && address[0] == 'T'
-	}
-
-	// ERC20 and BEP20 addresses start with 0x
-	if currency == "USDT_ERC20" || currency == "ERC20" ||
-		currency == "USDT_BEP20" || currency == "BEP20" {
+	case "ERC20", "BEP20":
 		return len(address) == 42 && address[:2] == "0x"
+	default:
+		return false
 	}
-
-	// For unknown currency, just check it's not empty
-	return address != ""
 }
 
 // isTestnetCurrency checks if the currency is a testnet currency

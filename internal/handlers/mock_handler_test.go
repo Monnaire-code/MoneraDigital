@@ -120,14 +120,15 @@ func (m *MockCoreAPIClientForHandler) GetIncomeHistory(ctx context.Context, req 
 func newMockHandler() *Handler {
 	mockRepo := NewMockWalletRepository()
 	mockCoreAPI := new(MockCoreAPIClientForHandler)
+	const testEVMAddress = "0x1111111111111111111111111111111111111111"
 	mockCoreAPI.On("CreateWallet", mock.Anything, mock.Anything).Return(&coreapi.CreateWalletResponse{
 		WalletID:  "wallet_test_123",
-		Address:   "0xTestAddress",
-		Addresses: map[string]string{"USD": "0xTestAddress"},
+		Address:   testEVMAddress,
+		Addresses: map[string]string{"USD": testEVMAddress},
 		Status:    "SUCCESS",
 	}, nil)
 	mockCoreAPI.On("GetAddress", mock.Anything, mock.Anything).Return(&coreapi.AddressInfo{
-		Address: "0xTestAddress",
+		Address: testEVMAddress,
 	}, nil)
 	walletService := services.NewWalletService(mockRepo, mockCoreAPI)
 

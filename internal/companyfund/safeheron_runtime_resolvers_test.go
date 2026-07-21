@@ -76,7 +76,7 @@ func TestRegistrySafeheronTransactionMappingResolver_SucceedsAfterRegistryRefres
 		t.Fatal("stale empty registry must not resolve a company transaction")
 	}
 	accounts = []CompanyFundAccount{{
-		ID: 77, Channel: ChannelSafeheron, ProviderAccountKey: "new-safeheron-account",
+		ID: 77, Channel: AccountChannelSafeheron, ProviderAccountKey: "new-safeheron-account",
 		NormalizedAddress: "0xc4f60c9b02edabba16c9df0afaccec8acf67381f", NetworkFamily: "EVM", Enabled: true,
 	}}
 	if err := registry.Refresh(context.Background()); err != nil {
@@ -119,8 +119,8 @@ func TestRegistrySafeheronRuntimeResolvers_UseExactConfiguredAccountAndAssetPoli
 
 func TestRegistrySafeheronTransactionMappingResolver_FailsClosedOnAmbiguousCoinKey(t *testing.T) {
 	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
-		{ID: 41, Channel: ChannelSafeheron, ProviderAccountKey: "safe-evm", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
-		{ID: 42, Channel: ChannelSafeheron, ProviderAccountKey: "safe-tron", NormalizedAddress: "TAbC", NetworkFamily: "TRON", Enabled: true},
+		{ID: 41, Channel: AccountChannelSafeheron, ProviderAccountKey: "safe-evm", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
+		{ID: 42, Channel: AccountChannelSafeheron, ProviderAccountKey: "safe-tron", NormalizedAddress: "TAbC", NetworkFamily: "TRON", Enabled: true},
 	}, []AccountAssetPolicy{
 		{ID: 51, AccountID: 41, Asset: AssetIdentity{Currency: "USDT", ChainCode: "ETHEREUM", ProviderAssetKey: "AMBIGUOUS"}, Enabled: true},
 		{ID: 52, AccountID: 42, Asset: AssetIdentity{Currency: "USDT", ChainCode: "TRON", ProviderAssetKey: "AMBIGUOUS"}, Enabled: true},
@@ -139,7 +139,7 @@ func TestRegistrySafeheronTransactionMappingResolver_FailsClosedOnAmbiguousCoinK
 
 func TestRegistrySafeheronTransactionMappingResolver_CatalogHitAndPolicylessFallback(t *testing.T) {
 	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
-		{ID: 41, Channel: ChannelSafeheron, ProviderAccountKey: "safe-evm", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
+		{ID: 41, Channel: AccountChannelSafeheron, ProviderAccountKey: "safe-evm", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
 	}, nil, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)

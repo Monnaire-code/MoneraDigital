@@ -86,7 +86,7 @@ func TestAccountRegistry_SafeheronUsesWalletAddressWhenNormalizedAddressIsAbsent
 	registry := NewAccountRegistry(accountRegistryLoaderFunc(func(context.Context) ([]CompanyFundAccount, []AccountAssetPolicy, error) {
 		return []CompanyFundAccount{{
 			ID:            9,
-			Channel:       ChannelSafeheron,
+			Channel:       AccountChannelSafeheron,
 			WalletAddress: "0xAbCd",
 			NetworkFamily: "EVM",
 			AccountName:   "wallet-fallback",
@@ -104,8 +104,8 @@ func TestAccountRegistry_SafeheronUsesWalletAddressWhenNormalizedAddressIsAbsent
 func TestAccountRegistry_SafeheronProviderAccountKeyMembershipIsExactAndMayCoverMultipleWallets(t *testing.T) {
 	registry := NewAccountRegistry(accountRegistryLoaderFunc(func(context.Context) ([]CompanyFundAccount, []AccountAssetPolicy, error) {
 		return []CompanyFundAccount{
-			{ID: 21, Channel: ChannelSafeheron, ProviderAccountKey: "safe-vault-main", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
-			{ID: 22, Channel: ChannelSafeheron, ProviderAccountKey: "safe-vault-main", NormalizedAddress: "0xdef", NetworkFamily: "EVM", Enabled: true},
+			{ID: 21, Channel: AccountChannelSafeheron, ProviderAccountKey: "safe-vault-main", NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true},
+			{ID: 22, Channel: AccountChannelSafeheron, ProviderAccountKey: "safe-vault-main", NormalizedAddress: "0xdef", NetworkFamily: "EVM", Enabled: true},
 		}, nil, nil
 	}), time.Minute)
 	if err := registry.Refresh(context.Background()); err != nil {
@@ -179,7 +179,7 @@ func TestAccountRegistry_SnapshotIsStableAcrossRefreshAndConcurrentReaders(t *te
 		stateMu.RUnlock()
 		return []CompanyFundAccount{{
 			ID:                1,
-			Channel:           ChannelSafeheron,
+			Channel:           AccountChannelSafeheron,
 			NormalizedAddress: "0xabc",
 			NetworkFamily:     "EVM",
 			AccountName:       name,
@@ -317,7 +317,7 @@ func TestPostgresAccountRegistryLoader_LoadsEnabledRowsWithExactDecimalThreshold
 	if err != nil {
 		t.Fatalf("LoadCompanyFundAccounts() error = %v", err)
 	}
-	if len(accounts) != 1 || accounts[0].Channel != ChannelSafeheron || !accounts[0].Enabled {
+	if len(accounts) != 1 || accounts[0].Channel != AccountChannelSafeheron || !accounts[0].Enabled {
 		t.Fatalf("accounts = %#v", accounts)
 	}
 	if !accounts[0].MonitoringStartedAt.Equal(monitoringStartedAt) || accounts[0].FirstEnabledAt == nil || !accounts[0].FirstEnabledAt.Equal(firstEnabledAt) {
@@ -408,18 +408,18 @@ func TestAccountRegistry_ConcurrentRefreshSerializesOldAndNewSnapshots(t *testin
 
 func registryFixtureAccounts() []CompanyFundAccount {
 	return []CompanyFundAccount{
-		{ID: 1, Channel: ChannelSafeheron, ProviderAccountKey: "safe-vault-main", NormalizedAddress: "0xAbCd", NetworkFamily: "EVM", AccountName: "safe-evm", Enabled: true},
-		{ID: 2, Channel: ChannelAirwallex, ProviderAccountKey: "awx-main", AccountName: "airwallex", Enabled: true},
-		{ID: 3, Channel: ChannelSafeheron, NormalizedAddress: "TAbC123", NetworkFamily: "TRON", AccountName: "safe-tron", Enabled: true},
-		{ID: 4, Channel: ChannelSafeheron, NormalizedAddress: "0xdead", NetworkFamily: "EVM", AccountName: "disabled-safe", Enabled: false},
-		{ID: 5, Channel: ChannelAirwallex, ProviderAccountKey: "awx-disabled", AccountName: "disabled-airwallex", Enabled: false},
+		{ID: 1, Channel: AccountChannelSafeheron, ProviderAccountKey: "safe-vault-main", NormalizedAddress: "0xAbCd", NetworkFamily: "EVM", AccountName: "safe-evm", Enabled: true},
+		{ID: 2, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-main", AccountName: "airwallex", Enabled: true},
+		{ID: 3, Channel: AccountChannelSafeheron, NormalizedAddress: "TAbC123", NetworkFamily: "TRON", AccountName: "safe-tron", Enabled: true},
+		{ID: 4, Channel: AccountChannelSafeheron, NormalizedAddress: "0xdead", NetworkFamily: "EVM", AccountName: "disabled-safe", Enabled: false},
+		{ID: 5, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-disabled", AccountName: "disabled-airwallex", Enabled: false},
 	}
 }
 
 func registryAccountNamed(name string) []CompanyFundAccount {
 	return []CompanyFundAccount{{
 		ID:                1,
-		Channel:           ChannelSafeheron,
+		Channel:           AccountChannelSafeheron,
 		NormalizedAddress: "0xabc",
 		NetworkFamily:     "EVM",
 		AccountName:       name,

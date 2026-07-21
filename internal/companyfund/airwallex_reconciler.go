@@ -126,7 +126,7 @@ func (r *AirwallexFinancialTransactionsReconciler) Reconcile(
 }
 
 func (r *AirwallexFinancialTransactionsReconciler) validateInput(input AirwallexFinancialTransactionsReconcileInput) (AirwallexFinancialTransactionsReconcileInput, error) {
-	if input.Account.ID <= 0 || input.Account.Channel != ChannelAirwallex || !input.Account.Enabled {
+	if input.Account.ID <= 0 || input.Account.Channel != AccountChannelAirwallex || !input.Account.Enabled {
 		return AirwallexFinancialTransactionsReconcileInput{}, fmt.Errorf("Airwallex reconciliation requires an enabled configured company account")
 	}
 	configuredAccountKey, err := normalizeAirwallexReconcilerAccountKey(input.Account.ProviderAccountKey)

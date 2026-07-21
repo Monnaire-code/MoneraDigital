@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"monera-digital/internal/config"
 	"monera-digital/internal/models"
 	"monera-digital/internal/services"
 	"monera-digital/internal/utils"
@@ -42,13 +43,15 @@ func getTestDB(t *testing.T) *sql.DB {
 func TestRegisterAndLogin(t *testing.T) {
 	db := getTestDB(t)
 	defer db.Close()
+	utils.SetActivationCodeKey([]byte("0123456789abcdef0123456789abcdef"))
+	t.Cleanup(func() { utils.SetActivationCodeKey(nil) })
 
 	// Clean up test user
 	testEmail := fmt.Sprintf("test_%d@example.com", time.Now().UnixNano())
 	defer db.Exec("DELETE FROM users WHERE email = $1", testEmail)
 
 	jwtSecret := "test-jwt-secret-for-integration-tests"
-	authService := services.NewAuthService(db, jwtSecret)
+	authService := services.NewAuthService(db, jwtSecret, &config.Config{CoreAPIURL: "http://127.0.0.1:1"})
 
 	// 1. Test Register
 	req := models.RegisterRequest{
@@ -67,6 +70,9 @@ func TestRegisterAndLogin(t *testing.T) {
 	if user.ID == 0 {
 		t.Errorf("Expected non-zero ID")
 	}
+	if user.Status != models.UserStatusPending {
+		t.Errorf("Expected pending user status, got %q", user.Status)
+	}
 
 	// 2. Test Login
 	loginReq := models.LoginRequest{
@@ -79,8 +85,11 @@ func TestRegisterAndLogin(t *testing.T) {
 		t.Fatalf("Login failed: %v", err)
 	}
 
-	if resp.Token == "" {
-		t.Errorf("Expected token, got empty")
+	if !resp.RequiresActivation {
+		t.Error("Expected activation requirement for a newly registered user")
+	}
+	if resp.Token != "" {
+		t.Error("Expected no token before account activation")
 	}
 	if resp.User.Email != testEmail {
 		t.Errorf("Expected user email %s, got %s", testEmail, resp.User.Email)

@@ -55,10 +55,10 @@ func TestTwoFAHandler_Skip2FALogin_Success(t *testing.T) {
 	defer db.Close()
 
 	// Mock GetUserByID query - user without 2FA enabled
-	mock.ExpectQuery(`SELECT id, email, two_factor_enabled FROM users WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\s+FROM users WHERE id = \$1`).
 		WithArgs(1).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
-			AddRow(1, "test@example.com", false))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "status", "two_factor_enabled", "phone", "telegram", "wechat"}).
+			AddRow(1, "test@example.com", "ACTIVE", false, nil, nil, nil))
 
 	authService := services.NewAuthService(db, "test-secret", nil)
 	handler := &Handler{
@@ -102,7 +102,7 @@ func TestTwoFAHandler_Skip2FALogin_UserNotFound(t *testing.T) {
 	defer db.Close()
 
 	// Mock GetUserByID query - user not found
-	mock.ExpectQuery(`SELECT id, email, two_factor_enabled FROM users WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\s+FROM users WHERE id = \$1`).
 		WithArgs(999).
 		WillReturnError(sql.ErrNoRows)
 
@@ -142,10 +142,10 @@ func TestTwoFAHandler_Skip2FALogin_2FAEnabled(t *testing.T) {
 	defer db.Close()
 
 	// Mock GetUserByID query - user with 2FA enabled
-	mock.ExpectQuery(`SELECT id, email, two_factor_enabled FROM users WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\s+FROM users WHERE id = \$1`).
 		WithArgs(1).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
-			AddRow(1, "test@example.com", true))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "status", "two_factor_enabled", "phone", "telegram", "wechat"}).
+			AddRow(1, "test@example.com", "ACTIVE", true, nil, nil, nil))
 
 	authService := services.NewAuthService(db, "test-secret", nil)
 	handler := &Handler{
@@ -188,7 +188,7 @@ func TestTwoFAHandler_Skip2FALogin_DBError(t *testing.T) {
 	defer db.Close()
 
 	// Mock GetUserByID query - database error
-	mock.ExpectQuery(`SELECT id, email, two_factor_enabled FROM users WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\s+FROM users WHERE id = \$1`).
 		WithArgs(1).
 		WillReturnError(errors.New("database connection failed"))
 
@@ -265,10 +265,10 @@ func TestTwoFAHandler_Skip2FALogin_ResponseFormat(t *testing.T) {
 	defer db.Close()
 
 	// Mock GetUserByID query
-	mock.ExpectQuery(`SELECT id, email, two_factor_enabled FROM users WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\s+FROM users WHERE id = \$1`).
 		WithArgs(1).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
-			AddRow(1, "test@example.com", false))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "status", "two_factor_enabled", "phone", "telegram", "wechat"}).
+			AddRow(1, "test@example.com", "ACTIVE", false, nil, nil, nil))
 
 	authService := services.NewAuthService(db, "test-secret", nil)
 	handler := &Handler{

@@ -40,10 +40,10 @@ func TestGetMe_ReturnsTwoFactorEnabled(t *testing.T) {
 
 	// 4. Expect Query
 
-rows := sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
-		AddRow(1, "test@example.com", true)
+	rows := sqlmock.NewRows([]string{"id", "email", "status", "two_factor_enabled", "phone", "telegram", "wechat"}).
+		AddRow(1, "test@example.com", "ACTIVE", true, nil, nil, nil)
 
-	mock.ExpectQuery("SELECT id, email, two_factor_enabled FROM users WHERE id = \\$1").
+	mock.ExpectQuery("SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\\s+FROM users WHERE id = \\$1").
 		WithArgs(1).
 		WillReturnRows(rows)
 

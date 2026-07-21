@@ -182,7 +182,7 @@ func TestGetAddress_Success(t *testing.T) {
 
 	// 调用 API
 	result, err := client.GetAddress(context.Background(), GetAddressRequest{
-		UserID:      123,
+		UserID:      "123",
 		ProductCode: "C_SPOT",
 		Currency:    "USDT_ERC20",
 	})
@@ -221,7 +221,7 @@ func TestGetAddress_APIError(t *testing.T) {
 	client := NewClient(server.URL)
 
 	_, err := client.GetAddress(context.Background(), GetAddressRequest{
-		UserID:      999,
+		UserID:      "999",
 		ProductCode: "C_SPOT",
 		Currency:    "USDT_ERC20",
 	})
@@ -247,7 +247,7 @@ func TestGetAddress_InvalidResponse(t *testing.T) {
 	client := NewClient(server.URL)
 
 	_, err := client.GetAddress(context.Background(), GetAddressRequest{
-		UserID:      123,
+		UserID:      "123",
 		ProductCode: "C_SPOT",
 		Currency:    "USDT_ERC20",
 	})
@@ -268,7 +268,7 @@ func TestGetAddress_HTTPError(t *testing.T) {
 	client := NewClient("http://invalid-server:9999")
 
 	_, err := client.GetAddress(context.Background(), GetAddressRequest{
-		UserID:      123,
+		UserID:      "123",
 		ProductCode: "C_SPOT",
 		Currency:    "USDT_ERC20",
 	})
@@ -291,7 +291,7 @@ func TestGetAddress_NumericCode(t *testing.T) {
 	client := NewClient(server.URL)
 
 	result, err := client.GetAddress(context.Background(), GetAddressRequest{
-		UserID:      73,
+		UserID:      "73",
 		ProductCode: "X_FINANCE",
 		Currency:    "USDT_TRON",
 	})

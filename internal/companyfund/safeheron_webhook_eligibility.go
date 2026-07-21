@@ -186,7 +186,7 @@ func safeheronWebhookEligibilityConfigurationFingerprint(snapshot *AccountRegist
 
 	records := make([]string, 0)
 	for _, account := range snapshot.Accounts() {
-		if account.Channel != ChannelSafeheron || !account.Enabled {
+		if account.Channel != AccountChannelSafeheron || !account.Enabled {
 			continue
 		}
 		address := account.NormalizedAddress

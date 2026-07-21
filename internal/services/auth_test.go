@@ -3,6 +3,7 @@ package services
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -26,8 +27,13 @@ func newMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 // Helper to create mock config
 func newMockConfig() *config.Config {
 	return &config.Config{
-		CoreAPIURL: "http://localhost:8080",
+		CoreAPIURL: "http://127.0.0.1:1",
 	}
+}
+
+func TestMain(m *testing.M) {
+	utils.SetActivationCodeKey([]byte("0123456789abcdef0123456789abcdef"))
+	os.Exit(m.Run())
 }
 
 // ==================== AuthService Tests ====================
@@ -41,9 +47,14 @@ func TestAuthService_Register_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
 	mock.ExpectQuery(`INSERT INTO users`).
-		WithArgs("test@example.com", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "created_at", "two_factor_enabled"}).
-			AddRow(1, "test@example.com", time.Now(), false))
+		WithArgs("test@example.com", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "status", "created_at", "two_factor_enabled"}).
+			AddRow(1, "test@example.com", models.UserStatusPending, time.Now(), false))
+	for _, currency := range []string{"BTC", "ETH", "USDT", "USDC"} {
+		mock.ExpectExec(`INSERT INTO account`).
+			WithArgs(1, currency, sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+	}
 
 	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.RegisterRequest{
@@ -129,10 +140,10 @@ func TestAuthService_Login_Success(t *testing.T) {
 
 	hashedPassword, _ := utils.HashPassword("password123")
 
-	mock.ExpectQuery(`SELECT id, email, password, two_factor_enabled FROM users WHERE email = \$1`).
+	mock.ExpectQuery(`SELECT id, email, password, status, two_factor_enabled FROM users WHERE email = \$1`).
 		WithArgs("test@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "password", "two_factor_enabled"}).
-			AddRow(1, "test@example.com", hashedPassword, false))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "password", "status", "two_factor_enabled"}).
+			AddRow(1, "test@example.com", hashedPassword, models.UserStatusActive, false))
 
 	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.LoginRequest{
@@ -167,7 +178,7 @@ func TestAuthService_Login_UserNotFound(t *testing.T) {
 	db, mock := newMockDB(t)
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT id, email, password, two_factor_enabled FROM users WHERE email = \$1`).
+	mock.ExpectQuery(`SELECT id, email, password, status, two_factor_enabled FROM users WHERE email = \$1`).
 		WithArgs("nonexistent@example.com").
 		WillReturnError(sql.ErrNoRows)
 
@@ -197,10 +208,10 @@ func TestAuthService_Login_WrongPassword(t *testing.T) {
 
 	hashedPassword, _ := utils.HashPassword("correctpassword")
 
-	mock.ExpectQuery(`SELECT id, email, password, two_factor_enabled FROM users WHERE email = \$1`).
+	mock.ExpectQuery(`SELECT id, email, password, status, two_factor_enabled FROM users WHERE email = \$1`).
 		WithArgs("test@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "password", "two_factor_enabled"}).
-			AddRow(1, "test@example.com", hashedPassword, false))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "password", "status", "two_factor_enabled"}).
+			AddRow(1, "test@example.com", hashedPassword, models.UserStatusActive, false))
 
 	service := NewAuthService(db, "test-secret", newMockConfig())
 	req := models.LoginRequest{
@@ -226,7 +237,7 @@ func TestAuthService_Login_DBError(t *testing.T) {
 	db, mock := newMockDB(t)
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT id, email, password, two_factor_enabled FROM users WHERE email = \$1`).
+	mock.ExpectQuery(`SELECT id, email, password, status, two_factor_enabled FROM users WHERE email = \$1`).
 		WithArgs("test@example.com").
 		WillReturnError(errors.New("database connection failed"))
 
@@ -352,10 +363,10 @@ func TestAuthService_Skip2FAAndLogin_Success(t *testing.T) {
 	defer db.Close()
 
 	// Mock GetUserByID query
-	mock.ExpectQuery(`SELECT id, email, two_factor_enabled FROM users WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\s+FROM users WHERE id = \$1`).
 		WithArgs(1).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
-			AddRow(1, "test@example.com", false))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "status", "two_factor_enabled", "phone", "telegram", "wechat"}).
+			AddRow(1, "test@example.com", models.UserStatusActive, false, nil, nil, nil))
 
 	service := NewAuthService(db, "test-secret", newMockConfig())
 
@@ -390,7 +401,7 @@ func TestAuthService_Skip2FAAndLogin_UserNotFound(t *testing.T) {
 	defer db.Close()
 
 	// Mock GetUserByID query - user not found
-	mock.ExpectQuery(`SELECT id, email, two_factor_enabled FROM users WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\s+FROM users WHERE id = \$1`).
 		WithArgs(999).
 		WillReturnError(sql.ErrNoRows)
 
@@ -415,10 +426,10 @@ func TestAuthService_Skip2FAAndLogin_2FAEnabled(t *testing.T) {
 	defer db.Close()
 
 	// Mock GetUserByID query - user with 2FA enabled
-	mock.ExpectQuery(`SELECT id, email, two_factor_enabled FROM users WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\s+FROM users WHERE id = \$1`).
 		WithArgs(1).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "two_factor_enabled"}).
-			AddRow(1, "test@example.com", true))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "status", "two_factor_enabled", "phone", "telegram", "wechat"}).
+			AddRow(1, "test@example.com", models.UserStatusActive, true, nil, nil, nil))
 
 	service := NewAuthService(db, "test-secret", newMockConfig())
 
@@ -441,7 +452,7 @@ func TestAuthService_Skip2FAAndLogin_DBError(t *testing.T) {
 	defer db.Close()
 
 	// Mock GetUserByID query - database error
-	mock.ExpectQuery(`SELECT id, email, two_factor_enabled FROM users WHERE id = \$1`).
+	mock.ExpectQuery(`SELECT id, email, status, two_factor_enabled, phone, telegram, wechat\s+FROM users WHERE id = \$1`).
 		WithArgs(1).
 		WillReturnError(errors.New("database connection failed"))
 

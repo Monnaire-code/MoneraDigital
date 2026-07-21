@@ -45,10 +45,24 @@ LEFT JOIN company_fund_transaction_valuation_history AS current_history
 	ON current_history.transaction_id = movement.id
 	AND current_history.id = movement.current_valuation_history_id`
 
+// OTHER accounts are bookkeeping-only. A manual movement linked to one must
+// never acquire an automatic valuation, including through the repair sweep.
+const companyFundValuationCandidateExcludesOtherAccountsSQL = `
+	AND NOT EXISTS (
+		SELECT 1
+		FROM company_fund_accounts AS account
+		WHERE account.channel = 'OTHER'
+			AND (
+				account.id = movement.from_company_fund_account_id
+				OR account.id = movement.to_company_fund_account_id
+			)
+	)`
+
 const selectCompanyFundTransactionValuationCandidateSQL = `
 SELECT ` + companyFundValuationCandidateColumns + companyFundValuationCandidateFromSQL + `
 WHERE movement.id = $1
-	AND current_history.usd_valuation_source IS DISTINCT FROM 'MANUAL'`
+	AND current_history.usd_valuation_source IS DISTINCT FROM 'MANUAL'` +
+	companyFundValuationCandidateExcludesOtherAccountsSQL
 
 // Repair candidates are precisely rows that have never received a valuation
 // history or whose latest durable state says a retry can improve it. Completed
@@ -60,7 +74,8 @@ WHERE (
 	movement.current_valuation_history_id IS NULL
 	OR current_history.usd_valuation_status IN ('UNPRICED', 'STALE')
 )
-	AND current_history.usd_valuation_source IS DISTINCT FROM 'MANUAL'
+	AND current_history.usd_valuation_source IS DISTINCT FROM 'MANUAL'` +
+	companyFundValuationCandidateExcludesOtherAccountsSQL + `
 ORDER BY movement.first_seen_at, movement.id
 LIMIT $1`
 
@@ -71,6 +86,7 @@ WHERE (
 	OR current_history.usd_valuation_status IN ('UNPRICED', 'STALE')
 )
 	AND current_history.usd_valuation_source IS DISTINCT FROM 'MANUAL'
+	` + companyFundValuationCandidateExcludesOtherAccountsSQL + `
 	AND movement.id > $1
 ORDER BY movement.id
 LIMIT $2`

@@ -70,20 +70,21 @@ func TestAccountRegistry_ConvenienceSurfacesAndNilFallbacks(t *testing.T) {
 }
 
 func TestBuildAccountRegistrySnapshot_RejectsUnsafeEnabledConfiguration(t *testing.T) {
-	baseSafeheron := CompanyFundAccount{ID: 1, Channel: ChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true}
-	baseAirwallex := CompanyFundAccount{ID: 2, Channel: ChannelAirwallex, ProviderAccountKey: "awx-main", Enabled: true}
+	baseSafeheron := CompanyFundAccount{ID: 1, Channel: AccountChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true}
+	baseAirwallex := CompanyFundAccount{ID: 2, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-main", Enabled: true}
 	for _, testCase := range []struct {
 		name     string
 		accounts []CompanyFundAccount
 		policies []AccountAssetPolicy
 	}{
-		{"non-positive ID", []CompanyFundAccount{{Channel: ChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true}}, nil},
-		{"duplicate enabled ID", []CompanyFundAccount{baseSafeheron, {ID: 1, Channel: ChannelAirwallex, ProviderAccountKey: "awx-main", Enabled: true}}, nil},
-		{"Safeheron missing address", []CompanyFundAccount{{ID: 1, Channel: ChannelSafeheron, NetworkFamily: "EVM", Enabled: true}}, nil},
-		{"duplicate Safeheron identity", []CompanyFundAccount{baseSafeheron, {ID: 3, Channel: ChannelSafeheron, NormalizedAddress: "0xABC", NetworkFamily: "EVM", Enabled: true}}, nil},
-		{"Safeheron provider key whitespace", []CompanyFundAccount{{ID: 1, Channel: ChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", ProviderAccountKey: " vault ", Enabled: true}}, nil},
-		{"Airwallex missing key", []CompanyFundAccount{{ID: 2, Channel: ChannelAirwallex, Enabled: true}}, nil},
-		{"duplicate Airwallex key", []CompanyFundAccount{baseAirwallex, {ID: 3, Channel: ChannelAirwallex, ProviderAccountKey: "awx-main", Enabled: true}}, nil},
+		{"non-positive ID", []CompanyFundAccount{{Channel: AccountChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true}}, nil},
+		{"duplicate enabled ID", []CompanyFundAccount{baseSafeheron, {ID: 1, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-main", Enabled: true}}, nil},
+		{"Safeheron missing address", []CompanyFundAccount{{ID: 1, Channel: AccountChannelSafeheron, NetworkFamily: "EVM", Enabled: true}}, nil},
+		{"duplicate Safeheron identity", []CompanyFundAccount{baseSafeheron, {ID: 3, Channel: AccountChannelSafeheron, NormalizedAddress: "0xABC", NetworkFamily: "EVM", Enabled: true}}, nil},
+		{"Safeheron provider key whitespace", []CompanyFundAccount{{ID: 1, Channel: AccountChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", ProviderAccountKey: " vault ", Enabled: true}}, nil},
+		{"Airwallex missing key", []CompanyFundAccount{{ID: 2, Channel: AccountChannelAirwallex, Enabled: true}}, nil},
+		{"duplicate Airwallex key", []CompanyFundAccount{baseAirwallex, {ID: 3, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-main", Enabled: true}}, nil},
+		{"manual is not an account channel", []CompanyFundAccount{{ID: 3, Channel: AccountChannel("MANUAL"), Enabled: true}}, nil},
 		{"unsupported channel", []CompanyFundAccount{{ID: 1, Channel: "UNKNOWN", Enabled: true}}, nil},
 		{"policy without currency", []CompanyFundAccount{baseSafeheron}, []AccountAssetPolicy{{ID: 11, AccountID: 1, Enabled: true}}},
 	} {
@@ -92,6 +93,32 @@ func TestBuildAccountRegistrySnapshot_RejectsUnsafeEnabledConfiguration(t *testi
 				t.Fatal("buildAccountRegistrySnapshot() = nil, want validation error")
 			}
 		})
+	}
+}
+
+func TestBuildAccountRegistrySnapshot_ExcludesOtherAccountsFromProviderAutomation(t *testing.T) {
+	providerAccount := CompanyFundAccount{
+		ID: 1, Channel: AccountChannelSafeheron, NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true,
+	}
+	otherAccount := CompanyFundAccount{
+		ID: 2, Channel: AccountChannelOther, ProviderAccountKey: "other:bank:finance:1234", AccountName: "Bank 1234", Enabled: true,
+	}
+	snapshot, err := buildAccountRegistrySnapshot(
+		[]CompanyFundAccount{providerAccount, otherAccount},
+		[]AccountAssetPolicy{{ID: 11, AccountID: otherAccount.ID, Asset: AssetIdentity{Currency: "USD"}, Enabled: true}},
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("buildAccountRegistrySnapshot() error = %v", err)
+	}
+	if accounts := snapshot.Accounts(); len(accounts) != 1 || accounts[0].ID != providerAccount.ID {
+		t.Fatalf("registry provider accounts = %#v, want only %#v", accounts, providerAccount)
+	}
+	if _, found := snapshot.LookupAirwallex(otherAccount.ProviderAccountKey); found {
+		t.Fatal("OTHER account must not resolve through Airwallex automation")
+	}
+	if policies := snapshot.AssetPolicies(); len(policies) != 0 {
+		t.Fatalf("OTHER account policies must not enter automatic registry: %#v", policies)
 	}
 }
 

@@ -59,8 +59,8 @@ func TestSafeheronProviderEventNormalizer_RoutingScopeAllowsOnlyAuthorizedBatchO
 		{Address: "0xSecondCompanyWallet", Amount: "2.50"},
 	}
 	registry, err := buildAccountRegistrySnapshot([]CompanyFundAccount{
-		{ID: 1, Channel: ChannelSafeheron, NormalizedAddress: "0xcompanywallet", NetworkFamily: "EVM", Enabled: true},
-		{ID: 2, Channel: ChannelSafeheron, NormalizedAddress: "0xsecondcompanywallet", NetworkFamily: "EVM", Enabled: true},
+		{ID: 1, Channel: AccountChannelSafeheron, NormalizedAddress: "0xcompanywallet", NetworkFamily: "EVM", Enabled: true},
+		{ID: 2, Channel: AccountChannelSafeheron, NormalizedAddress: "0xsecondcompanywallet", NetworkFamily: "EVM", Enabled: true},
 	}, nil, input.Registry.LoadedAt())
 	if err != nil {
 		t.Fatal(err)

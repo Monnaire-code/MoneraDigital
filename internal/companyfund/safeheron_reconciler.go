@@ -125,7 +125,7 @@ func (r *SafeheronTransactionHistoryReconciler) Reconcile(
 }
 
 func (r *SafeheronTransactionHistoryReconciler) validateInput(input SafeheronTransactionHistoryReconcileInput) (SafeheronTransactionHistoryReconcileInput, error) {
-	if input.Account.ID <= 0 || input.Account.Channel != ChannelSafeheron || !input.Account.Enabled {
+	if input.Account.ID <= 0 || input.Account.Channel != AccountChannelSafeheron || !input.Account.Enabled {
 		return SafeheronTransactionHistoryReconcileInput{}, fmt.Errorf("Safeheron history reconciliation requires an enabled configured company account")
 	}
 	configuredKey, err := normalizeSafeheronHistoryRequired("configured Safeheron provider account key", input.Account.ProviderAccountKey, maxProviderFactAccountKeyBytes)

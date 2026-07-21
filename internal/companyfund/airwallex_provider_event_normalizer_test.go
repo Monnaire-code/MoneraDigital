@@ -84,7 +84,7 @@ func TestAirwallexProviderEventNormalizer_ScopedRuntimeFailsClosedAfterRegistryB
 	})
 
 	accounts := append(registry.snapshot.Accounts(), CompanyFundAccount{
-		ID: 8, Channel: ChannelAirwallex, ProviderAccountKey: "awx-secondary", Enabled: true,
+		ID: 8, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-secondary", Enabled: true,
 	})
 	multiAccountSnapshot, err := buildAccountRegistrySnapshot(accounts, registry.snapshot.AssetPolicies(), time.Now().UTC())
 	if err != nil {
@@ -265,7 +265,7 @@ func testAirwallexProviderEventRegistrySnapshot(t *testing.T, enabled bool) *Acc
 	threshold := decimal.RequireFromString("20")
 	accounts := []CompanyFundAccount{{
 		ID:                 7,
-		Channel:            ChannelAirwallex,
+		Channel:            AccountChannelAirwallex,
 		ProviderAccountKey: "awx-usd",
 		CompanyEntity:      "Monera Ltd",
 		FundAccountName:    "Treasury",

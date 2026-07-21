@@ -23,7 +23,7 @@ type companyFundRegistryLoaderStub struct{}
 
 func (companyFundRegistryLoaderStub) LoadCompanyFundAccounts(context.Context) ([]companyfund.CompanyFundAccount, []companyfund.AccountAssetPolicy, error) {
 	return []companyfund.CompanyFundAccount{{
-		ID: 1, Channel: companyfund.ChannelSafeheron, ProviderAccountKey: "safeheron-account",
+		ID: 1, Channel: companyfund.AccountChannelSafeheron, ProviderAccountKey: "safeheron-account",
 		NormalizedAddress: "0xabc", NetworkFamily: "EVM", Enabled: true,
 	}}, nil, nil
 }

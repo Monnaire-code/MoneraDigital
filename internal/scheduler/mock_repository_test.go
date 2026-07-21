@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"monera-digital/internal/repository"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 )
@@ -72,6 +73,19 @@ func (m *MockWealthRepository) GetExpiredOrders(ctx context.Context) ([]*reposit
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*repository.WealthOrderModel), args.Error(1)
+}
+
+func (m *MockWealthRepository) GetPendingOrders(ctx context.Context) ([]*repository.WealthOrderModel, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*repository.WealthOrderModel), args.Error(1)
+}
+
+func (m *MockWealthRepository) ActivateOrder(ctx context.Context, orderID int64) error {
+	args := m.Called(ctx, orderID)
+	return args.Error(0)
 }
 
 func (m *MockWealthRepository) AccrueInterest(ctx context.Context, orderID int64, amount string, date string) error {
@@ -145,4 +159,36 @@ type MockJournalRepository struct {
 func (m *MockJournalRepository) CreateJournalRecord(ctx context.Context, record *repository.JournalModel) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)
+}
+
+type MockDailyInterestRepository struct {
+	mock.Mock
+}
+
+func (m *MockDailyInterestRepository) Create(ctx context.Context, record *repository.DailyInterestModel) error {
+	args := m.Called(ctx, record)
+	return args.Error(0)
+}
+
+func (m *MockDailyInterestRepository) CreateWithDate(ctx context.Context, record *repository.DailyInterestModel, dateOverride *time.Time) error {
+	args := m.Called(ctx, record, dateOverride)
+	return args.Error(0)
+}
+
+func (m *MockDailyInterestRepository) GetByUserID(ctx context.Context, userID int64, days int) ([]repository.DailyInterestModel, error) {
+	args := m.Called(ctx, userID, days)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]repository.DailyInterestModel), args.Error(1)
+}
+
+func (m *MockDailyInterestRepository) InvalidateByOrderID(ctx context.Context, orderID int64) error {
+	args := m.Called(ctx, orderID)
+	return args.Error(0)
+}
+
+func (m *MockDailyInterestRepository) SumEffectiveByOrderID(ctx context.Context, orderID int64) (string, error) {
+	args := m.Called(ctx, orderID)
+	return args.String(0), args.Error(1)
 }

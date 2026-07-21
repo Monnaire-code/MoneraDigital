@@ -559,7 +559,7 @@ func (runtime *CompanyFundRuntime) reconcileWindows(ctx context.Context, windows
 				return result, errors.Join(append(failures, err)...)
 			}
 			switch account.Channel {
-			case ChannelSafeheron:
+			case AccountChannelSafeheron:
 				if runtime.dependencies.SafeheronReconciler == nil {
 					continue
 				}
@@ -568,7 +568,7 @@ func (runtime *CompanyFundRuntime) reconcileWindows(ctx context.Context, windows
 				if reconcileErr != nil {
 					failures = append(failures, reconcileErr)
 				}
-			case ChannelAirwallex:
+			case AccountChannelAirwallex:
 				if runtime.dependencies.AirwallexReconciler == nil || !airwallexEligible || account.ID != airwallexAccount.ID {
 					continue
 				}

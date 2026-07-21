@@ -337,7 +337,7 @@ func validAirwallexFinancialTransactionsReconcileInput() AirwallexFinancialTrans
 	return AirwallexFinancialTransactionsReconcileInput{
 		Account: CompanyFundAccount{
 			ID:                 7,
-			Channel:            ChannelAirwallex,
+			Channel:            AccountChannelAirwallex,
 			ProviderAccountKey: "awx-main",
 			Enabled:            true,
 		},

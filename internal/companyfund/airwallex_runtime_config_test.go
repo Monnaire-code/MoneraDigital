@@ -189,8 +189,8 @@ func TestAirwallexFinancialTransactionsRuntimeBundle_UsesExactTerminalIgnoreRule
 
 func TestAirwallexFinancialTransactionsRuntimeBundle_MapsExplicitInternalConfiguredAccounts(t *testing.T) {
 	accounts := []CompanyFundAccount{
-		{ID: 7, Channel: ChannelAirwallex, ProviderAccountKey: "awx-usd", AccountName: "USD", Enabled: true},
-		{ID: 8, Channel: ChannelAirwallex, ProviderAccountKey: "awx-sgd", AccountName: "SGD", Enabled: true},
+		{ID: 7, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-usd", AccountName: "USD", Enabled: true},
+		{ID: 8, Channel: AccountChannelAirwallex, ProviderAccountKey: "awx-sgd", AccountName: "SGD", Enabled: true},
 	}
 	snapshot, err := buildAccountRegistrySnapshot(accounts, nil, time.Date(2026, time.July, 11, 0, 0, 0, 0, time.UTC))
 	if err != nil {

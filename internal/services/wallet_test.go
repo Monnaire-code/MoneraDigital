@@ -10,12 +10,157 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"monera-digital/internal/coreapi"
+	"monera-digital/internal/dto"
 	"monera-digital/internal/logger"
 	"monera-digital/internal/models"
 )
 
 func init() {
 	_ = logger.Init("test")
+}
+
+func TestWalletService_GetWalletAddress_FallsBackAfterMismatchedCoreAddress(t *testing.T) {
+	mockRepo := new(MockWalletRepository)
+	mockCoreAPI := new(MockCoreAPIClient)
+	service := NewWalletService(mockRepo, mockCoreAPI)
+
+	const localAddress = "0x1111111111111111111111111111111111111111"
+	mockCoreAPI.On("GetAddress", mock.Anything, mock.MatchedBy(func(request coreapi.GetAddressRequest) bool {
+		return request.UserID == "123" && request.ProductCode == "C_SPOT" && request.Currency == "USDT_ERC20"
+	})).Return(&coreapi.AddressInfo{Address: "TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW"}, nil).Once()
+	mockRepo.On("GetActiveWalletByUserID", mock.Anything, 123).Return(&models.WalletCreationRequest{
+		Status:    models.WalletCreationStatusSuccess,
+		Address:   sql.NullString{String: localAddress, Valid: true},
+		Addresses: sql.NullString{String: `{"USDT_ERC20":"` + localAddress + `"}`, Valid: true},
+	}, nil).Once()
+	mockRepo.On("GetUserWalletsByUserID", mock.Anything, 123).Return([]*models.UserWallet{}, nil).Once()
+
+	address, err := service.GetWalletAddress(context.Background(), 123, dto.GetWalletAddressRequest{
+		ProductCode: "C_SPOT",
+		Currency:    "USDT_ERC20",
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, localAddress, address.Address)
+	mockCoreAPI.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+func TestWalletService_GetWalletAddress_RejectsMismatchedLocalNetwork(t *testing.T) {
+	const (
+		tronAddress = "TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW"
+		evmAddress  = "0x1111111111111111111111111111111111111111"
+	)
+	tests := []struct {
+		name     string
+		currency string
+		address  string
+	}{
+		{name: "USDT ERC20 rejects TRON", currency: "USDT_ERC20", address: tronAddress},
+		{name: "USDC ERC20 rejects TRON", currency: "USDC_ERC20", address: tronAddress},
+		{name: "USDC TRC20 rejects EVM", currency: "USDC_TRC20", address: evmAddress},
+		{name: "short USDC BEP20 rejects TRON", currency: "USDC_BEP20", address: tronAddress},
+		{name: "full USDC BEP20 rejects TRON", currency: "USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET", address: tronAddress},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mockRepo := new(MockWalletRepository)
+			mockCoreAPI := new(MockCoreAPIClient)
+			service := NewWalletService(mockRepo, mockCoreAPI)
+			mockCoreAPI.On("GetAddress", mock.Anything, mock.Anything).Return(&coreapi.AddressInfo{Address: test.address}, nil).Once()
+			mockRepo.On("GetActiveWalletByUserID", mock.Anything, 123).Return(&models.WalletCreationRequest{
+				Currency:  test.currency,
+				Status:    models.WalletCreationStatusSuccess,
+				Address:   sql.NullString{String: test.address, Valid: true},
+				Addresses: sql.NullString{String: fmt.Sprintf(`{"%s":"%s"}`, test.currency, test.address), Valid: true},
+			}, nil).Once()
+			mockRepo.On("GetUserWalletsByUserID", mock.Anything, 123).Return([]*models.UserWallet{}, nil).Once()
+
+			address, err := service.GetWalletAddress(context.Background(), 123, dto.GetWalletAddressRequest{
+				ProductCode: "C_SPOT",
+				Currency:    test.currency,
+			})
+
+			assert.Nil(t, address)
+			assert.EqualError(t, err, "wallet address not found for currency "+test.currency)
+			mockCoreAPI.AssertExpectations(t)
+			mockRepo.AssertExpectations(t)
+		})
+	}
+}
+
+func TestWalletService_GetWalletAddress_AcceptsMatchingUSDCNetworks(t *testing.T) {
+	const (
+		tronAddress = "TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW"
+		evmAddress  = "0x1111111111111111111111111111111111111111"
+	)
+	tests := []struct {
+		name         string
+		currency     string
+		coreAddress  string
+		localAddress string
+	}{
+		{name: "USDC ERC20", currency: "USDC_ERC20", coreAddress: tronAddress, localAddress: evmAddress},
+		{name: "USDC TRC20", currency: "USDC_TRC20", coreAddress: evmAddress, localAddress: tronAddress},
+		{name: "short USDC BEP20", currency: "USDC_BEP20", coreAddress: tronAddress, localAddress: evmAddress},
+		{name: "full USDC BEP20", currency: "USDC_BEP20_BINANCE_SMART_CHAIN_MAINNET", coreAddress: tronAddress, localAddress: evmAddress},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mockRepo := new(MockWalletRepository)
+			mockCoreAPI := new(MockCoreAPIClient)
+			service := NewWalletService(mockRepo, mockCoreAPI)
+			mockCoreAPI.On("GetAddress", mock.Anything, mock.Anything).Return(&coreapi.AddressInfo{Address: test.coreAddress}, nil).Once()
+			mockRepo.On("GetActiveWalletByUserID", mock.Anything, 123).Return(&models.WalletCreationRequest{
+				Currency:  test.currency,
+				Status:    models.WalletCreationStatusSuccess,
+				Address:   sql.NullString{String: test.localAddress, Valid: true},
+				Addresses: sql.NullString{String: fmt.Sprintf(`{"%s":"%s"}`, test.currency, test.localAddress), Valid: true},
+			}, nil).Once()
+			mockRepo.On("GetUserWalletsByUserID", mock.Anything, 123).Return([]*models.UserWallet{}, nil).Once()
+
+			address, err := service.GetWalletAddress(context.Background(), 123, dto.GetWalletAddressRequest{
+				ProductCode: "C_SPOT",
+				Currency:    test.currency,
+			})
+
+			if assert.NoError(t, err) && assert.NotNil(t, address) {
+				assert.Equal(t, test.localAddress, address.Address)
+			}
+			mockCoreAPI.AssertExpectations(t)
+			mockRepo.AssertExpectations(t)
+		})
+	}
+}
+
+func TestWalletService_GetWalletAddress_AcceptsCurrencyBoundLegacyAddress(t *testing.T) {
+	mockRepo := new(MockWalletRepository)
+	mockCoreAPI := new(MockCoreAPIClient)
+	service := NewWalletService(mockRepo, mockCoreAPI)
+
+	const localAddress = "0x1111111111111111111111111111111111111111"
+	mockCoreAPI.On("GetAddress", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("core unavailable")).Once()
+	mockRepo.On("GetActiveWalletByUserID", mock.Anything, 123).Return(&models.WalletCreationRequest{
+		Currency:  "USDT_ERC20",
+		Status:    models.WalletCreationStatusSuccess,
+		Address:   sql.NullString{String: localAddress, Valid: true},
+		Addresses: sql.NullString{String: `{}`, Valid: true},
+	}, nil).Once()
+	mockCoreAPI.On("GetAddress", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("core unavailable")).Once()
+	mockRepo.On("GetUserWalletsByUserID", mock.Anything, 123).Return([]*models.UserWallet{}, nil).Once()
+
+	address, err := service.GetWalletAddress(context.Background(), 123, dto.GetWalletAddressRequest{
+		ProductCode: "C_SPOT",
+		Currency:    "USDT_ERC20",
+	})
+
+	if assert.NoError(t, err) && assert.NotNil(t, address) {
+		assert.Equal(t, localAddress, address.Address)
+	}
+	mockCoreAPI.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
 }
 
 func TestWalletService_AddAddress_Success(t *testing.T) {

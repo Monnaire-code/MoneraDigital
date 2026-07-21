@@ -22,26 +22,38 @@ type MockFundReportRepository struct {
 
 func (m *MockFundReportRepository) GetLatest(ctx context.Context) (*models.FundReport, error) {
 	args := m.Called(ctx)
-	if args.Get(0) == nil {
+	result := args.Get(0)
+	if getLatest, ok := result.(func(context.Context) *models.FundReport); ok {
+		result = getLatest(ctx)
+	}
+	if result == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*models.FundReport), args.Error(1)
+	return result.(*models.FundReport), args.Error(1)
 }
 
 func (m *MockFundReportRepository) GetTrend(ctx context.Context, limit int) ([]models.FundReport, error) {
 	args := m.Called(ctx, limit)
-	if args.Get(0) == nil {
+	result := args.Get(0)
+	if getTrend, ok := result.(func(context.Context, int) []models.FundReport); ok {
+		result = getTrend(ctx, limit)
+	}
+	if result == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]models.FundReport), args.Error(1)
+	return result.([]models.FundReport), args.Error(1)
 }
 
 func (m *MockFundReportRepository) GetAllocationsByReportID(ctx context.Context, reportID int64) ([]models.FundAssetAllocation, error) {
 	args := m.Called(ctx, reportID)
-	if args.Get(0) == nil {
+	result := args.Get(0)
+	if getAllocations, ok := result.(func(context.Context, int64) []models.FundAssetAllocation); ok {
+		result = getAllocations(ctx, reportID)
+	}
+	if result == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]models.FundAssetAllocation), args.Error(1)
+	return result.([]models.FundAssetAllocation), args.Error(1)
 }
 
 func may2026Report() *models.FundReport {
@@ -355,24 +367,15 @@ func TestFundService_GetStats_ConcurrentFirstCallersShareCache(t *testing.T) {
 	mockRepo.On("GetLatest", mock.Anything).Return(func(ctx context.Context) *models.FundReport {
 		<-release
 		return latest
-	}, func(ctx context.Context) error {
-		<-release
-		return nil
-	}).Once()
+	}, nil).Once()
 	mockRepo.On("GetTrend", mock.Anything, 5).Return(func(ctx context.Context, limit int) []models.FundReport {
 		<-release
 		return trendReports()
-	}, func(ctx context.Context, limit int) error {
-		<-release
-		return nil
-	}).Once()
+	}, nil).Once()
 	mockRepo.On("GetAllocationsByReportID", mock.Anything, int64(5)).Return(func(ctx context.Context, id int64) []models.FundAssetAllocation {
 		<-release
 		return may2026Allocations()
-	}, func(ctx context.Context, id int64) error {
-		<-release
-		return nil
-	}).Once()
+	}, nil).Once()
 
 	const callers = 6
 	results := make([]float64, callers)
