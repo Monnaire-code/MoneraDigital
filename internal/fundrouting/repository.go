@@ -201,7 +201,9 @@ func (r *Repository) RouteVerifiedEvent(ctx context.Context, input VerifiedEvent
 		result := RouteResult{CaseID: caseID, RoutingIdentityKey: candidate.RoutingIdentityKey, Decision: decision}
 		if created {
 			if decision.Decision == DecisionOpen {
-				if !input.SuppressOpenAlert {
+				// STATUS_NOT_TERMINAL is normal mid-flight progress; notify only via SLA
+				// escalator if the case remains OPEN past age thresholds.
+				if !input.SuppressOpenAlert && decision.Reason != ReasonStatusNotTerminal {
 					if err := insertOpenAlert(ctx, tx, caseID, candidate, decision); err != nil {
 						return nil, err
 					}

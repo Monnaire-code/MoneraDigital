@@ -101,26 +101,17 @@ func bootstrapCLIRepository(t *testing.T) (string, string, string) {
 	if err := os.MkdirAll(workflowPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	workflow := `name: Stage
+	workflow := `name: Deploy Backend to Stage
 on:
   push:
     branches: [stage]
-  workflow_dispatch:
-    inputs:
-      mode: {required: true, type: choice, options: [migration-only, workers-off-current, server-dark, workers-on-installed, standard]}
-      artifact_ref: {required: true, type: string}
-      run_id: {required: true, type: string}
-      installed_server_sha: {required: false, type: string}
-      expected_migration_ceiling: {required: false, type: string}
 jobs:
-  control-preflight:
-    runs-on: ubuntu-latest
-    steps: [{run: "echo ok"}]
   deploy-stage:
-    needs: control-preflight
     environment: stage
     runs-on: ubuntu-latest
-    steps: []
+    env:
+      EXPECTED_MIGRATION_CEILING: "060"
+    steps: [{name: "Execute standard stage deploy", run: "echo ok"}]
 `
 	if err := os.WriteFile(filepath.Join(workflowPath, "deploy-backend-stage.yml"), []byte(workflow), 0o600); err != nil {
 		t.Fatal(err)

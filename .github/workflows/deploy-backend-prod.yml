@@ -3,19 +3,11 @@ name: Deploy Backend to Production
 on:
   workflow_dispatch:
     inputs:
-      release_phase:
-        description: "受控发布阶段（按 059 → workers-off → server-dark → workers-on 顺序执行）"
+      expected_migration_ceiling:
+        description: Controlled migration ceiling for this release (must match the artifact)
         required: true
-        type: choice
-        options:
-          - migration-059
-          - workers-off-current
-          - server-dark
-          - workers-on-installed
-      installed_server_sha:
-        description: "仅 workers-off/current 时填写当前已安装 server 的完整 40 位 SHA"
-        required: false
         type: string
+        default: "060"
 
 permissions:
   contents: read
@@ -25,50 +17,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  controlled-production-phase:
+  deploy-production:
+    name: Standard production deploy
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
+    env:
+      ARTIFACT_REF: ${{ github.sha }}
+      EXPECTED_MIGRATION_CEILING: ${{ inputs.expected_migration_ceiling }}
     steps:
       - name: Checkout approved main
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
 
-      - name: Validate phase inputs and production secrets
+      - name: Validate production secrets and ceiling
         env:
-          PHASE: ${{ inputs.release_phase }}
-          INSTALLED_SHA: ${{ inputs.installed_server_sha }}
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_USER: ${{ secrets.PROD_USER }}
           PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          CEILING: ${{ env.EXPECTED_MIGRATION_CEILING }}
         run: |
           set -euo pipefail
           [[ -n "$PROD_HOST" && -n "$PROD_USER" && -n "$PROD_SSH_KEY" ]]
-          if [[ "$PHASE" == "workers-off-current" ]]; then
-            [[ "$INSTALLED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-              echo "ERROR: $PHASE requires the installed 40-character server SHA" >&2
-              exit 1
-            }
-          fi
+          [[ "$CEILING" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "ERROR: expected_migration_ceiling is invalid" >&2
+            exit 1
+          }
 
       - name: Setup Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build immutable release package
+      - name: Build standard release package
         run: |
           set -euo pipefail
           mkdir -p deploy/package
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.version=${GITHUB_SHA}" -o deploy/package/monera-server ./cmd/server
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o deploy/package/monera-migrate ./cmd/migrate
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o deploy/package/company-fund-release ./cmd/company-fund-release
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w -X main.version=${GITHUB_SHA}" \
+            -o deploy/package/monera-server ./cmd/server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w -X main.version=${GITHUB_SHA}" \
+            -o deploy/package/monera-migrate ./cmd/migrate
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -o deploy/package/company-fund-release ./cmd/company-fund-release
           gzip -f deploy/package/monera-server deploy/package/monera-migrate deploy/package/company-fund-release
           install -m 0755 scripts/deploy-remote.sh deploy/package/deploy-remote.sh
           printf '%s\n' "$GITHUB_SHA" > deploy/package/artifact-sha
 
-      - name: Upload controlled package
+      - name: Upload production package
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ secrets.PROD_HOST }}
@@ -78,34 +76,24 @@ jobs:
           target: "/tmp/monera-production-deploy/package"
           strip_components: 2
 
-      - name: Execute exactly one controlled production phase
+      - name: Execute standard production deploy
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
-          PHASE: ${{ inputs.release_phase }}
-          INSTALLED_SHA: ${{ inputs.installed_server_sha }}
           RELEASE_SHA: ${{ github.sha }}
+          EXPECTED_MIGRATION_CEILING: ${{ env.EXPECTED_MIGRATION_CEILING }}
         with:
           host: ${{ secrets.PROD_HOST }}
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
           command_timeout: 25m
-          envs: PHASE,INSTALLED_SHA,RELEASE_SHA
+          envs: RELEASE_SHA,EXPECTED_MIGRATION_CEILING
           script: |
             set -euo pipefail
             PACKAGE=/tmp/monera-production-deploy/package
             trap 'rm -rf /tmp/monera-production-deploy' EXIT
-            case "$PHASE" in
-              migration-059)
-                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 059
-                ;;
-              workers-off-current)
-                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode workers-off-current --artifact-sha "$RELEASE_SHA" --installed-server-sha "$INSTALLED_SHA"
-                ;;
-              server-dark)
-                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode server-dark --artifact-sha "$RELEASE_SHA"
-                ;;
-              workers-on-installed)
-                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode workers-on-installed --artifact-sha "$RELEASE_SHA"
-                ;;
-              *) echo "ERROR: unsupported phase $PHASE" >&2; exit 1 ;;
-            esac
+            "$PACKAGE/deploy-remote.sh" \
+              --env production \
+              --port 8081 \
+              --release-mode standard \
+              --artifact-sha "$RELEASE_SHA" \
+              --expected-migration-ceiling "$EXPECTED_MIGRATION_CEILING"

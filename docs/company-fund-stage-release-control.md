@@ -1,8 +1,19 @@
 # Company-fund stage release control
 
+> **Status (2026-07):** Cutover multi-mode release control is **retired**.
+> Stage and production backend deploys use a single **standard** path:
+> compile → upload → controlled migrate (expected ceiling) → replace server → restart.
+> Stage is push-triggered on `stage`; production is manual `workflow_dispatch` on `main`.
+> The historical cutover modes (`migration-only`, `workers-off-current`, `server-dark`,
+> `workers-on-installed`) and dual-lock ceremony are no longer supported by
+> `.github/workflows/deploy-backend-*.yml` or `scripts/deploy-remote.sh`.
+>
+> The remainder of this document is retained as historical context for past
+> company-fund cutovers and offline `company-fund-release` evidence tooling.
+
 The stage workflow keeps automatic deployment limited to pushes on `stage`.
-Manual release operations are registered by the same workflow definition but
-are accepted only when the event ref is exactly `refs/heads/stage` and the
+Historical manual release operations (retired) were registered by the same workflow definition but
+were accepted only when the event ref is exactly `refs/heads/stage` and the
 requested run id matches the run component of the repository control mirror
 and the approved stage-environment lock.
 

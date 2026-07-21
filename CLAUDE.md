@@ -336,12 +336,12 @@ APP_ENV                         # production / local / development / test
 ### Stage
 
 - **Frontend**: `stage` push 触发 Vercel Preview；`main` 不自动发布前端。
-- **Backend**: `stage` push 触发 `.github/workflows/deploy-backend-stage.yml`。发布锁存在时会 fail closed，手动模式支持受控 migration-only、workers-off、server-dark、workers-on 和 standard 阶段。
-- 每次新增受控迁移时，必须同步更新迁移 ceiling、发布 workflow 和对应测试。
+- **Backend**: `stage` push 触发 `.github/workflows/deploy-backend-stage.yml` 的 **standard 一条龙**（编译 → 上传 → 受控迁库 → 换 server → 重启）。不再支持 cutover 双锁或多 mode 菜单。
+- 每次新增受控迁移时，必须同步更新迁移 ceiling、stage/prod workflow 中的 ceiling 和对应测试。
 
 ### Production
 - **Frontend**: Vercel（main 分支**不自动构建**，手动 `vercel deploy --prod --scope monera-digital`；配置见 `vercel.json` git.deploymentEnabled）
-- **Backend**: `.github/workflows/deploy-backend-prod.yml` 仅允许在 `main` 上手动触发受控阶段。迁移、workers-off、server-dark 和 workers-on 按已批准发布顺序逐步执行，不将全量迁移和服务切换合并为不可观测的一步。
+- **Backend**: `.github/workflows/deploy-backend-prod.yml` 仅允许在 `main` 上手动触发 **standard 一条龙**（与 stage 同路径；GitHub Environment 审批作为人工闸门）。输入 `expected_migration_ceiling` 做受控单版本迁移。
 - **生产服务器**: `52.195.194.71`（ec2-user），binary `/home/ec2-user/monera/server`，systemd `monera-digital.service`，端口 8081
 - **部署前置**: GitHub repo Settings → Environments → `production` 须配 required reviewers（workflow 无 confirm input，靠 env protection 兜底）
 - **本地手动运维脚本**（CI 不依赖，仍可用）: `scripts/deploy.sh`（服务器现场编译 + SCP+systemd）、`scripts/deploy-remote.sh`
