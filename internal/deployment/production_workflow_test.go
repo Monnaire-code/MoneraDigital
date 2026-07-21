@@ -66,8 +66,9 @@ func TestProductionReleasePersistsAndEnforcesPhaseOrder(t *testing.T) {
 	}
 	script := string(content)
 	for _, required := range []string{
-		"require_release_state migration-056",
-		"require_release_state migration-057",
+		"require_release_start",
+		`write_release_state "migration-$EXPECTED_MIGRATION_CEILING"`,
+		"require_release_state migration-059",
 		"require_release_state workers-off-current",
 		"require_release_state server-dark",
 		"write_release_state workers-on-installed",

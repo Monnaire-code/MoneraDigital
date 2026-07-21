@@ -4,13 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       release_phase:
-        description: "受控发布阶段（按 056 → 057 → 058 → 059 → workers-off → server-dark → workers-on 顺序执行）"
+        description: "受控发布阶段（按 059 → workers-off → server-dark → workers-on 顺序执行）"
         required: true
         type: choice
         options:
-          - migration-056
-          - migration-057
-          - migration-058
           - migration-059
           - workers-off-current
           - server-dark
@@ -98,15 +95,6 @@ jobs:
             PACKAGE=/tmp/monera-production-deploy/package
             trap 'rm -rf /tmp/monera-production-deploy' EXIT
             case "$PHASE" in
-              migration-056)
-                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 056
-                ;;
-              migration-057)
-                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 057
-                ;;
-              migration-058)
-                "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 058
-                ;;
               migration-059)
                 "$PACKAGE/deploy-remote.sh" --env production --port 8081 --release-mode migration-only --artifact-sha "$RELEASE_SHA" --expected-migration-ceiling 059
                 ;;

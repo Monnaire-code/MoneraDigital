@@ -191,6 +191,9 @@ func TestControlledReleaseStateRejectsOutOfOrderAndPersistsEveryPhase(t *testing
 	if err := os.WriteFile(filepath.Join(appDir, "release-manifest.json"), []byte(`{"server_sha":"`+oldSHA+`"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(appDir, "release-state.tsv"), []byte(oldSHA+"\tmigration-058\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	run := func(expectSuccess bool, args ...string) {
 		t.Helper()
 		cmd := exec.Command("bash", append([]string{filepath.Join(root, "scripts", "deploy-remote.sh")}, args...)...)
@@ -203,18 +206,48 @@ func TestControlledReleaseStateRejectsOutOfOrderAndPersistsEveryPhase(t *testing
 			t.Fatalf("out-of-order controlled phase succeeded: %s", output)
 		}
 	}
-	run(false, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "057")
-	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "056")
-	assertFileContent(t, filepath.Join(appDir, "release-state.tsv"), newSHA+"\tmigration-056\n")
-	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "057")
+	run(false, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "059")
+	if err := os.WriteFile(filepath.Join(appDir, "release-state.tsv"), []byte(oldSHA+"\tworkers-on-installed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	run(false, "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", newSHA, "--installed-server-sha", oldSHA)
-	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "058")
+	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "059")
+	assertFileContent(t, filepath.Join(appDir, "release-state.tsv"), newSHA+"\tmigration-059\n")
 	run(true, "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "059")
 	run(true, "--env", "test", "--release-mode", "workers-off-current", "--artifact-sha", newSHA, "--installed-server-sha", oldSHA)
 	run(true, "--env", "test", "--release-mode", "server-dark", "--artifact-sha", newSHA)
 	run(true, "--env", "test", "--release-mode", "workers-on-installed", "--artifact-sha", newSHA)
 	assertFileContent(t, filepath.Join(appDir, "release-state.tsv"), newSHA+"\tworkers-on-installed\n")
 	assertFileContent(t, filepath.Join(appDir, ".env"), "COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=true\nSAFEHERON_TRANSACTION_ROUTING_MODE=routing-authoritative\nDATABASE_URL=postgresql://test@localhost/test\n")
+}
+
+func TestControlledReleaseStartsWithTheCurrentExactMigration(t *testing.T) {
+	t.Parallel()
+	root := repositoryRoot(t)
+	newSHA := "0123456789abcdef0123456789abcdef01234567"
+	oldSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	tmp := t.TempDir()
+	appDir := filepath.Join(tmp, "app")
+	deployDir := filepath.Join(tmp, "deploy")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("COMPANY_FUND_ENABLED=true\nCOMPANY_FUND_START_BACKGROUND_WORKERS=true\nSAFEHERON_TRANSACTION_ROUTING_MODE=routing-authoritative\nDATABASE_URL=postgresql://test@localhost/test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "release-state.tsv"), []byte(oldSHA+"\tworkers-on-installed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "deploy-remote.sh"), "--env", "test", "--release-mode", "migration-only", "--artifact-sha", newSHA, "--expected-migration-ceiling", "059")
+	cmd.Env = append(os.Environ(), "MONERA_DEPLOY_FAKE=1", "MONERA_DEPLOY_ENFORCE_RELEASE_STATE=1", "MONERA_DEPLOY_APP_DIR="+appDir, "MONERA_DEPLOY_SRC="+deployDir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("current exact migration failed after a completed release: %v\n%s", err, output)
+	}
+	assertFileContent(t, filepath.Join(appDir, "release-state.tsv"), newSHA+"\tmigration-059\n")
 }
 
 func TestDeployRemoteWorkersOffAcceptsLegacyEmbeddedSHAWithoutManifest(t *testing.T) {

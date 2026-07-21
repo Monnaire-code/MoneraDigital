@@ -172,11 +172,12 @@ require_release_state() {
 }
 
 require_release_start() {
+    local expected_phase="migration-$EXPECTED_MIGRATION_CEILING"
     release_state_enforced || return 0
     if ! read_release_state; then
         return 0
     fi
-    [[ ( "$RELEASE_STATE_SHA" == "$ARTIFACT_SHA" && "$RELEASE_STATE_PHASE" == "migration-056" ) ||
+    [[ ( "$RELEASE_STATE_SHA" == "$ARTIFACT_SHA" && "$RELEASE_STATE_PHASE" == "$expected_phase" ) ||
        "$RELEASE_STATE_PHASE" == "workers-on-installed" ]] || {
         echo "ERROR: another controlled release is incomplete at $RELEASE_STATE_PHASE" >&2
         return 1
@@ -578,27 +579,11 @@ deploy_backend() {
 
     case "$RELEASE_MODE" in
         migration-only)
-            if [[ "$EXPECTED_MIGRATION_CEILING" == "056" ]]; then
-                require_release_start
-            elif [[ "$EXPECTED_MIGRATION_CEILING" == "057" ]]; then
-                require_release_state migration-056
-            elif [[ "$EXPECTED_MIGRATION_CEILING" == "058" ]]; then
-                require_release_state migration-057
-            elif [[ "$EXPECTED_MIGRATION_CEILING" == "059" ]]; then
-                require_release_state migration-058
-            fi
+            require_release_start
             install_binary monera-migrate
             install_binary company-fund-release
             run_migration
-            if [[ "$EXPECTED_MIGRATION_CEILING" == "056" ]]; then
-                write_release_state migration-056
-            elif [[ "$EXPECTED_MIGRATION_CEILING" == "057" ]]; then
-                write_release_state migration-057
-            elif [[ "$EXPECTED_MIGRATION_CEILING" == "058" ]]; then
-                write_release_state migration-058
-            elif [[ "$EXPECTED_MIGRATION_CEILING" == "059" ]]; then
-                write_release_state migration-059
-            fi
+            write_release_state "migration-$EXPECTED_MIGRATION_CEILING"
             ;;
         workers-off-current)
             require_release_state migration-059
