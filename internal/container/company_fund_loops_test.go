@@ -47,11 +47,21 @@ func TestCompanyFundCurrentValuationLoops_UseIndependentRefreshAndSweepIntervals
 	refreshDone := make(chan struct{})
 	sweepDone := make(chan struct{})
 	go func() {
-		defer close(refreshDone)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Errorf("rate refresh loop panicked: %v", recovered)
+			}
+			close(refreshDone)
+		}()
 		runCompanyFundCurrentRateRefreshLoop(ctx, refresher, time.Hour)
 	}()
 	go func() {
-		defer close(sweepDone)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Errorf("valuation sweep loop panicked: %v", recovered)
+			}
+			close(sweepDone)
+		}()
 		runCompanyFundCurrentValuationSweepLoop(ctx, valuator, 10*time.Millisecond, 37)
 	}()
 
@@ -96,21 +106,15 @@ func TestCompanyFundRateRefreshSuccessWakesValuationSweep(t *testing.T) {
 	rateLoop := newCompanyFundCurrentRateRefreshLoop(refresher, time.Hour, func() {
 		_ = valuationLoop.Notify()
 	})
-	valuationDone := make(chan struct{})
-	rateDone := make(chan struct{})
-	go func() {
-		defer close(valuationDone)
-		valuationLoop.Run(ctx)
-	}()
+	valuationLoop.Start(ctx)
+	defer valuationLoop.Stop()
 	select {
 	case <-valuator.notify:
 	case <-time.After(time.Second):
 		t.Fatal("valuation startup sweep did not run")
 	}
-	go func() {
-		defer close(rateDone)
-		rateLoop.Run(ctx)
-	}()
+	rateLoop.Start(ctx)
+	defer rateLoop.Stop()
 
 	select {
 	case <-refresher.notify:
@@ -126,6 +130,6 @@ func TestCompanyFundRateRefreshSuccessWakesValuationSweep(t *testing.T) {
 		}
 	}
 	cancel()
-	<-rateDone
-	<-valuationDone
+	rateLoop.Stop()
+	valuationLoop.Stop()
 }

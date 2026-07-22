@@ -107,9 +107,12 @@ func TestMaintenanceWindow_BypassByWakeAndNextDue(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
 	defer cancel()
-	go loopA.Run(ctx)
-	go loopB.Run(ctx)
-	go loopC.Run(ctx)
+	loopA.Start(ctx)
+	defer loopA.Stop()
+	loopB.Start(ctx)
+	defer loopB.Stop()
+	loopC.Start(ctx)
+	defer loopC.Stop()
 
 	// Mid-run business wake on A should produce an immediate hit.
 	time.Sleep(40 * time.Millisecond)
@@ -178,7 +181,8 @@ func TestSharedMaintenance_AggregatedQuietWindow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 450*time.Millisecond)
 	defer cancel()
 	for _, loop := range loops {
-		go loop.Run(ctx)
+		loop.Start(ctx)
+		defer loop.Stop()
 	}
 	<-ctx.Done()
 	time.Sleep(15 * time.Millisecond)
@@ -239,7 +243,8 @@ func TestLoop_SharedMaintenanceSkipsEmptyDBBetweenWindows(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	go loop.Run(ctx)
+	loop.Start(ctx)
+	defer loop.Stop()
 	<-ctx.Done()
 	time.Sleep(10 * time.Millisecond)
 
@@ -261,22 +266,20 @@ func TestLoop_NextDueFiresBeforeSharedMaxIdle(t *testing.T) {
 	window.SetOpenFor(15 * time.Millisecond)
 
 	dueAfter := 45 * time.Millisecond
-	var firstDueHit atomic.Int64
-	var dueHitAt atomic.Value // time.Time
+	var cycleCount atomic.Int64
+	var secondCycleAt atomic.Value // time.Time
 
 	start := time.Now()
 	dueAt := start.Add(dueAfter)
 	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
 		Name:              "kyt-due",
-		MinIdle:           5 * time.Millisecond,
+		MinIdle:           150 * time.Millisecond,
 		MaxIdle:           maxIdle,
 		SharedMaintenance: window,
 	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
 		now := time.Now()
-		if !now.Before(dueAt) {
-			if firstDueHit.Add(1) == 1 {
-				dueHitAt.Store(now)
-			}
+		if cycleCount.Add(1) == 2 {
+			secondCycleAt.Store(now)
 			return adaptiveschedule.CycleOutcome{}, nil
 		}
 		return adaptiveschedule.CycleOutcome{NextDue: dueAt}, nil
@@ -287,11 +290,12 @@ func TestLoop_NextDueFiresBeforeSharedMaxIdle(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Millisecond)
 	defer cancel()
-	go loop.Run(ctx)
+	loop.Start(ctx)
+	defer loop.Stop()
 
 	deadline := time.Now().Add(160 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if firstDueHit.Load() >= 1 {
+		if cycleCount.Load() >= 2 {
 			break
 		}
 		time.Sleep(2 * time.Millisecond)
@@ -299,16 +303,16 @@ func TestLoop_NextDueFiresBeforeSharedMaxIdle(t *testing.T) {
 	cancel()
 	time.Sleep(10 * time.Millisecond)
 
-	if firstDueHit.Load() < 1 {
+	if cycleCount.Load() < 2 {
 		t.Fatal("expected NextDue-driven cycle before test deadline")
 	}
-	hit, _ := dueHitAt.Load().(time.Time)
+	hit, _ := secondCycleAt.Load().(time.Time)
 	elapsed := hit.Sub(start)
 	if elapsed > maxIdle {
 		t.Fatalf("NextDue fired at %s, after MaxIdle=%s — shared window delayed business due", elapsed, maxIdle)
 	}
-	if elapsed < dueAfter/2 {
-		// Startup cycle is fine; the due hit itself must not be long before dueAt.
+	if hit.Before(dueAt) {
+		t.Fatalf("NextDue cycle fired early: due after %s, got elapsed=%s", dueAfter, elapsed)
 	}
 	// Must not wait nearly the full MaxIdle when due was only ~45ms out.
 	if elapsed > 120*time.Millisecond {
@@ -337,7 +341,8 @@ func TestLoop_NotifyBypassesMaintenanceGate(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go loop.Run(ctx)
+	loop.Start(ctx)
+	defer loop.Stop()
 
 	// Wait until past open grace so the gate is closed.
 	time.Sleep(25 * time.Millisecond)

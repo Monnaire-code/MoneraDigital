@@ -391,14 +391,25 @@ func TestLoop_CancelStopsLoop(t *testing.T) {
 	}
 	cancel()
 	stopped := make(chan struct{})
+	panicValue := make(chan any, 1)
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicValue <- recovered
+			}
+			close(stopped)
+		}()
 		loop.Stop()
-		close(stopped)
 	}()
 	select {
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("Stop did not complete after cancel")
+	}
+	select {
+	case recovered := <-panicValue:
+		t.Fatalf("Stop panicked: %v", recovered)
+	default:
 	}
 }
 
