@@ -39,7 +39,17 @@ func NewWorker(store RoutingStore, resolver NetworkFamilyResolver) (*Worker, err
 	return worker, nil
 }
 
+// SetOnWorked registers a callback after a cycle that processed routing work
+// (for example waking the projection worker). Nil clears the callback.
+func (worker *Worker) SetOnWorked(fn func()) {
+	if worker == nil || worker.runner == nil {
+		return
+	}
+	worker.runner.onWorked = fn
+}
+
 // Notify wakes routing after a durable transaction webhook is available.
+// Safe before Run.
 func (worker *Worker) Notify() bool {
 	if worker == nil || worker.runner == nil {
 		return false

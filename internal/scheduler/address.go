@@ -43,17 +43,3 @@ func (s *AddressScheduler) Start(ctx context.Context) {
 	loop.Run(ctx)
 	logger.Info("[AddressScheduler] Context cancelled, stopping...")
 }
-
-func (s *AddressScheduler) unfreezeAddresses(ctx context.Context) {
-	count, err := s.repo.UnfreezeExpiredAddresses(ctx)
-	if err != nil {
-		logger.Error("[AddressScheduler] Failed to unfreeze addresses",
-			"error", err.Error())
-		return
-	}
-
-	if count > 0 {
-		logger.Info("[AddressScheduler] Unfroze addresses",
-			"count", count)
-	}
-}

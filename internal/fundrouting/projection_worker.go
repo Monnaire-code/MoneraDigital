@@ -23,6 +23,9 @@ type ProjectionWorker struct {
 	events   ProviderEventInserter
 	workerID string
 	runner   *adaptiveRunner
+	// onProviderEventInserted wakes company-fund provider-event processing after
+	// a durable company provider-event row is written.
+	onProviderEventInserted func()
 }
 
 const maxProjectionActionAttempts = 8
@@ -52,7 +55,17 @@ func NewProjectionWorker(db *sql.DB, events ProviderEventInserter) (*ProjectionW
 	return worker, nil
 }
 
+// SetOnProviderEventInserted registers a wake after durable company provider
+// event inserts (for example CompanyFundRuntime.NotifyProviderEvent).
+func (worker *ProjectionWorker) SetOnProviderEventInserted(fn func()) {
+	if worker == nil {
+		return
+	}
+	worker.onProviderEventInserted = fn
+}
+
 // Notify wakes projection after upstream routing creates durable actions.
+// Safe before Run.
 func (worker *ProjectionWorker) Notify() bool {
 	if worker == nil || worker.runner == nil {
 		return false
@@ -400,7 +413,13 @@ func (worker *ProjectionWorker) insertCompanyProviderEvent(ctx context.Context, 
 		SourcePayloadDigest: action.PayloadDigest, AuthorizedSafeheronOccurrenceKey: action.RoutingIdentityKey,
 		AuthorizingRoutingActionID: action.ID, AuthorizingRoutingLeaseOwner: worker.workerID,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if worker.onProviderEventInserted != nil {
+		worker.onProviderEventInserted()
+	}
+	return nil
 }
 
 func (worker *ProjectionWorker) companyProviderEventStatus(ctx context.Context, action projectionAction) (string, string, error) {

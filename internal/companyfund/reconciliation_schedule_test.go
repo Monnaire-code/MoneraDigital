@@ -46,6 +46,31 @@ func TestReconciliationDailySchedule_BeforeLocalRunDoesNotBypassConfiguredTime(t
 	}
 }
 
+func TestReconciliationDailySchedule_NextTriggerAtUsesConfiguredLocalDailyTime(t *testing.T) {
+	schedule, err := NewReconciliationDailySchedule(ReconciliationDailyScheduleConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := time.Date(2026, time.July, 10, 2, 0, 0, 0, schedule.location)
+	got, err := schedule.NextTriggerAt(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, time.July, 10, 3, 0, 0, 0, schedule.location).UTC()
+	if !got.Equal(want) {
+		t.Fatalf("NextTriggerAt(before) = %s, want %s", got, want)
+	}
+	after := time.Date(2026, time.July, 10, 3, 0, 0, 0, schedule.location)
+	got, err = schedule.NextTriggerAt(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = time.Date(2026, time.July, 11, 3, 0, 0, 0, schedule.location).UTC()
+	if !got.Equal(want) {
+		t.Fatalf("NextTriggerAt(after) = %s, want %s", got, want)
+	}
+}
+
 func TestReconciliationDailySchedule_LateStatusOverlapUsesStableVersionedLocalDateKeys(t *testing.T) {
 	schedule, err := NewReconciliationDailySchedule(ReconciliationDailyScheduleConfig{CatchUpDays: 1})
 	if err != nil {

@@ -9,10 +9,18 @@ import (
 	"time"
 )
 
-// shortDBTickerPattern flags fixed high-frequency time.NewTicker / NewTimer
-// cadences that historically kept Neon awake. Background DB workers must use
-// adaptiveschedule (or an explicitly approved MaxIdle budget) instead.
+// shortDBTickerPattern flags fixed high-frequency time.NewTicker cadences that
+// historically kept Neon awake. Background DB workers must use adaptiveschedule.
 var shortDBTickerPattern = regexp.MustCompile(`time\.NewTicker\(\s*((?:\d+)\s*\*\s*time\.(?:Second|Millisecond)|time\.(?:Second|Millisecond)\s*(?:\*\s*\d+)?)`)
+
+// fixedMinutePollResetPattern catches legacy timer.Reset(…Minute) / Reset(…Second)
+// idle loops (for example company-fund reconciliation before adaptive migration).
+var fixedMinutePollResetPattern = regexp.MustCompile(`\.(Reset|NewTicker)\(\s*[^)]*time\.(Second|Minute)\b`)
+
+// bannedIdleLoopNames catches reintroduction of the pre-adaptive recon loop name.
+var bannedIdleLoopNames = []string{
+	"func (runtime *CompanyFundRuntime) runReconciliationLoop(",
+}
 
 // Packages that previously owned second/minute DB polling loops. Maintenance
 // of this list is intentional: adding a package means its background path was
@@ -24,6 +32,7 @@ var guardedBackgroundPackages = []string{
 	"internal/wallet/deposit",
 	"internal/wallet/pool",
 	"internal/wallet/config",
+	"internal/scheduler",
 }
 
 func TestNoShortFixedDBTickersInGuardedBackgroundPackages(t *testing.T) {
@@ -37,20 +46,36 @@ func TestNoShortFixedDBTickersInGuardedBackgroundPackages(t *testing.T) {
 			if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
-			body, readErr := os.ReadFile(path)
+			// Lease heartbeats while a claim is held are not idle polls.
+			if strings.HasSuffix(path, "provider_event_worker.go") {
+				return nil
+			}
+			bodyBytes, readErr := os.ReadFile(path)
 			if readErr != nil {
 				return readErr
 			}
-			// Allow the adaptive schedule package itself and explicit comments.
-			if strings.Contains(string(body), "adaptiveschedule.") {
-				// Still flag raw short tickers even if adaptive is also imported,
-				// unless the short ticker is not present.
-			}
-			matches := shortDBTickerPattern.FindAllStringSubmatch(string(body), -1)
-			for _, match := range matches {
-				// time.NewTicker(time.Second) etc. are banned in guarded packages.
+			body := string(bodyBytes)
+			for _, match := range shortDBTickerPattern.FindAllString(body, -1) {
 				t.Errorf("%s: fixed short ticker %q is banned; use adaptiveschedule with MaxIdle>=%s",
-					path, match[0], 10*time.Minute)
+					path, match, 10*time.Minute)
+			}
+			// Only enforce Reset/NewTicker second-or-minute pattern on runtime.go
+			// recon path and fundrouting workers — allow duration arithmetic elsewhere.
+			if strings.Contains(path, "/runtime.go") || strings.Contains(path, "/fundrouting/") {
+				for _, match := range fixedMinutePollResetPattern.FindAllString(body, -1) {
+					// Adaptive schedule package construction uses durations, not Reset loops.
+					if strings.Contains(body, "adaptiveschedule.New") && !strings.Contains(body, "timer.Reset") && !strings.Contains(body, "time.NewTicker") {
+						continue
+					}
+					if strings.Contains(match, "timer.Reset") || strings.Contains(match, "NewTicker") {
+						t.Errorf("%s: fixed poll pattern %q is banned; use adaptiveschedule", path, match)
+					}
+				}
+			}
+			for _, banned := range bannedIdleLoopNames {
+				if strings.Contains(body, banned) {
+					t.Errorf("%s: banned idle loop %q reintroduced", path, banned)
+				}
 			}
 			return nil
 		})

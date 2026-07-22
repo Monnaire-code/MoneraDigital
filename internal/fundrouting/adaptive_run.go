@@ -10,14 +10,18 @@ import (
 )
 
 // adaptiveRunner is shared by fund-routing background workers so each keeps a
-// coalescible wake channel and the same idle budget.
+// coalescible wake channel and the same idle budget. The loop is created at
+// construction so Notify is safe before Run.
 type adaptiveRunner struct {
-	name     string
-	minIdle  time.Duration
-	maxIdle  time.Duration
-	process  adaptiveschedule.ProcessOneFunc
-	mu       sync.Mutex
-	loop     *adaptiveschedule.Loop
+	name    string
+	minIdle time.Duration
+	maxIdle time.Duration
+	process adaptiveschedule.ProcessOneFunc
+	mu      sync.Mutex
+	loop    *adaptiveschedule.Loop
+	// onWorked is optional; invoked after a cycle that processed work (for
+	// downstream wakes such as routing → projection).
+	onWorked func()
 }
 
 func newAdaptiveRunner(name string, minIdle, maxIdle time.Duration, process adaptiveschedule.ProcessOneFunc) *adaptiveRunner {
@@ -30,7 +34,28 @@ func newAdaptiveRunner(name string, minIdle, maxIdle time.Duration, process adap
 	if maxIdle < minIdle {
 		maxIdle = minIdle
 	}
-	return &adaptiveRunner{name: name, minIdle: minIdle, maxIdle: maxIdle, process: process}
+	r := &adaptiveRunner{name: name, minIdle: minIdle, maxIdle: maxIdle, process: process}
+	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+		Name:    name,
+		MinIdle: minIdle,
+		MaxIdle: maxIdle,
+	}, r.cycle)
+	if err != nil {
+		return r
+	}
+	r.loop = loop
+	return r
+}
+
+func (r *adaptiveRunner) cycle(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+	outcome, err := adaptiveschedule.DrainProcessOne(ctx, r.process, 100)
+	if err != nil && ctx.Err() == nil {
+		log.Printf("%s cycle error", r.name)
+	}
+	if outcome.Worked && r.onWorked != nil {
+		r.onWorked()
+	}
+	return outcome, err
 }
 
 func (r *adaptiveRunner) Notify() bool {
@@ -53,23 +78,12 @@ func (r *adaptiveRunner) Run(ctx context.Context) {
 	log.Printf("%s started: minIdle=%s maxIdle=%s", r.name, r.minIdle, r.maxIdle)
 	defer log.Printf("%s stopped", r.name)
 
-	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
-		Name:    r.name,
-		MinIdle: r.minIdle,
-		MaxIdle: r.maxIdle,
-	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
-		outcome, err := adaptiveschedule.DrainProcessOne(ctx, r.process, 100)
-		if err != nil && ctx.Err() == nil {
-			log.Printf("%s cycle error", r.name)
-		}
-		return outcome, err
-	})
-	if err != nil {
+	r.mu.Lock()
+	loop := r.loop
+	r.mu.Unlock()
+	if loop == nil {
 		log.Printf("%s adaptive schedule disabled: configuration invalid", r.name)
 		return
 	}
-	r.mu.Lock()
-	r.loop = loop
-	r.mu.Unlock()
 	loop.Run(ctx)
 }

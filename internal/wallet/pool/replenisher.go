@@ -38,10 +38,23 @@ func NewReplenisher(mgr *Manager, cfg ReplenisherConfig) *Replenisher {
 	if cfg.MaxIdle < cfg.Interval {
 		cfg.MaxIdle = cfg.Interval
 	}
-	return &Replenisher{mgr: mgr, config: cfg}
+	r := &Replenisher{mgr: mgr, config: cfg}
+	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+		Name:    "wallet-pool-replenisher",
+		MinIdle: cfg.Interval,
+		MaxIdle: cfg.MaxIdle,
+	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+		worked := r.tick(ctx)
+		return adaptiveschedule.CycleOutcome{Worked: worked}, nil
+	})
+	if err == nil {
+		r.loop = loop
+	}
+	return r
 }
 
 // Notify wakes pool maintenance after a real allocation or known low watermark.
+// Safe before Run.
 func (r *Replenisher) Notify() bool {
 	if r == nil {
 		return false
@@ -60,21 +73,13 @@ func (r *Replenisher) Run(ctx context.Context) {
 		r.config.Interval, r.config.MaxIdle, r.config.Low, r.config.Target)
 	defer log.Println("pool replenisher stopped")
 
-	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
-		Name:    "wallet-pool-replenisher",
-		MinIdle: r.config.Interval,
-		MaxIdle: r.config.MaxIdle,
-	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
-		worked := r.tick(ctx)
-		return adaptiveschedule.CycleOutcome{Worked: worked}, nil
-	})
-	if err != nil {
+	r.mu.Lock()
+	loop := r.loop
+	r.mu.Unlock()
+	if loop == nil {
 		log.Printf("pool replenisher adaptive schedule disabled")
 		return
 	}
-	r.mu.Lock()
-	r.loop = loop
-	r.mu.Unlock()
 	loop.Run(ctx)
 }
 

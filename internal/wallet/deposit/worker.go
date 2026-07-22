@@ -59,10 +59,24 @@ func NewWorker(svc *Service, cfg WorkerConfig) *Worker {
 	if cfg.PanicBackoff <= 0 {
 		cfg.PanicBackoff = 5 * time.Second
 	}
-	return &Worker{svc: svc, config: cfg}
+	w := &Worker{svc: svc, config: cfg}
+	// Create the loop at construction so Notify works before Run (webhook race).
+	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+		Name:    "deposit",
+		MinIdle: cfg.Interval,
+		MaxIdle: cfg.MaxIdle,
+	}, w.cycle)
+	if err != nil {
+		// Invalid config should be rare after normalization; keep worker usable
+		// for drainSafely tests even if adaptive loop cannot start.
+		return w
+	}
+	w.loop = loop
+	return w
 }
 
 // Notify wakes the deposit worker after a durable webhook insert. Advisory only.
+// Safe before Run.
 func (w *Worker) Notify() bool {
 	if w == nil {
 		return false
@@ -90,18 +104,13 @@ func (w *Worker) Run(ctx context.Context) {
 	w.nextKYT = now
 	w.nextAML = now
 
-	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
-		Name:    "deposit",
-		MinIdle: w.config.Interval,
-		MaxIdle: w.config.MaxIdle,
-	}, w.cycle)
-	if err != nil {
-		log.Printf("deposit worker adaptive schedule disabled: %v", err)
+	w.mu.Lock()
+	loop := w.loop
+	w.mu.Unlock()
+	if loop == nil {
+		log.Printf("deposit worker adaptive schedule disabled")
 		return
 	}
-	w.mu.Lock()
-	w.loop = loop
-	w.mu.Unlock()
 	loop.Run(ctx)
 }
 
@@ -124,14 +133,13 @@ func (w *Worker) cycle(ctx context.Context) (outcome adaptiveschedule.CycleOutco
 
 	now := time.Now()
 	if drain.Worked {
-		// New deposits may enter KYT_PENDING; keep risk follow-up on business cadence.
+		// New deposits may enter KYT_PENDING; schedule risk follow-up by business cadence.
 		w.nextKYT = now.Add(w.config.KYTScanInterval)
 		w.nextAML = now.Add(w.config.AMLPollInterval)
 	}
 
 	if !w.nextKYT.IsZero() && !w.nextKYT.After(now) {
 		w.runWithRecover(ctx, "KYT scan", w.svc.ScanKYTTimeouts)
-		// Clear explicit arm; re-arm below either from deposit activity or MaxIdle maintenance.
 		w.nextKYT = time.Time{}
 	}
 	if !w.nextAML.IsZero() && !w.nextAML.After(now) {
@@ -140,7 +148,7 @@ func (w *Worker) cycle(ctx context.Context) (outcome adaptiveschedule.CycleOutco
 	}
 
 	// Fully idle maintenance: re-arm risk checks at MaxIdle so stranded KYT/AML
-	// rows recover without 1s/1m empty loops while progressive backoff still applies.
+	// rows recover without 1s/1m empty loops.
 	if !outcome.Worked {
 		if w.nextKYT.IsZero() {
 			w.nextKYT = now.Add(w.config.MaxIdle)
@@ -155,23 +163,31 @@ func (w *Worker) cycle(ctx context.Context) (outcome adaptiveschedule.CycleOutco
 }
 
 func (w *Worker) drainOnce(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
-	return adaptiveschedule.DrainProcessOne(ctx, func(ctx context.Context) (bool, error) {
+	// Custom drain (not DrainProcessOne with true-on-error): process failures
+	// must yield the cycle so adaptive backoff applies. Returning processed=true
+	// on error would fill the drain limit and set MoreWork → zero-wait hot loop.
+	const limit = 100
+	claimed := 0
+	for claimed < limit {
+		if err := ctx.Err(); err != nil {
+			return adaptiveschedule.CycleOutcome{Worked: claimed > 0}, err
+		}
 		processed, err := w.svc.ProcessOne(ctx)
 		if err != nil {
 			log.Printf("deposit worker process error: %v", err)
-			if errors.Is(err, ErrMarkErrorFailed) || errors.Is(err, ErrKYTAPIBackoff) {
-				// Yield the cycle so adaptive backoff can slow repeated failures.
-				return false, err
-			}
-			// Transient process errors: continue draining other events.
-			return true, nil
+			// Surface error and stop this drain; adaptive loop will back off.
+			return adaptiveschedule.CycleOutcome{Worked: claimed > 0}, err
 		}
-		return processed, nil
-	}, 100)
+		if !processed {
+			return adaptiveschedule.CycleOutcome{Worked: claimed > 0}, nil
+		}
+		claimed++
+	}
+	return adaptiveschedule.CycleOutcome{Worked: true, MoreWork: true}, nil
 }
 
-// drainSafely is retained for unit tests that exercise the drain path without
-// the adaptive loop. Production uses cycle() via Run.
+// drainSafely is retained for unit tests that exercise continuous drain without
+// the adaptive loop (poison-event ordering). Production uses cycle() via Run.
 func (w *Worker) drainSafely(ctx context.Context) {
 	defer func() {
 		if rv := recover(); rv != nil {
@@ -201,8 +217,6 @@ func (w *Worker) drainSafely(ctx context.Context) {
 	}
 }
 
-// runWithRecover invokes fn under a panic recover. Used for risk scans where a
-// panic must not kill the worker loop.
 func (w *Worker) runWithRecover(ctx context.Context, label string, fn func(context.Context)) {
 	defer func() {
 		if rv := recover(); rv != nil {

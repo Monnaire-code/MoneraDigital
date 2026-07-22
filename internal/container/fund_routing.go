@@ -42,21 +42,12 @@ func finalizeSafeheronRouting(c *Container) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	go worker.Run(ctx)
-	go reconciler.Run(ctx)
-	go escalator.Run(ctx)
-	metricsMonitor, metricsErr := fundrouting.NewMetricsMonitor(c.DB)
-	if metricsErr != nil {
-		panic(metricsErr)
-	}
-	go metricsMonitor.Run(ctx)
 	if c.AlertService != nil {
 		notifier, notifierErr := fundrouting.NewAlertNotifier(c.DB, c.AlertService)
 		if notifierErr != nil {
 			panic(notifierErr)
 		}
 		c.FundRoutingAlertNotifier = notifier
-		go notifier.Run(ctx)
 	} else {
 		log.Printf("Safeheron routing alert notifier disabled: no alert sinks configured")
 	}
@@ -66,7 +57,32 @@ func finalizeSafeheronRouting(c *Container) {
 			panic(projectionErr)
 		}
 		c.FundRoutingProjectionWorker = projectionWorker
-		go projectionWorker.Run(ctx)
+		if c.CompanyFundRuntime != nil {
+			projectionWorker.SetOnProviderEventInserted(c.CompanyFundRuntime.ProviderEventWakeFunc())
+		}
+	}
+	// Routing → projection wake after durable routing work in a cycle.
+	if c.FundRoutingProjectionWorker != nil {
+		worker.SetOnWorked(func() {
+			_ = c.FundRoutingProjectionWorker.Notify()
+			if c.FundRoutingAlertNotifier != nil {
+				_ = c.FundRoutingAlertNotifier.Notify()
+			}
+		})
+	}
+	go worker.Run(ctx)
+	go reconciler.Run(ctx)
+	go escalator.Run(ctx)
+	metricsMonitor, metricsErr := fundrouting.NewMetricsMonitor(c.DB)
+	if metricsErr != nil {
+		panic(metricsErr)
+	}
+	go metricsMonitor.Run(ctx)
+	if c.FundRoutingAlertNotifier != nil {
+		go c.FundRoutingAlertNotifier.Run(ctx)
+	}
+	if c.FundRoutingProjectionWorker != nil {
+		go c.FundRoutingProjectionWorker.Run(ctx)
 	}
 	// Re-bind webhook wakes once routing workers exist so transaction events
 	// advance both deposit and routing without fixed second-level polling.

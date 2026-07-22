@@ -153,6 +153,78 @@ func TestCompanyFundRuntime_NotifyProviderEventIsNoopWithoutWorker(t *testing.T)
 	}
 }
 
+func TestCompanyFundRuntime_ReconciliationUsesAdaptiveLoopNotFixedMinuteTicker(t *testing.T) {
+	now := time.Date(2026, time.July, 10, 4, 0, 0, 0, time.UTC)
+	safeheron := &companyFundRuntimeSafeheronReconcilerStub{calls: []companyFundRuntimeSafeheronCall{
+		{err: ErrCompanyFundSyncRunNotReady},
+	}}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{
+		AccountSnapshots:    companyFundRuntimeSnapshotSource(t, []CompanyFundAccount{validCompanyFundRuntimeAccounts()[0]}),
+		SafeheronReconciler: safeheron,
+		SyncRunFinalizer:    &companyFundRuntimeFinalizerStub{},
+	}, CompanyFundRuntimeConfig{
+		ReconciliationPollInterval:  time.Minute,
+		EventMaxIdleInterval:        10 * time.Minute,
+		ReconciliationSchedule:      ReconciliationDailyScheduleConfig{CatchUpDays: 1},
+		LateStatusOverlapConfigured: true,
+		LateStatusOverlapDays:       0,
+		Now:                         nowFunc(now),
+	})
+	if runtime.reconciliationLoop == nil {
+		t.Fatal("expected adaptive reconciliation loop")
+	}
+
+	// Empty / no-work cycle must not report Worked (would pin min-idle forever).
+	outcome, err := runtime.reconciliationCycle(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Worked {
+		t.Fatalf("no-work recon cycle must not set Worked: %#v", outcome)
+	}
+	if outcome.NextDue.IsZero() {
+		t.Fatal("recon cycle must publish NextDue for daily trigger / maintenance")
+	}
+}
+
+func TestCompanyFundRuntime_AirwallexWebhookWakeInterruptsAdaptiveReconIdle(t *testing.T) {
+	airwallex := &companyFundRuntimeAirwallexReconcilerStub{
+		contract: AirwallexFinancialTransactionsReconciliationContract{
+			APIVersion: airwallexTestAPIVersion, SchemaVersion: "schema-v1", EventVersion: "event-v1", LoginAsScope: "awx-main",
+		},
+	}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{
+		AccountSnapshots:    companyFundRuntimeSnapshotSource(t, validCompanyFundRuntimeAccounts()),
+		AirwallexReconciler: airwallex,
+		SyncRunFinalizer:    &companyFundRuntimeFinalizerStub{},
+	}, CompanyFundRuntimeConfig{
+		ReconciliationPollInterval:  time.Hour,
+		EventMaxIdleInterval:        time.Hour,
+		AirwallexWebhookLookback:    time.Hour,
+		LateStatusOverlapConfigured: true,
+		LateStatusOverlapDays:       0,
+		ReconciliationSchedule:      ReconciliationDailyScheduleConfig{CatchUpDays: 1},
+		Now:                         nowFunc(time.Date(2026, time.July, 10, 4, 0, 0, 0, time.UTC)),
+	})
+	if runtime.reconciliationLoop == nil {
+		t.Fatal("expected adaptive reconciliation loop for Airwallex")
+	}
+	if !runtime.NotifyAirwallexWebhook() {
+		t.Fatal("expected first Airwallex wake to queue")
+	}
+	// Drain wake path only (same as cycle's first step) to assert prompt catch-up.
+	if !runtime.drainAirwallexWake() {
+		t.Fatal("queued Airwallex wake must be drainable")
+	}
+	result, err := runtime.ReconcileAirwallexWebhookWindow(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Reconciliations != 1 || len(airwallex.inputs) != 1 {
+		t.Fatalf("webhook catch-up result=%#v inputs=%d", result, len(airwallex.inputs))
+	}
+}
+
 func TestCompanyFundRuntime_ReconciliationDelayDoesNotBlockProviderEventPolling(t *testing.T) {
 	worker := &companyFundRuntimeContinuousEventWorkerStub{notify: make(chan struct{}, 4)}
 	reconciler := &companyFundRuntimeBlockingSafeheronReconciler{started: make(chan struct{})}

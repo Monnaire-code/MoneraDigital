@@ -167,6 +167,25 @@ func (schedule *ReconciliationDailySchedule) latestEligibleLocalDay(now time.Tim
 	return latestDay, nil
 }
 
+// NextTriggerAt returns the next configured local daily run instant in UTC.
+// Before today's run time it returns today's run; at/after it returns tomorrow's.
+// Used by adaptive idle scheduling so empty systems wait for the business
+// trigger (or MaxIdle maintenance) instead of a fixed minute poll.
+func (schedule *ReconciliationDailySchedule) NextTriggerAt(now time.Time) (time.Time, error) {
+	if schedule == nil || schedule.location == nil {
+		return time.Time{}, fmt.Errorf("company-fund reconciliation schedule is not configured")
+	}
+	if now.IsZero() {
+		return time.Time{}, fmt.Errorf("company-fund reconciliation schedule requires a non-zero current time")
+	}
+	localNow := now.In(schedule.location)
+	todayRunAt := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), schedule.hour, schedule.minute, 0, 0, schedule.location)
+	if localNow.Before(todayRunAt) {
+		return todayRunAt.UTC(), nil
+	}
+	return todayRunAt.AddDate(0, 0, 1).UTC(), nil
+}
+
 // SyncRunInputs turns due local calendar windows into the exact immutable
 // input accepted by CompanyFundSyncRunStore. Safeheron and Airwallex callers
 // use distinct SyncKind values, while each channel/day remains independently
