@@ -257,10 +257,15 @@ func withCompanyFund(ctx context.Context, config companyFundRuntimeConfig) Conta
 }
 
 func wireDepositCompanyFundRouting(c *Container) {
-	if c == nil || c.DepositPipeline == nil || c.CompanyFundAccountRegistry == nil {
+	if c == nil || c.DepositPipeline == nil {
 		return
 	}
-	c.DepositPipeline.SetCompanyFundDestinationMatcher(c.CompanyFundAccountRegistry)
+	if c.CompanyFundAccountRegistry != nil {
+		c.DepositPipeline.SetCompanyFundDestinationMatcher(c.CompanyFundAccountRegistry)
+	}
+	if c.DB != nil && c.CompanyFundRepository != nil {
+		c.DepositPipeline.SetCompanyFundAMLAlertHandler(companyfund.NewSafeheronAMLAlertHandler(c.DB))
+	}
 }
 
 // finalizeCompanyFundRuntime runs only after NewContainer has applied every
