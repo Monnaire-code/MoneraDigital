@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
+
+	"monera-digital/internal/adaptiveschedule"
 )
 
 type AlertFunc func(level, title, message string)
@@ -100,28 +101,32 @@ func (r *Registry) Load(ctx context.Context) error {
 func (r *Registry) StartBackgroundRefresh(ctx context.Context) {
 	go func() {
 		defer func() {
-			if rv := recover(); rv != nil {
-				log.Printf("registry refresh panic recovered: %v\n%s", rv, debug.Stack())
+			if recover() != nil {
+				log.Printf("registry refresh panic recovered: kind=background_refresh")
 			}
 		}()
-		ticker := time.NewTicker(r.refreshInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := r.Load(ctx); err != nil {
-					log.Printf("Registry refresh failed: %v", err)
-					r.mu.RLock()
-					alertFn := r.onAlert
-					r.mu.RUnlock()
-					if alertFn != nil {
-						alertFn("WARN", "Registry refresh failed", err.Error())
-					}
+		loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+			Name:    "wallet-coin-registry",
+			MinIdle: r.refreshInterval,
+			MaxIdle: adaptiveschedule.MaxIdleAtLeast(r.refreshInterval),
+		}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+			if err := r.Load(ctx); err != nil {
+				log.Printf("registry refresh deferred: kind=database_query")
+				r.mu.RLock()
+				alertFn := r.onAlert
+				r.mu.RUnlock()
+				if alertFn != nil {
+					alertFn("WARN", "Registry refresh failed", err.Error())
 				}
+				return adaptiveschedule.CycleOutcome{}, err
 			}
+			// Maintenance-only: empty outcome lets idle reach MaxIdle.
+			return adaptiveschedule.CycleOutcome{}, nil
+		})
+		if err != nil {
+			return
 		}
+		loop.Run(ctx)
 	}()
 }
 

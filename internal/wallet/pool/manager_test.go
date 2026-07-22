@@ -101,6 +101,8 @@ func TestGetOrAssign_ExistingAddress(t *testing.T) {
 		},
 	}
 	mgr := NewManager(repo, nil, nil)
+	wakeCount := 0
+	mgr.SetOnAllocated(func() { wakeCount++ })
 
 	addr, err := mgr.GetOrAssign(context.Background(), 1, "EVM")
 	if err != nil {
@@ -108,6 +110,9 @@ func TestGetOrAssign_ExistingAddress(t *testing.T) {
 	}
 	if addr.Address != "0xabc" {
 		t.Errorf("expected existing address")
+	}
+	if wakeCount != 0 {
+		t.Fatalf("existing assignment must not wake replenisher: %d", wakeCount)
 	}
 }
 
@@ -122,6 +127,8 @@ func TestGetOrAssign_AssignNew(t *testing.T) {
 		},
 	}
 	mgr := NewManager(repo, nil, nil)
+	wakeCount := 0
+	mgr.SetOnAllocated(func() { wakeCount++ })
 
 	addr, err := mgr.GetOrAssign(context.Background(), 2, "EVM")
 	if err != nil {
@@ -129,6 +136,9 @@ func TestGetOrAssign_AssignNew(t *testing.T) {
 	}
 	if addr.ID != 5 {
 		t.Errorf("expected newly assigned address")
+	}
+	if wakeCount != 1 {
+		t.Fatalf("replenisher wakes=%d, want 1 after allocation", wakeCount)
 	}
 }
 

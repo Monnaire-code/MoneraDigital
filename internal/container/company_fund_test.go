@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 
 	"monera-digital/internal/companyfund"
@@ -16,6 +17,16 @@ import (
 	"monera-digital/internal/safeheron"
 	"monera-digital/internal/wallet/deposit"
 )
+
+func TestCompanyFundRuntimeConfigReadsEventMaxIdleBoundary(t *testing.T) {
+	const key = "COMPANY_FUND_EVENT_MAX_IDLE_INTERVAL"
+	viper.Set(key, "17m")
+	t.Cleanup(func() { viper.Set(key, nil) })
+
+	if got := companyFundRuntimeConfigFromViper().EventMaxIdleInterval; got != 17*time.Minute {
+		t.Fatalf("EventMaxIdleInterval=%s, want 17m", got)
+	}
+}
 
 type companyFundEventWriterStub struct{}
 

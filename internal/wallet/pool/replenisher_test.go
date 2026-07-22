@@ -1,8 +1,11 @@
 package pool
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +13,25 @@ import (
 
 	"monera-digital/internal/safeheron"
 )
+
+func TestReplenisherLogsDoNotExposeRepositoryErrors(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	secret := "postgresql://user:password@host/database"
+	repo := &mockRepo{countByStatus: func(context.Context, string, string) (int, error) {
+		return 0, errors.New(secret)
+	}}
+	r := NewReplenisher(NewManager(repo, nil, nil), ReplenisherConfig{
+		Low: map[string]int{"EVM": 10}, Target: map[string]int{"EVM": 20},
+	})
+	r.tick(context.Background())
+
+	if strings.Contains(output.String(), secret) {
+		t.Fatalf("replenisher log leaked repository error: %s", output.String())
+	}
+}
 
 func TestReplenisher_TickTriggersReplenish(t *testing.T) {
 	var replenished atomic.Int32

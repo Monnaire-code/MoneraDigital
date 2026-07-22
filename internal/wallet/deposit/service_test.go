@@ -64,6 +64,12 @@ type mockRepo struct {
 	rollbackErr error
 	markDoneErr error // forces MarkEventDone to fail
 	markMRErr   error // forces MarkDepositManualReview to fail
+
+	// Risk schedule anchors (read-only MIN(updated_at) stand-ins).
+	kytPendingAnchor    time.Time
+	amlPendingAnchor    time.Time
+	kytPendingAnchorErr error
+	amlPendingAnchorErr error
 }
 
 func newMockRepo() *mockRepo {
@@ -318,6 +324,24 @@ func (m *mockRepo) LockOneKYTPendingTimeout(_ context.Context, _ Tx, _ time.Dura
 
 func (m *mockRepo) LockOneAmlPending(_ context.Context, _ Tx, _ time.Duration) (*DepositRow, error) {
 	return nil, ErrNoPending
+}
+
+func (m *mockRepo) EarliestKYTPendingUpdatedAt(_ context.Context) (time.Time, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.kytPendingAnchorErr != nil {
+		return time.Time{}, m.kytPendingAnchorErr
+	}
+	return m.kytPendingAnchor, nil
+}
+
+func (m *mockRepo) EarliestAmlPendingUpdatedAt(_ context.Context) (time.Time, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.amlPendingAnchorErr != nil {
+		return time.Time{}, m.amlPendingAnchorErr
+	}
+	return m.amlPendingAnchor, nil
 }
 
 func (m *mockRepo) FindDepositByTxKey(_ context.Context, _ Tx, txKey string) (*DepositRow, bool, error) {

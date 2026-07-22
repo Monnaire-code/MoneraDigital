@@ -41,12 +41,38 @@ type CompanyFundDestinationMatcher interface {
 	IsCompanyFundDestination(address string) bool
 }
 
+// CompanyFundAMLAlertInput carries the provider-owned AML result for a
+// Safeheron transaction that may belong to the company-fund pipeline.
+type CompanyFundAMLAlertInput struct {
+	TransactionKey string
+	ScreeningState string
+	RiskLevel      string
+}
+
+// CompanyFundAMLAlertResult tells the legacy deposit worker whether an AML
+// event belongs to company funds, is waiting for its company projection, or
+// should continue through customer-deposit handling.
+type CompanyFundAMLAlertResult string
+
+const (
+	CompanyFundAMLAlertNotCompany CompanyFundAMLAlertResult = "NOT_COMPANY"
+	CompanyFundAMLAlertDeferred   CompanyFundAMLAlertResult = "DEFERRED"
+	CompanyFundAMLAlertApplied    CompanyFundAMLAlertResult = "APPLIED"
+)
+
+// CompanyFundAMLAlertHandler keeps company-owned AML processing out of the
+// customer-deposit state machine without coupling this package to companyfund.
+type CompanyFundAMLAlertHandler interface {
+	HandleCompanyFundAMLAlert(context.Context, CompanyFundAMLAlertInput) (CompanyFundAMLAlertResult, error)
+}
+
 // Service runs the SPEC §6.4 + §6.5 state machine.
 type Service struct {
 	repo                          Repository
 	registry                      ChainsRegistry
 	matcherMu                     sync.RWMutex
 	companyFundDestinationMatcher CompanyFundDestinationMatcher
+	companyFundAMLAlertHandler    CompanyFundAMLAlertHandler
 	alertFn                       AlertFunc
 	serialFn                      SerialNoFunc
 	// KYT fields (v1.5 T10)
@@ -84,11 +110,29 @@ func (s *Service) SetCompanyFundDestinationMatcher(matcher CompanyFundDestinatio
 	s.companyFundDestinationMatcher = matcher
 }
 
+// SetCompanyFundAMLAlertHandler installs the company-fund AML adapter during
+// container setup, before the deposit worker starts.
+func (s *Service) SetCompanyFundAMLAlertHandler(handler CompanyFundAMLAlertHandler) {
+	s.matcherMu.Lock()
+	defer s.matcherMu.Unlock()
+	s.companyFundAMLAlertHandler = handler
+}
+
 func (s *Service) isCompanyFundDestination(address string) bool {
 	s.matcherMu.RLock()
 	matcher := s.companyFundDestinationMatcher
 	s.matcherMu.RUnlock()
 	return matcher != nil && matcher.IsCompanyFundDestination(address)
+}
+
+func (s *Service) handleCompanyFundAMLAlert(ctx context.Context, input CompanyFundAMLAlertInput) (CompanyFundAMLAlertResult, error) {
+	s.matcherMu.RLock()
+	handler := s.companyFundAMLAlertHandler
+	s.matcherMu.RUnlock()
+	if handler == nil {
+		return CompanyFundAMLAlertNotCompany, nil
+	}
+	return handler.HandleCompanyFundAMLAlert(ctx, input)
 }
 
 // SetKYTDeps injects KYT dependencies (called by container after NewService, before Worker.Run).
@@ -116,6 +160,73 @@ func (s *Service) SetAMLFirstPollDelay(d time.Duration) {
 		d = 5 * time.Minute
 	}
 	s.amlFirstPollDelay = d
+}
+
+// KYTTimeout returns the configured KYT timeout used as the schedule anchor offset.
+func (s *Service) KYTTimeout() time.Duration {
+	if s == nil || s.kytTimeout <= 0 {
+		return 20 * time.Minute
+	}
+	return s.kytTimeout
+}
+
+// AMLFirstPollDelay returns the configured first AML safety-net delay.
+func (s *Service) AMLFirstPollDelay() time.Duration {
+	if s == nil || s.amlFirstPollDelay < 0 {
+		return 5 * time.Minute
+	}
+	return s.amlFirstPollDelay
+}
+
+// EarliestKYTDue returns the soonest KYT timeout instant from durable state:
+// MIN(updated_at) + KYT_TIMEOUT for status=KYT_PENDING. Zero means no work.
+// Read-only: never rewrites updated_at.
+func (s *Service) EarliestKYTDue(ctx context.Context) (time.Time, error) {
+	if s == nil || s.repo == nil {
+		return time.Time{}, nil
+	}
+	anchor, err := s.repo.EarliestKYTPendingUpdatedAt(ctx)
+	if err != nil || anchor.IsZero() {
+		return time.Time{}, err
+	}
+	return anchor.Add(s.KYTTimeout()), nil
+}
+
+// EarliestAMLFirstPollDue returns the soonest AML first-poll instant:
+// MIN(updated_at) + AML_FIRST_POLL_DELAY for KYT_PENDING + aml_risk_level=PENDING.
+// Zero means no safety-net candidate. Read-only: never rewrites updated_at.
+func (s *Service) EarliestAMLFirstPollDue(ctx context.Context) (time.Time, error) {
+	if s == nil || s.repo == nil {
+		return time.Time{}, nil
+	}
+	anchor, err := s.repo.EarliestAmlPendingUpdatedAt(ctx)
+	if err != nil || anchor.IsZero() {
+		return time.Time{}, err
+	}
+	return anchor.Add(s.AMLFirstPollDelay()), nil
+}
+
+// RiskDueFromAnchor is the pure schedule helper: due = anchor + delay.
+func RiskDueFromAnchor(anchor time.Time, delay time.Duration) time.Time {
+	if anchor.IsZero() || delay < 0 {
+		return time.Time{}
+	}
+	return anchor.Add(delay)
+}
+
+// FloorOverdueDue prevents zero-delay hot loops when a due instant is still in
+// the past after a scan attempt (still-pending AML, transient errors, remaining rows).
+func FloorOverdueDue(due, now time.Time, floor time.Duration) time.Time {
+	if due.IsZero() {
+		return time.Time{}
+	}
+	if floor <= 0 {
+		floor = time.Second
+	}
+	if !due.After(now) {
+		return now.Add(floor)
+	}
+	return due
 }
 
 // ProcessOne is the KYT-aware deposit state machine entry (SPEC §6.4 + §6.5).
@@ -500,6 +611,16 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 		}
 	}()
 
+	amlReports := convertAlertReports(alert.AmlList)
+
+	// AML_KYT_ALERT webhook omits amlScreeningTriggeredState (Safeheron does not
+	// include it in this event type). The webhook itself implies TRIGGERED — treat
+	// empty as "TRIGGERED" so DecideKYT doesn't default to MANUAL_REVIEW.
+	effectiveState := alert.AmlScreeningTriggeredState
+	if effectiveState == "" {
+		effectiveState = "TRIGGERED"
+	}
+
 	dep, found, err := s.repo.FindDepositByTxKey(ctx, tx, alert.TxKey)
 	if err != nil {
 		// Release the event-row lock before NoTx increment (C-1 deadlock guard).
@@ -515,7 +636,35 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 		return true, fmt.Errorf("find deposit for KYT alert: %w", err)
 	}
 
+	companyResult, companyErr := s.handleCompanyFundAMLAlert(ctx, CompanyFundAMLAlertInput{
+		TransactionKey: alert.TxKey,
+		ScreeningState: effectiveState,
+		RiskLevel:      SummarizeRiskLevel(amlReports),
+	})
+	if companyErr != nil {
+		return true, fmt.Errorf("handle company-fund AML alert: %w", companyErr)
+	}
+	if companyResult == CompanyFundAMLAlertDeferred {
+		if err := tx.Rollback(); err != nil {
+			txClosed = true
+			return true, fmt.Errorf("rollback deferred company-fund AML event: %w", err)
+		}
+		txClosed = true
+		return false, nil
+	}
+
 	if !found {
+		if companyResult == CompanyFundAMLAlertApplied {
+			if err := s.repo.MarkEventDone(ctx, tx, evt.ID); err != nil {
+				return true, fmt.Errorf("mark company-fund AML event done: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return true, fmt.Errorf("commit company-fund AML event: %w", err)
+			}
+			txClosed = true
+			return true, nil
+		}
+
 		// Out-of-order: alert arrived before TRANSACTION_STATUS_CHANGED created the deposit row.
 		if evt.ProcessAttempts+1 >= s.kytOrphanMaxRetry {
 			processed, err := s.markOrphanAlertDone(ctx, tx, evt)
@@ -536,16 +685,6 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 			return true, fmt.Errorf("%w: orphan increment failed: %v", ErrKYTAPIBackoff, incErr)
 		}
 		return true, nil
-	}
-
-	amlReports := convertAlertReports(alert.AmlList)
-
-	// AML_KYT_ALERT webhook omits amlScreeningTriggeredState (Safeheron does not
-	// include it in this event type). The webhook itself implies TRIGGERED — treat
-	// empty as "TRIGGERED" so DecideKYT doesn't default to MANUAL_REVIEW.
-	effectiveState := alert.AmlScreeningTriggeredState
-	if effectiveState == "" {
-		effectiveState = "TRIGGERED"
 	}
 
 	if err := s.writeAMLFields(ctx, tx, dep.ID, effectiveState, amlReports); err != nil {

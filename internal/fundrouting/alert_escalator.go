@@ -5,20 +5,56 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"time"
+
+	"monera-digital/internal/adaptiveschedule"
 )
 
 type AlertEscalator struct {
-	db       *sql.DB
-	interval time.Duration
+	db             *sql.DB
+	runner         *adaptiveRunner
+	onAlertCreated func()
+}
+
+// SetOnAlertCreated registers a wake after a durable SLA alert is inserted.
+func (e *AlertEscalator) SetOnAlertCreated(fn func()) {
+	if e == nil {
+		return
+	}
+	e.onAlertCreated = fn
 }
 
 func NewAlertEscalator(db *sql.DB) (*AlertEscalator, error) {
 	if db == nil {
 		return nil, fmt.Errorf("fund routing alert escalation database is required")
 	}
-	return &AlertEscalator{db: db, interval: time.Minute}, nil
+	e := &AlertEscalator{db: db}
+	// SLA thresholds are 1h/24h; min idle can be 1m while fully idle backs off to MaxIdle.
+	e.runner = newAdaptiveRunner("fund routing OPEN-case SLA escalator", time.Minute, adaptiveschedule.DefaultMaxIdle, e.ProcessOne)
+	e.runner.setNextDue(e.NextDue)
+	return e, nil
+}
+
+// NextDue returns the earliest not-yet-emitted SLA threshold for an OPEN case.
+func (e *AlertEscalator) NextDue(ctx context.Context) (time.Time, error) {
+	var due sql.NullTime
+	err := e.db.QueryRowContext(ctx, `WITH thresholds(level,minimum_age) AS (
+  VALUES (1,interval '1 hour'), (2,interval '24 hours')
+)
+SELECT min(routing.created_at + threshold.minimum_age)
+FROM safeheron_transaction_routing_cases routing
+CROSS JOIN thresholds threshold
+WHERE routing.decision='OPEN'
+  AND routing.created_at + threshold.minimum_age > now()
+  AND NOT EXISTS (
+    SELECT 1 FROM safeheron_transaction_routing_alerts alert
+    WHERE alert.case_id=routing.id AND alert.alert_type='SLA_ESCALATION'
+      AND alert.transition_key='sla:level:' || threshold.level::text
+  )`).Scan(&due)
+	if err != nil || !due.Valid {
+		return time.Time{}, err
+	}
+	return due.Time, nil
 }
 
 func openCaseSLAEscalationSQL() string {
@@ -56,29 +92,15 @@ func (e *AlertEscalator) ProcessOne(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if e.onAlertCreated != nil {
+		e.onAlertCreated()
+	}
 	return true, nil
 }
 
 func (e *AlertEscalator) Run(ctx context.Context) {
-	log.Printf("fund routing OPEN-case SLA escalator started")
-	defer log.Printf("fund routing OPEN-case SLA escalator stopped")
-	ticker := time.NewTicker(e.interval)
-	defer ticker.Stop()
-	for {
-		for {
-			processed, err := e.ProcessOne(ctx)
-			if err != nil {
-				log.Printf("fund routing SLA escalator error: %v", err)
-				break
-			}
-			if !processed {
-				break
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	if e == nil || e.runner == nil {
+		return
 	}
+	e.runner.Run(ctx)
 }

@@ -65,6 +65,7 @@ type companyFundRuntimeConfig struct {
 	AdminKey               string
 
 	EventPollInterval             time.Duration
+	EventMaxIdleInterval          time.Duration
 	EventDrainLimit               int
 	EventLeaseOwner               string
 	EventLeaseDuration            time.Duration
@@ -133,6 +134,7 @@ func companyFundRuntimeConfigFromViper() companyFundRuntimeConfig {
 		PayloadLegalHold:                    viper.GetBool("COMPANY_FUND_PAYLOAD_LEGAL_HOLD"),
 		AdminKey:                            viper.GetString("COMPANY_FUND_ADMIN_KEY"),
 		EventPollInterval:                   viper.GetDuration("COMPANY_FUND_EVENT_POLL_INTERVAL"),
+		EventMaxIdleInterval:                viper.GetDuration("COMPANY_FUND_EVENT_MAX_IDLE_INTERVAL"),
 		EventDrainLimit:                     viper.GetInt("COMPANY_FUND_EVENT_DRAIN_LIMIT"),
 		EventLeaseOwner:                     viper.GetString("COMPANY_FUND_EVENT_LEASE_OWNER"),
 		EventLeaseDuration:                  viper.GetDuration("COMPANY_FUND_EVENT_LEASE_DURATION"),
@@ -255,10 +257,15 @@ func withCompanyFund(ctx context.Context, config companyFundRuntimeConfig) Conta
 }
 
 func wireDepositCompanyFundRouting(c *Container) {
-	if c == nil || c.DepositPipeline == nil || c.CompanyFundAccountRegistry == nil {
+	if c == nil || c.DepositPipeline == nil {
 		return
 	}
-	c.DepositPipeline.SetCompanyFundDestinationMatcher(c.CompanyFundAccountRegistry)
+	if c.CompanyFundAccountRegistry != nil {
+		c.DepositPipeline.SetCompanyFundDestinationMatcher(c.CompanyFundAccountRegistry)
+	}
+	if c.DB != nil && c.CompanyFundRepository != nil {
+		c.DepositPipeline.SetCompanyFundAMLAlertHandler(companyfund.NewSafeheronAMLAlertHandler(c.DB))
+	}
 }
 
 // finalizeCompanyFundRuntime runs only after NewContainer has applied every
@@ -315,7 +322,9 @@ func finalizeCompanyFundRuntime(c *Container) {
 		c.CompanyFundRepository,
 		payloadReader,
 		normalizers,
-		companyFundProviderEventWorkerConfig(config, valuator),
+		companyFundProviderEventWorkerConfig(config, valuator, func() {
+			notifyCompanyFundValuationWork(c)
+		}),
 	)
 	if err != nil {
 		log.Printf("company-fund workers disabled: provider event worker configuration is invalid")
@@ -412,6 +421,7 @@ func finalizeCompanyFundRuntime(c *Container) {
 	}
 	runtime, err := companyfund.NewCompanyFundRuntime(runtimeDependencies, companyfund.CompanyFundRuntimeConfig{
 		EventPollInterval:          config.EventPollInterval,
+		EventMaxIdleInterval:       config.EventMaxIdleInterval,
 		EventDrainLimit:            config.EventDrainLimit,
 		ReconciliationPollInterval: config.ReconciliationPoll,
 		ReconciliationSchedule: companyfund.ReconciliationDailyScheduleConfig{
@@ -453,7 +463,10 @@ func finalizeCompanyFundRuntime(c *Container) {
 				config,
 				c.CompanyFundOwnedPayloadService,
 				c.companyFundPayloadKeyVersion(),
-				runtime.AirwallexWebhookWakeFunc(),
+				composeCompanyFundWakeFuncs(
+					runtime.ProviderEventWakeFunc(),
+					runtime.AirwallexWebhookWakeFunc(),
+				),
 				runtime.AirwallexWebhookEligibilityFunc(),
 			)
 			if webhookErr != nil {
@@ -612,7 +625,11 @@ func newCompanyFundCurrentValuationRuntime(c *Container, config companyFundRunti
 	return cache, refresher, valuator
 }
 
-func companyFundProviderEventWorkerConfig(config companyFundRuntimeConfig, valuator companyfund.CompanyFundTransactionValuator) companyfund.ProviderEventWorkerConfig {
+func companyFundProviderEventWorkerConfig(
+	config companyFundRuntimeConfig,
+	valuator companyfund.CompanyFundTransactionValuator,
+	onValuationRepairNeeded func(),
+) companyfund.ProviderEventWorkerConfig {
 	leaseDuration := companyFundDurationOrDefault(config.EventLeaseDuration, defaultCompanyFundEventLeaseDuration)
 	renewInterval := companyFundDurationOrDefault(config.EventRenewInterval, defaultCompanyFundEventLeaseRenewInterval)
 	return companyfund.ProviderEventWorkerConfig{
@@ -623,8 +640,9 @@ func companyFundProviderEventWorkerConfig(config companyFundRuntimeConfig, valua
 			InitialDelay: companyFundDurationOrDefault(config.EventRetryInitial, defaultCompanyFundEventRetryInitialDelay),
 			MaxDelay:     companyFundDurationOrDefault(config.EventRetryMax, defaultCompanyFundEventRetryMaxDelay),
 		},
-		Now:                 time.Now,
-		TransactionValuator: valuator,
+		Now:                     time.Now,
+		TransactionValuator:     valuator,
+		OnValuationRepairNeeded: onValuationRepairNeeded,
 	}
 }
 
@@ -793,4 +811,29 @@ func wireCompanyFundSafeheronBridge(c *Container, eligibility ...companyfund.Saf
 	}
 	c.SafeheronWebhookHandler.SetCompanyFundBridge(sourceLookup, c.CompanyFundRepository)
 	c.SafeheronWebhookHandler.SetCompanyFundEligibility(eligibility[0])
+	if c.CompanyFundRuntime != nil {
+		c.SafeheronWebhookHandler.SetCompanyFundProviderEventWake(c.CompanyFundRuntime.ProviderEventWakeFunc())
+	}
+}
+
+// composeCompanyFundWakeFuncs merges process-local wake callbacks. Nil entries
+// are skipped; the returned func is nil only when every input is nil.
+func composeCompanyFundWakeFuncs(wakes ...func()) func() {
+	var active []func()
+	for _, wake := range wakes {
+		if wake != nil {
+			active = append(active, wake)
+		}
+	}
+	if len(active) == 0 {
+		return nil
+	}
+	if len(active) == 1 {
+		return active[0]
+	}
+	return func() {
+		for _, wake := range active {
+			wake()
+		}
+	}
 }

@@ -24,7 +24,25 @@ type Manager struct {
 	registry    *walletconfig.Registry
 	mu          sync.RWMutex
 	alertFn     AlertFunc
+	onAllocated func()
 	retryDelays []time.Duration
+}
+
+// SetOnAllocated registers a nonblocking wake after an available address is
+// successfully assigned. Existing user assignments do not consume pool stock.
+func (m *Manager) SetOnAllocated(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onAllocated = fn
+}
+
+func (m *Manager) notifyAllocated() {
+	m.mu.RLock()
+	fn := m.onAllocated
+	m.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 func NewManager(repo Repository, client safeheron.SafeheronClient, registry *walletconfig.Registry) *Manager {
@@ -59,6 +77,7 @@ func (m *Manager) GetOrAssign(ctx context.Context, userID int, networkFamily str
 
 	addr, err = m.repo.AssignAvailable(ctx, userID, networkFamily)
 	if err == nil {
+		m.notifyAllocated()
 		return addr, nil
 	}
 	if !errors.Is(err, ErrPoolEmpty) {
@@ -74,6 +93,7 @@ func (m *Manager) GetOrAssign(ctx context.Context, userID int, networkFamily str
 	if err != nil {
 		return nil, fmt.Errorf("assign after replenish: %w", err)
 	}
+	m.notifyAllocated()
 	return addr, nil
 }
 
@@ -184,4 +204,3 @@ func (m *Manager) createWithRetry(ctx context.Context, customerRefID string, coi
 	}
 	return nil, fmt.Errorf("create wallet after %d retries: %w", len(m.retryDelays), lastErr)
 }
-

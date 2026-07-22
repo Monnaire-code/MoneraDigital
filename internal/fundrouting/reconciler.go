@@ -6,15 +6,42 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"sync"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/safeheron"
 )
 
 type Reconciler struct {
-	db       *sql.DB
-	interval time.Duration
+	db                *sql.DB
+	runner            *adaptiveRunner
+	onProjectionReady func()
+	// processMu keeps one bounded OPEN-case scan coherent across the repeated
+	// ProcessOne calls made by DrainProcessOne. scanCutoff is captured from the
+	// database clock; unresolved rows move past it so each row is examined at
+	// most once per drain without blocking later rows or forming a hot loop.
+	processMu  sync.Mutex
+	scanCutoff time.Time
+}
+
+// SetOnProjectionReady registers a wake emitted only after a reconciled
+// routing command and its actions commit durably.
+func (r *Reconciler) SetOnProjectionReady(fn func()) {
+	if r == nil {
+		return
+	}
+	r.onProjectionReady = fn
+}
+
+// Notify wakes reconciliation after routing commits a newer source for an
+// existing OPEN case. This keeps terminal status transitions out of the
+// shared MaxIdle maintenance path while PostgreSQL remains the source of truth.
+func (r *Reconciler) Notify() bool {
+	if r == nil || r.runner == nil {
+		return false
+	}
+	return r.runner.Notify()
 }
 
 type openCase struct {
@@ -30,10 +57,15 @@ func NewReconciler(db *sql.DB) (*Reconciler, error) {
 	if db == nil {
 		return nil, fmt.Errorf("fund routing reconciliation database is required")
 	}
-	return &Reconciler{db: db, interval: 30 * time.Second}, nil
+	r := &Reconciler{db: db}
+	r.runner = newAdaptiveRunner("fund routing OPEN-case reconciler", 30*time.Second, adaptiveschedule.DefaultMaxIdle, r.ProcessOne)
+	return r, nil
 }
 
 func (r *Reconciler) ProcessOne(ctx context.Context) (_ bool, err error) {
+	r.processMu.Lock()
+	defer r.processMu.Unlock()
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -41,8 +73,14 @@ func (r *Reconciler) ProcessOne(ctx context.Context) (_ bool, err error) {
 	defer func() {
 		if err != nil {
 			_ = tx.Rollback()
+			r.scanCutoff = time.Time{}
 		}
 	}()
+	if r.scanCutoff.IsZero() {
+		if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&r.scanCutoff); err != nil {
+			return false, fmt.Errorf("load OPEN routing scan cutoff: %w", err)
+		}
+	}
 	var current openCase
 	err = tx.QueryRowContext(ctx, `
 SELECT routing.id, routing.routing_identity_key, routing.network_family, routing.version,
@@ -57,11 +95,13 @@ JOIN LATERAL (
 JOIN safeheron_webhook_events webhook ON webhook.id=source.safeheron_webhook_event_id
 WHERE routing.decision='OPEN' AND routing.pending_command_id IS NULL
   AND routing.reason_code IN ('OWNERSHIP_UNKNOWN','CUSTOMER_POOL_UNASSIGNED','COMPANY_ACCOUNT_DISABLED','BEFORE_COMPANY_MONITORING','STATUS_NOT_TERMINAL')
+  AND routing.updated_at < $1
 ORDER BY routing.updated_at, routing.id
 FOR UPDATE OF routing SKIP LOCKED
-LIMIT 1`).Scan(&current.ID, &current.RoutingIdentityKey, &current.NetworkFamily, &current.Version, &current.EventType, &current.RawPayload)
+LIMIT 1`, r.scanCutoff).Scan(&current.ID, &current.RoutingIdentityKey, &current.NetworkFamily, &current.Version, &current.EventType, &current.RawPayload)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
+		r.scanCutoff = time.Time{}
 		return false, nil
 	}
 	if err != nil {
@@ -100,7 +140,7 @@ LIMIT 1`).Scan(&current.ID, &current.RoutingIdentityKey, &current.NetworkFamily,
 	})
 	if decision.Decision == DecisionOpen {
 		_, err = tx.ExecContext(ctx, `UPDATE safeheron_transaction_routing_cases
-SET reason_code=$2, updated_at=now() WHERE id=$1 AND decision='OPEN' AND pending_command_id IS NULL`, current.ID, string(decision.Reason))
+SET reason_code=$2, updated_at=clock_timestamp() WHERE id=$1 AND decision='OPEN' AND pending_command_id IS NULL`, current.ID, string(decision.Reason))
 		if err != nil {
 			return false, err
 		}
@@ -109,7 +149,13 @@ SET reason_code=$2, updated_at=now() WHERE id=$1 AND decision='OPEN' AND pending
 	if err = reserveReconciledProjection(ctx, tx, current, candidate, decision); err != nil {
 		return false, err
 	}
-	return true, tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	if r.onProjectionReady != nil {
+		r.onProjectionReady()
+	}
+	return true, nil
 }
 
 func reserveReconciledProjection(ctx context.Context, tx *sql.Tx, current openCase, candidate Candidate, decision DecisionResult) error {
@@ -160,18 +206,8 @@ func findCandidate(candidates []Candidate, identity string) (Candidate, bool) {
 }
 
 func (r *Reconciler) Run(ctx context.Context) {
-	log.Printf("fund routing OPEN-case reconciler started")
-	defer log.Printf("fund routing OPEN-case reconciler stopped")
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
-	for {
-		if _, err := r.ProcessOne(ctx); err != nil {
-			log.Printf("fund routing OPEN-case reconciler error: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	if r == nil || r.runner == nil {
+		return
 	}
+	r.runner.Run(ctx)
 }

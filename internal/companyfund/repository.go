@@ -275,6 +275,37 @@ WHERE id = $1
   )
 RETURNING attempt_count, lease_expires_at`
 
+const nextProviderEventDueSQL = `
+SELECT min(due_at) FROM (
+  SELECT next_attempt_at AS due_at, channel, authorized_safeheron_occurrence_key,
+         authorizing_routing_action_id
+  FROM company_fund_provider_events
+  WHERE event_state='FAILED' AND next_attempt_at > NOW()
+  UNION ALL
+  SELECT lease_expires_at AS due_at, channel, authorized_safeheron_occurrence_key,
+         authorizing_routing_action_id
+  FROM company_fund_provider_events
+  WHERE event_state='LEASED' AND lease_expires_at > NOW()
+) deadlines
+WHERE (
+  $1::text='ALL'
+  OR ($1::text='DISABLED' AND channel<>'SAFEHERON')
+  OR ($1::text='ROUTING_SCOPED' AND (
+    channel<>'SAFEHERON' OR authorized_safeheron_occurrence_key IS NOT NULL
+  ))
+) AND (
+  authorizing_routing_action_id IS NULL OR EXISTS (
+    SELECT 1 FROM safeheron_transaction_routing_case_actions action
+    JOIN safeheron_transaction_routing_case_commands command ON command.id=action.command_id
+    JOIN safeheron_transaction_routing_cases routing
+      ON routing.id=command.case_id AND routing.pending_command_id=command.id
+    WHERE action.id=deadlines.authorizing_routing_action_id
+      AND action.projection_kind='COMPANY'
+      AND action.action_type IN ('APPLY_COMPANY','FINALIZE_COMPANY_ONLY')
+      AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
+  )
+)`
+
 const renewProviderEventLeaseSQL = `
 UPDATE company_fund_provider_events
 SET lease_expires_at = NOW() + ($3::bigint * INTERVAL '1 microsecond'),
@@ -360,6 +391,20 @@ func (r *DBRepository) InsertProviderEvent(ctx context.Context, input ProviderEv
 		return ProviderEventInsertResult{}, fmt.Errorf("%w: %s for channel %q provider event %q", ErrProviderEventIdentityConflict, field, input.Channel, input.ProviderEventID)
 	}
 	return ProviderEventInsertResult{ID: existing.ID}, nil
+}
+
+// NextProviderEventDue returns the earliest durable retry or lease recovery
+// deadline for the currently claimable provider scope.
+func (r *DBRepository) NextProviderEventDue(ctx context.Context) (time.Time, error) {
+	if err := r.requireDB(); err != nil {
+		return time.Time{}, err
+	}
+	var due sql.NullTime
+	err := r.db.QueryRowContext(ctx, nextProviderEventDueSQL, r.safeheronProviderClaimMode).Scan(&due)
+	if err != nil || !due.Valid {
+		return time.Time{}, err
+	}
+	return due.Time, nil
 }
 
 func (r *DBRepository) verifySafeheronWebhookSource(ctx context.Context, input ProviderEventInput) error {

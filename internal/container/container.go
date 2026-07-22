@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/alert"
 	"monera-digital/internal/cache"
 	"monera-digital/internal/companyfund"
@@ -130,7 +131,10 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 			Low:      low,
 			Target:   target,
 		})
-		go c.PoolReplenisher.Run(ctx)
+		c.PoolManager.SetOnAllocated(func() {
+			_ = c.PoolReplenisher.Notify()
+		})
+		runContainerBackgroundTask(ctx, "wallet_pool_replenisher", c.PoolReplenisher.Run)
 
 		log.Printf("Safeheron pool enabled: replenisher interval=%s low=%v target=%v",
 			interval, low, target)
@@ -205,9 +209,10 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 			AMLPollInterval: amlPollInterval,
 			PanicBackoff:    5 * time.Second,
 		})
-		go c.DepositWorker.Run(ctx)
+		runContainerBackgroundTask(ctx, "deposit_worker", c.DepositWorker.Run)
+		wireSafeheronWebhookWorkerWakes(c)
 
-		log.Printf("Safeheron deposit pipeline enabled: worker interval=%s", workerInterval)
+		log.Printf("Safeheron deposit pipeline enabled: worker interval=%s maxIdle=10m", workerInterval)
 		log.Printf("[KYT] enabled=%v scan_interval=%s timeout=%s orphan_max_retry=%d",
 			kytEnabled, kytScanInterval, kytTimeout, kytOrphanMaxRetry)
 	}
@@ -225,6 +230,18 @@ func splitNonEmpty(csv string) []string {
 		}
 	}
 	return out
+}
+
+// installProcessMaintenanceWindow aligns all adaptiveschedule loops that do not
+// override SharedMaintenance onto one MaxIdle quiet budget. Prefer the company-
+// fund event idle knob when set so stage/prod keep a single operator control.
+func installProcessMaintenanceWindow() {
+	maxIdle := viper.GetDuration("COMPANY_FUND_EVENT_MAX_IDLE_INTERVAL")
+	if maxIdle <= 0 {
+		maxIdle = adaptiveschedule.DefaultMaxIdle
+	}
+	adaptiveschedule.SetProcessMaintenance(adaptiveschedule.NewMaintenanceWindow(maxIdle))
+	log.Printf("adaptive schedule shared maintenance window: maxIdle=%s", maxIdle)
 }
 
 func applyDefault(m map[string]int, key string, def int) {
@@ -318,6 +335,8 @@ type Container struct {
 	companyFundRuntimeFinalized bool
 	companyFundAuxCancel        context.CancelFunc
 	companyFundAuxDone          chan struct{}
+	companyFundRateRefreshLoop  *adaptiveschedule.Loop
+	companyFundValuationLoop    *adaptiveschedule.Loop
 	safeheronRuntimeContext     context.Context
 
 	// 服务
@@ -342,6 +361,10 @@ type Container struct {
 // NewContainer 创建依赖注入容器
 func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Container {
 	c := &Container{DB: db, JWTSecret: jwtSecret}
+
+	// Aggregate pure-fallback DB scans onto one process-wide MaxIdle quiet window
+	// before any option starts background loops (ADR 0002 / #53).
+	installProcessMaintenanceWindow()
 
 	// 初始化缓存
 	c.TokenBlacklist = cache.NewTokenBlacklist()

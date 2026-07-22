@@ -60,5 +60,13 @@ func (h *SafeheronWebhookHandler) bridgeCompanyFundProviderEvent(
 		SafeheronWebhookEventID: &safeheronEventID,
 		SourcePayloadDigest:     payloadDigest,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// Wake only after durable insert/idempotent lookup succeeded. The signal is
+	// coalescible; lost wakes are recovered by startup and max-idle scans.
+	if h.companyFundProviderEventWake != nil {
+		h.companyFundProviderEventWake()
+	}
+	return nil
 }

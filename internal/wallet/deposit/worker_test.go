@@ -1,8 +1,11 @@
 package deposit
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -105,6 +108,11 @@ func TestWorker_BacksOffWhenMarkErrorFails(t *testing.T) {
 }
 
 func TestWorker_PanicRecovered(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	secret := "postgresql://user:password@host/database"
 	repo := newMockRepo()
 	repo.owners["0xdest"] = 42
 	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
@@ -115,7 +123,7 @@ func TestWorker_PanicRecovered(t *testing.T) {
 	var panicCount atomic.Int32
 	svc.SetSerialFunc(func() string {
 		panicCount.Add(1)
-		panic("synthetic panic")
+		panic(secret)
 	})
 
 	enqueueRaw(t, repo, PayloadEnvelope{
@@ -146,6 +154,9 @@ func TestWorker_PanicRecovered(t *testing.T) {
 
 	if panicCount.Load() < 1 {
 		t.Errorf("expected at least one serial-fn invocation, got %d", panicCount.Load())
+	}
+	if strings.Contains(output.String(), secret) {
+		t.Fatalf("deposit worker log leaked panic data: %s", output.String())
 	}
 }
 
@@ -180,14 +191,16 @@ func TestWorker_DefaultsIntervalAndBackoff(t *testing.T) {
 
 func TestWorker_ScanKYTSafelyRecoversPanic(t *testing.T) {
 	base := newMockRepo()
+	// Overdue KYT anchor so the worker schedules an immediate risk scan.
+	base.kytPendingAnchor = time.Now().Add(-time.Hour)
 	panickingRepo := &panickingScanRepo{mockRepo: base}
 	svc := NewService(panickingRepo, nil, nil)
-	svc.SetKYTDeps(nil, true, 100, 1*time.Millisecond)
+	svc.SetKYTDeps(nil, true, 100, time.Minute)
 
 	w := NewWorker(svc, WorkerConfig{
-		Interval:        time.Second,
-		KYTScanInterval: 10 * time.Millisecond,
-		PanicBackoff:    5 * time.Millisecond,
+		Interval:     20 * time.Millisecond,
+		MaxIdle:      50 * time.Millisecond,
+		PanicBackoff: 5 * time.Millisecond,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -222,7 +235,7 @@ func (r *panickingScanRepo) LockOneAmlPending(_ context.Context, _ Tx, _ time.Du
 	return nil, ErrNoPending
 }
 
-func TestWorker_ProcessErrorContinues(t *testing.T) {
+func TestWorker_ProcessErrorYieldsCycleInsteadOfHotLoop(t *testing.T) {
 	repo := newMockRepo()
 	repo.owners["0xdest"] = 42
 	repo.depositErr = errors.New("synthetic db error")
@@ -242,13 +255,34 @@ func TestWorker_ProcessErrorContinues(t *testing.T) {
 		},
 	})
 
-	w := NewWorker(svc, WorkerConfig{Interval: 10 * time.Millisecond})
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	w := NewWorker(svc, WorkerConfig{Interval: 10 * time.Millisecond, MaxIdle: 50 * time.Millisecond})
+	outcome, err := w.drainOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected process error to surface from drainOnce")
+	}
+	if outcome.MoreWork {
+		t.Fatal("process errors must not set MoreWork (avoids zero-wait hot loop)")
+	}
+	if outcome.Worked {
+		t.Fatal("failed process without successful claim must not report Worked")
+	}
+
+	// Adaptive Run must keep going (and record the error path) without spinning.
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
 	w.Run(ctx)
-
 	if len(repo.noTxErrorIDs) == 0 {
-		t.Error("expected at least one error event recorded")
+		t.Error("expected at least one error event recorded across yielded cycles")
+	}
+}
+
+func TestWorker_NotifyIsAvailableBeforeRun(t *testing.T) {
+	w := NewWorker(NewService(newMockRepo(), nil, nil), WorkerConfig{Interval: time.Hour, MaxIdle: time.Hour})
+	if !w.Notify() {
+		t.Fatal("Notify must queue before Run starts")
+	}
+	if w.Notify() {
+		t.Fatal("second Notify before Run must coalesce")
 	}
 }
 

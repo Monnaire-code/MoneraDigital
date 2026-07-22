@@ -7,10 +7,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/companyfund"
 )
 
@@ -21,8 +21,14 @@ type ProviderEventInserter interface {
 type ProjectionWorker struct {
 	db       *sql.DB
 	events   ProviderEventInserter
-	interval time.Duration
 	workerID string
+	runner   *adaptiveRunner
+	// onProviderEventInserted wakes company-fund provider-event processing after
+	// a durable company provider-event row is written.
+	onProviderEventInserted func()
+	// onCustomerEventInserted wakes the deposit worker after a durable synthetic
+	// customer transaction event is written.
+	onCustomerEventInserted func()
 }
 
 const maxProjectionActionAttempts = 8
@@ -47,7 +53,56 @@ func NewProjectionWorker(db *sql.DB, events ProviderEventInserter) (*ProjectionW
 	if db == nil || events == nil {
 		return nil, fmt.Errorf("fund routing projection database and provider event inserter are required")
 	}
-	return &ProjectionWorker{db: db, events: events, interval: time.Second, workerID: newProjectionWorkerID()}, nil
+	worker := &ProjectionWorker{db: db, events: events, workerID: newProjectionWorkerID()}
+	worker.runner = newAdaptiveRunner("fund routing projection worker", time.Second, adaptiveschedule.DefaultMaxIdle, worker.ProcessOne)
+	worker.runner.setNextDue(worker.NextDue)
+	return worker, nil
+}
+
+// NextDue returns the earliest durable retry or abandoned lease deadline.
+func (worker *ProjectionWorker) NextDue(ctx context.Context) (time.Time, error) {
+	var due sql.NullTime
+	err := worker.db.QueryRowContext(ctx, `
+SELECT min(due_at) FROM (
+  SELECT next_attempt_at AS due_at
+  FROM safeheron_transaction_routing_case_actions
+  WHERE status='RETRYABLE' AND next_attempt_at > now()
+  UNION ALL
+  SELECT lease_expires_at AS due_at
+  FROM safeheron_transaction_routing_case_actions
+  WHERE status IN ('PENDING','RETRYABLE') AND lease_expires_at > now()
+) deadlines`).Scan(&due)
+	if err != nil || !due.Valid {
+		return time.Time{}, err
+	}
+	return due.Time, nil
+}
+
+// SetOnProviderEventInserted registers a wake after durable company provider
+// event inserts (for example CompanyFundRuntime.NotifyProviderEvent).
+func (worker *ProjectionWorker) SetOnProviderEventInserted(fn func()) {
+	if worker == nil {
+		return
+	}
+	worker.onProviderEventInserted = fn
+}
+
+// SetOnCustomerEventInserted registers a wake after durable synthetic customer
+// event inserts so a DUAL AML event waits only for projection, not MaxIdle.
+func (worker *ProjectionWorker) SetOnCustomerEventInserted(fn func()) {
+	if worker == nil {
+		return
+	}
+	worker.onCustomerEventInserted = fn
+}
+
+// Notify wakes projection after upstream routing creates durable actions.
+// Safe before Run.
+func (worker *ProjectionWorker) Notify() bool {
+	if worker == nil || worker.runner == nil {
+		return false
+	}
+	return worker.runner.Notify()
 }
 
 func (worker *ProjectionWorker) ProcessOne(ctx context.Context) (bool, error) {
@@ -183,6 +238,9 @@ ON CONFLICT (event_id) DO NOTHING`, syntheticEventID, action.CaseID, action.Targ
 	rows, rowsErr := result.RowsAffected()
 	if rowsErr != nil {
 		return worker.retryAction(ctx, action, "CUSTOMER_EVENT_INSERT_UNKNOWN", rowsErr)
+	}
+	if rows > 0 && worker.onCustomerEventInserted != nil {
+		worker.onCustomerEventInserted()
 	}
 	if rows == 0 {
 		var exists bool
@@ -390,7 +448,13 @@ func (worker *ProjectionWorker) insertCompanyProviderEvent(ctx context.Context, 
 		SourcePayloadDigest: action.PayloadDigest, AuthorizedSafeheronOccurrenceKey: action.RoutingIdentityKey,
 		AuthorizingRoutingActionID: action.ID, AuthorizingRoutingLeaseOwner: worker.workerID,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if worker.onProviderEventInserted != nil {
+		worker.onProviderEventInserted()
+	}
+	return nil
 }
 
 func (worker *ProjectionWorker) companyProviderEventStatus(ctx context.Context, action projectionAction) (string, string, error) {
@@ -647,27 +711,10 @@ func newProjectionWorkerID() string {
 }
 
 func (worker *ProjectionWorker) Run(ctx context.Context) {
-	log.Printf("fund routing projection worker started")
-	defer log.Printf("fund routing projection worker stopped")
-	ticker := time.NewTicker(worker.interval)
-	defer ticker.Stop()
-	for {
-		for {
-			processed, err := worker.ProcessOne(ctx)
-			if err != nil {
-				log.Printf("fund routing projection worker error: %v", err)
-				break
-			}
-			if !processed {
-				break
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	if worker == nil || worker.runner == nil {
+		return
 	}
+	worker.runner.Run(ctx)
 }
 
 func routingResultDigest(identity string, resultID int64) string {

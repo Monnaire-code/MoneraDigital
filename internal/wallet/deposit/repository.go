@@ -47,6 +47,13 @@ type Repository interface {
 	// in-flight (aml_risk_level='PENDING') and that has been waiting at least
 	// minAge. Pass 0 to skip the time guard (tests / manual backfill).
 	LockOneAmlPending(ctx context.Context, tx Tx, minAge time.Duration) (*DepositRow, error)
+	// EarliestKYTPendingUpdatedAt returns MIN(updated_at) for KYT_PENDING rows
+	// without locking or mutating. Zero time means no such row. The timestamp is
+	// the KYT timeout anchor and must not be rewritten by scheduling reads.
+	EarliestKYTPendingUpdatedAt(ctx context.Context) (time.Time, error)
+	// EarliestAmlPendingUpdatedAt returns MIN(updated_at) for KYT_PENDING rows
+	// with aml_risk_level='PENDING'. Zero time means no safety-net candidate.
+	EarliestAmlPendingUpdatedAt(ctx context.Context) (time.Time, error)
 	FindDepositByTxKey(ctx context.Context, tx Tx, txKey string) (*DepositRow, bool, error)
 	IncrementEventAttemptsNoTx(ctx context.Context, eventID int64) error
 
@@ -168,8 +175,9 @@ func (r *DBRepository) LockNextPendingEvent(ctx context.Context, tx Tx) (*Event,
 			        COALESCE(safeheron_tx_key, ''), COALESCE(customer_ref_id, ''),
 			        raw_payload, process_status, process_attempts,
 			        COALESCE(error_message, ''), COALESCE(authorizing_routing_action_id, 0)
-		 FROM safeheron_webhook_events
-		 WHERE process_status = 'PENDING'`
+			 FROM safeheron_webhook_events
+			 WHERE process_status = 'PENDING'`
+	orderBy := `ORDER BY received_at`
 	if !r.transactionClaimsEnabled {
 		query += ` AND event_type = 'AML_KYT_ALERT'`
 		if r.routingProjectionClaimsEnabled {
@@ -182,12 +190,17 @@ func (r *DBRepository) LockNextPendingEvent(ctx context.Context, tx Tx) (*Event,
 			    WHERE action.id=safeheron_webhook_events.authorizing_routing_action_id
 			      AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
 			  ))`
+			// A deferred AML event must never block the synthetic customer event
+			// that creates the deposit required by a DUAL routing case. The
+			// authorization predicates above keep this priority scoped to the
+			// current routing command only.
+			orderBy = `ORDER BY CASE WHEN event_id LIKE 'routing-customer:%' THEN 0 ELSE 1 END, received_at`
 		}
 	}
 	query += `
-		 ORDER BY received_at
-		 FOR UPDATE SKIP LOCKED
-		 LIMIT 1`
+			 ` + orderBy + `
+			 FOR UPDATE SKIP LOCKED
+			 LIMIT 1`
 	row := asSQLTx(tx).QueryRowContext(ctx, query)
 	var e Event
 	if err := row.Scan(
@@ -567,6 +580,35 @@ func (r *DBRepository) LockOneKYTPendingTimeout(ctx context.Context, tx Tx, thre
 		return nil, fmt.Errorf("lock KYT_PENDING timeout: %w", err)
 	}
 	return out, nil
+}
+
+func (r *DBRepository) EarliestKYTPendingUpdatedAt(ctx context.Context) (time.Time, error) {
+	var ts sql.NullTime
+	err := r.db.QueryRowContext(ctx,
+		`SELECT MIN(updated_at) FROM deposits WHERE status = 'KYT_PENDING'`,
+	).Scan(&ts)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("earliest KYT_PENDING updated_at: %w", err)
+	}
+	if !ts.Valid {
+		return time.Time{}, nil
+	}
+	return ts.Time, nil
+}
+
+func (r *DBRepository) EarliestAmlPendingUpdatedAt(ctx context.Context) (time.Time, error) {
+	var ts sql.NullTime
+	err := r.db.QueryRowContext(ctx,
+		`SELECT MIN(updated_at) FROM deposits
+		  WHERE status = 'KYT_PENDING' AND aml_risk_level = 'PENDING'`,
+	).Scan(&ts)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("earliest AML pending updated_at: %w", err)
+	}
+	if !ts.Valid {
+		return time.Time{}, nil
+	}
+	return ts.Time, nil
 }
 
 func (r *DBRepository) LockOneAmlPending(ctx context.Context, tx Tx, minAge time.Duration) (*DepositRow, error) {

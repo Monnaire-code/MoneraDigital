@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	"monera-digital/internal/adaptiveschedule"
 )
 
 type MetricsSnapshot struct {
@@ -28,15 +30,24 @@ type MetricsSnapshot struct {
 }
 
 type MetricsMonitor struct {
-	db       *sql.DB
-	interval time.Duration
+	db     *sql.DB
+	runner *adaptiveRunner
 }
 
 func NewMetricsMonitor(db *sql.DB) (*MetricsMonitor, error) {
 	if db == nil {
 		return nil, fmt.Errorf("fund routing metrics database is required")
 	}
-	return &MetricsMonitor{db: db, interval: time.Minute}, nil
+	monitor := &MetricsMonitor{db: db}
+	// Metrics are maintenance work: collect on activity-driven cycles via the
+	// shared idle budget (startup + progressive backoff to MaxIdle).
+	monitor.runner = newAdaptiveRunner("fund routing metrics", time.Minute, adaptiveschedule.DefaultMaxIdle, func(ctx context.Context) (bool, error) {
+		monitor.record(ctx)
+		// Always report empty so progressive backoff can reach MaxIdle unless
+		// another worker wakes the process; metrics must not pin minute polls.
+		return false, nil
+	})
+	return monitor, nil
 }
 
 func (monitor *MetricsMonitor) Snapshot(ctx context.Context) (MetricsSnapshot, error) {
@@ -71,17 +82,10 @@ FROM safeheron_transaction_routing_cases routing`).Scan(
 }
 
 func (monitor *MetricsMonitor) Run(ctx context.Context) {
-	monitor.record(ctx)
-	ticker := time.NewTicker(monitor.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			monitor.record(ctx)
-		}
+	if monitor == nil || monitor.runner == nil {
+		return
 	}
+	monitor.runner.Run(ctx)
 }
 
 func (monitor *MetricsMonitor) record(ctx context.Context) {

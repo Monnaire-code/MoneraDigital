@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -126,6 +127,33 @@ func TestLockNextPendingEventCanBeRestrictedToAML(t *testing.T) {
 		t.Fatalf("LockNextPendingEvent: %v", err)
 	}
 	_ = tx.Rollback()
+}
+
+func TestLockNextPendingEventPrioritizesAuthorizedCustomerProjectionOverAML(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	cols := []string{"id", "event_id", "event_type", "safeheron_tx_key",
+		"customer_ref_id", "raw_payload", "process_status", "process_attempts", "error_message", "authorizing_routing_action_id"}
+	mock.ExpectBegin()
+	mock.ExpectQuery("ORDER BY CASE WHEN event_id LIKE 'routing-customer:%' THEN 0 ELSE 1 END, received_at").
+		WillReturnRows(sqlmock.NewRows(cols).AddRow(9, "routing-customer:9", "TRANSACTION_STATUS_CHANGED", "dual-tx", "", []byte(`{}`), "PENDING", 0, "", int64(9)))
+	mock.ExpectRollback()
+
+	r := NewRepository(db)
+	r.SetTransactionClaimsEnabled(false)
+	r.SetRoutingProjectionClaimsEnabled(true)
+	tx, _ := r.BeginTx(context.Background())
+	event, err := r.LockNextPendingEvent(context.Background(), tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.EventID != "routing-customer:9" {
+		t.Fatalf("prioritized event = %q, want routing customer projection", event.EventID)
+	}
+	_ = tx.Rollback()
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestLockNextPendingEventCaptureOnlyExcludesRoutingProjectionEvents(t *testing.T) {
@@ -570,4 +598,48 @@ func TestLockOneAmlPending_NoRows(t *testing.T) {
 		t.Fatalf("expected ErrNoPending, got %v", err)
 	}
 	_ = tx.Rollback()
+}
+
+func TestEarliestKYTPendingUpdatedAt_ReadOnly(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	anchor := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`SELECT MIN\(updated_at\) FROM deposits WHERE status = 'KYT_PENDING'`).
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(anchor))
+
+	r := NewRepository(db)
+	got, err := r.EarliestKYTPendingUpdatedAt(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(anchor) {
+		t.Fatalf("got %s want %s", got, anchor)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEarliestAmlPendingUpdatedAt_Empty(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`aml_risk_level = 'PENDING'`).
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(nil))
+
+	r := NewRepository(db)
+	got, err := r.EarliestAmlPendingUpdatedAt(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsZero() {
+		t.Fatalf("expected zero time, got %s", got)
+	}
 }

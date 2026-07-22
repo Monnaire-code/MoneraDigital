@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/alert"
 )
 
@@ -21,7 +21,7 @@ type AlertNotifier struct {
 	db       *sql.DB
 	sender   RoutingAlertSender
 	workerID string
-	interval time.Duration
+	runner   *adaptiveRunner
 }
 
 type claimedDelivery struct {
@@ -40,7 +40,37 @@ func NewAlertNotifier(db *sql.DB, sender RoutingAlertSender) (*AlertNotifier, er
 	if db == nil || sender == nil {
 		return nil, fmt.Errorf("routing alert database and sender are required")
 	}
-	return &AlertNotifier{db: db, sender: sender, workerID: newProjectionWorkerID(), interval: time.Second}, nil
+	n := &AlertNotifier{db: db, sender: sender, workerID: newProjectionWorkerID()}
+	n.runner = newAdaptiveRunner("fund routing alert notifier", time.Second, adaptiveschedule.DefaultMaxIdle, n.ProcessOne)
+	n.runner.setNextDue(n.NextDue)
+	return n, nil
+}
+
+// NextDue returns the earliest durable delivery retry or lease recovery deadline.
+func (n *AlertNotifier) NextDue(ctx context.Context) (time.Time, error) {
+	var due sql.NullTime
+	err := n.db.QueryRowContext(ctx, `
+SELECT min(due_at) FROM (
+  SELECT next_attempt_at AS due_at
+  FROM safeheron_transaction_routing_alert_deliveries
+  WHERE status='FAILED_DEFINITE' AND next_attempt_at > now()
+  UNION ALL
+  SELECT lease_expires_at AS due_at
+  FROM safeheron_transaction_routing_alert_deliveries
+  WHERE status='DISPATCHING' AND lease_expires_at > now()
+) deadlines`).Scan(&due)
+	if err != nil || !due.Valid {
+		return time.Time{}, err
+	}
+	return due.Time, nil
+}
+
+// Notify wakes alert delivery after durable alert rows are written.
+func (n *AlertNotifier) Notify() bool {
+	if n == nil || n.runner == nil {
+		return false
+	}
+	return n.runner.Notify()
 }
 
 func (n *AlertNotifier) ProcessOne(ctx context.Context) (bool, error) {
@@ -235,18 +265,8 @@ WHERE status='DISPATCHING' AND lease_expires_at<=now()`); err != nil {
 }
 
 func (n *AlertNotifier) Run(ctx context.Context) {
-	log.Printf("fund routing alert notifier started")
-	defer log.Printf("fund routing alert notifier stopped")
-	ticker := time.NewTicker(n.interval)
-	defer ticker.Stop()
-	for {
-		if _, err := n.ProcessOne(ctx); err != nil {
-			log.Printf("fund routing alert notifier error: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	if n == nil || n.runner == nil {
+		return
 	}
+	n.runner.Run(ctx)
 }

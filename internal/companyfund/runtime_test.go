@@ -26,8 +26,8 @@ func TestCompanyFundRuntime_DrainProviderEventsIsBoundedAndStopsAtConfiguredLimi
 	if err != nil {
 		t.Fatalf("DrainProviderEvents() error = %v", err)
 	}
-	if result.Attempts != 2 || result.Claimed != 2 || !result.LimitReached || worker.calls != 2 {
-		t.Fatalf("DrainProviderEvents() result = %#v workerCalls=%d", result, worker.calls)
+	if result.Attempts != 2 || result.Claimed != 2 || !result.LimitReached || worker.callCount() != 2 {
+		t.Fatalf("DrainProviderEvents() result = %#v workerCalls=%d", result, worker.callCount())
 	}
 }
 
@@ -56,10 +56,11 @@ func TestProviderEventDrainFailureKindDoesNotExposeUnderlyingErrorText(t *testin
 func TestCompanyFundRuntime_StartIsTheExplicitBoundaryForBackgroundEventPolling(t *testing.T) {
 	worker := &companyFundRuntimeEventWorkerStub{notify: make(chan struct{}, 1)}
 	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{ProviderEventWorker: worker}, CompanyFundRuntimeConfig{
-		EventPollInterval: time.Hour,
+		EventPollInterval:    time.Hour,
+		EventMaxIdleInterval: time.Hour,
 	})
-	if worker.calls != 0 {
-		t.Fatalf("NewCompanyFundRuntime() must not poll before Start, calls=%d", worker.calls)
+	if worker.callCount() != 0 {
+		t.Fatalf("NewCompanyFundRuntime() must not poll before Start, calls=%d", worker.callCount())
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -70,6 +71,171 @@ func TestCompanyFundRuntime_StartIsTheExplicitBoundaryForBackgroundEventPolling(
 	case <-worker.notify:
 	case <-time.After(time.Second):
 		t.Fatal("Start() did not begin the event polling loop")
+	}
+}
+
+func TestCompanyFundRuntime_ProviderEventWakeCoalescesBeforeStart(t *testing.T) {
+	worker := &companyFundRuntimeEventWorkerStub{}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{ProviderEventWorker: worker}, CompanyFundRuntimeConfig{
+		EventPollInterval:    time.Hour,
+		EventMaxIdleInterval: time.Hour,
+	})
+	if !runtime.NotifyProviderEvent() {
+		t.Fatal("first provider-event wake should queue before Start")
+	}
+	if runtime.NotifyProviderEvent() {
+		t.Fatal("second provider-event wake should coalesce while one wake is pending")
+	}
+	if worker.callCount() != 0 {
+		t.Fatalf("NotifyProviderEvent must not process work before Start, calls=%d", worker.callCount())
+	}
+}
+
+func TestCompanyFundRuntime_ProviderEventWakeDrainsWithoutWaitingMaxIdle(t *testing.T) {
+	worker := &companyFundRuntimeEventWorkerStub{
+		notify: make(chan struct{}, 8),
+		results: []companyFundRuntimeEventWorkerCall{
+			{result: ProviderEventWorkerResult{}}, // startup empty
+			{result: ProviderEventWorkerResult{Claimed: true, EventID: 9, Outcome: ProviderEventFinalizeProcessed}},
+			{result: ProviderEventWorkerResult{}}, // drain complete
+		},
+	}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{ProviderEventWorker: worker}, CompanyFundRuntimeConfig{
+		EventPollInterval:    30 * time.Millisecond,
+		EventMaxIdleInterval: time.Hour, // deep idle ceiling must not block wake
+		EventDrainLimit:      10,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.Start(ctx)
+	defer runtime.Stop()
+
+	// Wait for startup scan (empty).
+	select {
+	case <-worker.notify:
+	case <-time.After(time.Second):
+		t.Fatal("startup scan missing")
+	}
+
+	_ = runtime.NotifyProviderEvent()
+
+	deadline := time.After(500 * time.Millisecond)
+	for worker.callCount() < 3 {
+		select {
+		case <-worker.notify:
+		case <-deadline:
+			t.Fatalf("wake did not drain promptly; calls=%d", worker.callCount())
+		}
+	}
+}
+
+func TestCompanyFundRuntime_DefaultsEventMaxIdleToTenMinutes(t *testing.T) {
+	runtime, err := NewCompanyFundRuntime(CompanyFundRuntimeDependencies{}, CompanyFundRuntimeConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.config.EventMaxIdleInterval != 10*time.Minute {
+		t.Fatalf("EventMaxIdleInterval = %s, want 10m", runtime.config.EventMaxIdleInterval)
+	}
+	if runtime.config.EventPollInterval != time.Second {
+		t.Fatalf("EventPollInterval = %s, want 1s", runtime.config.EventPollInterval)
+	}
+}
+
+func TestCompanyFundRuntime_ProviderEventCyclePublishesDurableRetryDue(t *testing.T) {
+	due := time.Now().Add(45 * time.Second).Round(time.Microsecond)
+	worker := &companyFundRuntimeEventWorkerStub{due: due}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{ProviderEventWorker: worker}, CompanyFundRuntimeConfig{})
+
+	outcome, err := runtime.providerEventCycle(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.NextDue.Equal(due) {
+		t.Fatalf("NextDue=%s, want %s", outcome.NextDue, due)
+	}
+}
+
+func TestCompanyFundRuntime_NotifyProviderEventIsNoopWithoutWorker(t *testing.T) {
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{}, CompanyFundRuntimeConfig{})
+	if runtime.NotifyProviderEvent() {
+		t.Fatal("NotifyProviderEvent must be a safe no-op without a provider-event worker")
+	}
+	if runtime.ProviderEventWakeFunc() != nil {
+		t.Fatal("ProviderEventWakeFunc must be nil without a provider-event worker")
+	}
+}
+
+func TestCompanyFundRuntime_ReconciliationUsesAdaptiveLoopNotFixedMinuteTicker(t *testing.T) {
+	now := time.Date(2026, time.July, 10, 4, 0, 0, 0, time.UTC)
+	safeheron := &companyFundRuntimeSafeheronReconcilerStub{calls: []companyFundRuntimeSafeheronCall{
+		{err: ErrCompanyFundSyncRunNotReady},
+	}}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{
+		AccountSnapshots:    companyFundRuntimeSnapshotSource(t, []CompanyFundAccount{validCompanyFundRuntimeAccounts()[0]}),
+		SafeheronReconciler: safeheron,
+		SyncRunFinalizer:    &companyFundRuntimeFinalizerStub{},
+	}, CompanyFundRuntimeConfig{
+		ReconciliationPollInterval:  time.Minute,
+		EventMaxIdleInterval:        10 * time.Minute,
+		ReconciliationSchedule:      ReconciliationDailyScheduleConfig{CatchUpDays: 1},
+		LateStatusOverlapConfigured: true,
+		LateStatusOverlapDays:       0,
+		Now:                         nowFunc(now),
+	})
+	if runtime.reconciliationLoop == nil {
+		t.Fatal("expected adaptive reconciliation loop")
+	}
+
+	// Empty / no-work cycle must not report Worked (would pin min-idle forever).
+	outcome, err := runtime.reconciliationCycle(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Worked {
+		t.Fatalf("no-work recon cycle must not set Worked: %#v", outcome)
+	}
+	if outcome.NextDue.IsZero() {
+		t.Fatal("recon cycle must publish NextDue for daily trigger / maintenance")
+	}
+}
+
+func TestCompanyFundRuntime_AirwallexWebhookWakeInterruptsAdaptiveReconIdle(t *testing.T) {
+	airwallex := &companyFundRuntimeAirwallexReconcilerStub{
+		contract: AirwallexFinancialTransactionsReconciliationContract{
+			APIVersion: airwallexTestAPIVersion, SchemaVersion: "schema-v1", EventVersion: "event-v1", LoginAsScope: "awx-main",
+		},
+	}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{
+		AccountSnapshots:    companyFundRuntimeSnapshotSource(t, validCompanyFundRuntimeAccounts()),
+		AirwallexReconciler: airwallex,
+		SyncRunFinalizer:    &companyFundRuntimeFinalizerStub{},
+	}, CompanyFundRuntimeConfig{
+		ReconciliationPollInterval:  time.Hour,
+		EventMaxIdleInterval:        time.Hour,
+		AirwallexWebhookLookback:    time.Hour,
+		LateStatusOverlapConfigured: true,
+		LateStatusOverlapDays:       0,
+		ReconciliationSchedule:      ReconciliationDailyScheduleConfig{CatchUpDays: 1},
+		Now:                         nowFunc(time.Date(2026, time.July, 10, 4, 0, 0, 0, time.UTC)),
+	})
+	if runtime.reconciliationLoop == nil {
+		t.Fatal("expected adaptive reconciliation loop for Airwallex")
+	}
+	if !runtime.NotifyAirwallexWebhook() {
+		t.Fatal("expected first Airwallex wake to queue")
+	}
+	// Drain wake path only (same as cycle's first step) to assert prompt catch-up.
+	if !runtime.drainAirwallexWake() {
+		t.Fatal("queued Airwallex wake must be drainable")
+	}
+	result, err := runtime.ReconcileAirwallexWebhookWindow(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Reconciliations != 1 || len(airwallex.inputs) != 1 {
+		t.Fatalf("webhook catch-up result=%#v inputs=%d", result, len(airwallex.inputs))
 	}
 }
 
@@ -395,9 +561,11 @@ type companyFundRuntimeEventWorkerCall struct {
 }
 
 type companyFundRuntimeEventWorkerStub struct {
+	mu      sync.Mutex
 	results []companyFundRuntimeEventWorkerCall
 	calls   int
 	notify  chan struct{}
+	due     time.Time
 }
 
 type companyFundRuntimeContinuousEventWorkerStub struct {
@@ -426,6 +594,8 @@ func (stub *companyFundRuntimeBlockingSafeheronReconciler) Reconcile(ctx context
 }
 
 func (stub *companyFundRuntimeEventWorkerStub) ProcessNext(context.Context) (ProviderEventWorkerResult, error) {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
 	if stub.notify != nil {
 		select {
 		case stub.notify <- struct{}{}:
@@ -439,6 +609,16 @@ func (stub *companyFundRuntimeEventWorkerStub) ProcessNext(context.Context) (Pro
 	call := stub.results[stub.calls]
 	stub.calls++
 	return call.result, call.err
+}
+
+func (stub *companyFundRuntimeEventWorkerStub) callCount() int {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	return stub.calls
+}
+
+func (stub *companyFundRuntimeEventWorkerStub) NextProviderEventDue(context.Context) (time.Time, error) {
+	return stub.due, nil
 }
 
 type companyFundRuntimeSafeheronCall struct {

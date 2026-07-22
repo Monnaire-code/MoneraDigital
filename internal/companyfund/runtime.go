@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"monera-digital/internal/adaptiveschedule"
 )
 
 const (
 	defaultCompanyFundEventPollInterval             = time.Second
+	defaultCompanyFundEventMaxIdleInterval          = 10 * time.Minute
 	defaultCompanyFundEventDrainLimit               = 100
 	maxCompanyFundEventDrainLimit                   = 10_000
 	defaultCompanyFundReconciliationPollInterval    = time.Minute
@@ -27,6 +30,10 @@ const (
 // runtime intentionally sees only its one-item, durable lease boundary.
 type CompanyFundProviderEventProcessor interface {
 	ProcessNext(ctx context.Context) (ProviderEventWorkerResult, error)
+}
+
+type companyFundProviderEventDueProvider interface {
+	NextProviderEventDue(ctx context.Context) (time.Time, error)
 }
 
 // CompanyFundAccountSnapshotProvider is satisfied by AccountRegistry. The
@@ -113,8 +120,14 @@ type CompanyFundRuntimeDependencies struct {
 // has no provider credentials. An empty daily schedule defaults to 03:00 in
 // Asia/Singapore (UTC+8), and NewCompanyFundRuntime performs no I/O; callers
 // must explicitly call Start with their service lifecycle context.
+//
+// Provider-event scheduling uses adaptive idle backoff:
+// EventPollInterval is the minimum idle wait after an empty drain (default 1s);
+// EventMaxIdleInterval is the progressive ceiling (default 10m). Durable
+// correctness still comes from PostgreSQL leases and next-attempt state.
 type CompanyFundRuntimeConfig struct {
 	EventPollInterval          time.Duration
+	EventMaxIdleInterval       time.Duration
 	EventDrainLimit            int
 	ReconciliationPollInterval time.Duration
 	ReconciliationSchedule     ReconciliationDailyScheduleConfig
@@ -155,11 +168,13 @@ type CompanyFundReconciliationCycleResult struct {
 // CompanyFundRuntime owns the in-process timing only. PostgreSQL sync-run
 // leases remain the authoritative cross-replica coordination and retry state.
 type CompanyFundRuntime struct {
-	dependencies      CompanyFundRuntimeDependencies
-	config            CompanyFundRuntimeConfig
-	schedule          *ReconciliationDailySchedule
-	airwallexContract AirwallexFinancialTransactionsReconciliationContract
-	airwallexWake     chan struct{}
+	dependencies       CompanyFundRuntimeDependencies
+	config             CompanyFundRuntimeConfig
+	schedule           *ReconciliationDailySchedule
+	airwallexContract  AirwallexFinancialTransactionsReconciliationContract
+	airwallexWake      chan struct{}
+	providerEventLoop  *adaptiveschedule.Loop
+	reconciliationLoop *adaptiveschedule.Loop
 
 	mu        sync.Mutex
 	running   bool
@@ -188,6 +203,34 @@ func NewCompanyFundRuntime(dependencies CompanyFundRuntimeDependencies, config C
 		config:       normalized,
 		schedule:     schedule,
 	}
+	if dependencies.ProviderEventWorker != nil {
+		loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+			Name:    "company-fund-provider-event",
+			MinIdle: normalized.EventPollInterval,
+			MaxIdle: normalized.EventMaxIdleInterval,
+			Now:     normalized.Now,
+			OnCycle: func(outcome adaptiveschedule.CycleOutcome, err error, elapsed time.Duration) {
+				if err != nil {
+					// Keep provider payloads and database details out of process logs.
+					log.Printf(
+						"adaptive schedule cycle: kind=company-fund-provider-event worked=%t moreWork=%t elapsed=%s errKind=%s",
+						outcome.Worked, outcome.MoreWork, elapsed.Round(time.Millisecond), providerEventDrainFailureKind(err),
+					)
+					return
+				}
+				if outcome.Worked || outcome.MoreWork {
+					log.Printf(
+						"adaptive schedule cycle: kind=company-fund-provider-event worked=%t moreWork=%t elapsed=%s",
+						outcome.Worked, outcome.MoreWork, elapsed.Round(time.Millisecond),
+					)
+				}
+			},
+		}, runtime.providerEventCycle)
+		if err != nil {
+			return nil, fmt.Errorf("company-fund provider event adaptive schedule: %w", err)
+		}
+		runtime.providerEventLoop = loop
+	}
 	if dependencies.AirwallexReconciler != nil {
 		contract := dependencies.AirwallexReconciler.ReconciliationContract()
 		if err := contract.validate(); err != nil {
@@ -199,6 +242,24 @@ func NewCompanyFundRuntime(dependencies CompanyFundRuntimeDependencies, config C
 		// bounded time window, not the webhook envelope's account identifier.
 		runtime.airwallexWake = make(chan struct{}, 1)
 	}
+	if runtime.hasReconciliation() {
+		maxIdle := normalized.EventMaxIdleInterval
+		if normalized.ReconciliationPollInterval > maxIdle {
+			maxIdle = normalized.ReconciliationPollInterval
+		}
+		// MinIdle uses the former poll interval as the floor after real work;
+		// empty cycles progress to MaxIdle and NextDue (daily trigger).
+		reconLoop, err := adaptiveschedule.New(adaptiveschedule.Config{
+			Name:    "company-fund-reconciliation",
+			MinIdle: normalized.ReconciliationPollInterval,
+			MaxIdle: maxIdle,
+			Now:     normalized.Now,
+		}, runtime.reconciliationCycle)
+		if err != nil {
+			return nil, fmt.Errorf("company-fund reconciliation adaptive schedule: %w", err)
+		}
+		runtime.reconciliationLoop = reconLoop
+	}
 	return runtime, nil
 }
 
@@ -208,6 +269,15 @@ func normalizeCompanyFundRuntimeConfig(config CompanyFundRuntimeConfig) (Company
 	}
 	if config.EventPollInterval <= 0 || config.EventPollInterval.Microseconds() <= 0 {
 		return CompanyFundRuntimeConfig{}, nil, fmt.Errorf("company-fund event poll interval must be positive")
+	}
+	if config.EventMaxIdleInterval == 0 {
+		config.EventMaxIdleInterval = defaultCompanyFundEventMaxIdleInterval
+	}
+	if config.EventMaxIdleInterval <= 0 || config.EventMaxIdleInterval.Microseconds() <= 0 {
+		return CompanyFundRuntimeConfig{}, nil, fmt.Errorf("company-fund event max idle interval must be positive")
+	}
+	if config.EventMaxIdleInterval < config.EventPollInterval {
+		return CompanyFundRuntimeConfig{}, nil, fmt.Errorf("company-fund event max idle interval must be >= event poll interval")
 	}
 	if config.EventDrainLimit == 0 {
 		config.EventDrainLimit = defaultCompanyFundEventDrainLimit
@@ -278,6 +348,9 @@ func (runtime *CompanyFundRuntime) Start(parent context.Context) {
 
 	go func() {
 		defer func() {
+			if recover() != nil {
+				log.Printf("company-fund runtime panic recovered: kind=runtime")
+			}
 			runtime.mu.Lock()
 			if runtime.runDone == done {
 				runtime.running = false
@@ -322,42 +395,77 @@ func (runtime *CompanyFundRuntime) Run(ctx context.Context) {
 	}
 
 	var loops sync.WaitGroup
-	if runtime.dependencies.ProviderEventWorker != nil {
+	if runtime.providerEventLoop != nil {
 		loops.Add(1)
 		go func() {
 			defer loops.Done()
-			runtime.runProviderEventLoop(ctx)
+			defer recoverCompanyFundTask("provider_event")
+			runtime.providerEventLoop.Run(ctx)
 		}()
 	}
-	if runtime.hasReconciliation() {
+	if runtime.reconciliationLoop != nil {
 		loops.Add(1)
 		go func() {
 			defer loops.Done()
-			runtime.runReconciliationLoop(ctx)
+			defer recoverCompanyFundTask("reconciliation")
+			runtime.reconciliationLoop.Run(ctx)
 		}()
 	}
 	loops.Wait()
 }
 
-func (runtime *CompanyFundRuntime) runProviderEventLoop(ctx context.Context) {
-	timer := time.NewTimer(0)
-	defer timer.Stop()
+func recoverCompanyFundTask(kind string) {
+	if recover() != nil {
+		log.Printf("company-fund runtime panic recovered: kind=%s", kind)
+	}
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			result, err := runtime.DrainProviderEvents(ctx)
-			if err != nil && ctx.Err() == nil {
-				// Keep provider payloads and database details out of process logs.
-				// The durable lease owns retries; this metadata-only signal exposes
-				// a repeatedly deferred event without leaking its contents.
-				log.Printf("company-fund provider event drain deferred: kind=%s claimed=%d", providerEventDrainFailureKind(err), result.Claimed)
-			}
-			timer.Reset(runtime.config.EventPollInterval)
+// providerEventCycle is the adaptive-schedule seam for durable provider
+// deliveries. DrainProviderEvents already empties the claimable queue up to
+// EventDrainLimit; MoreWork re-enters immediately when the limit is hit.
+func (runtime *CompanyFundRuntime) providerEventCycle(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+	result, err := runtime.DrainProviderEvents(ctx)
+	outcome := adaptiveschedule.CycleOutcome{
+		Worked:   result.Claimed > 0,
+		MoreWork: result.LimitReached,
+	}
+	if !outcome.MoreWork {
+		if dueProvider, ok := runtime.dependencies.ProviderEventWorker.(companyFundProviderEventDueProvider); ok {
+			due, dueErr := dueProvider.NextProviderEventDue(ctx)
+			outcome.NextDue = adaptiveschedule.EarliestDue(outcome.NextDue, due)
+			err = errors.Join(err, dueErr)
 		}
 	}
+	if err != nil && ctx.Err() == nil {
+		// Keep provider payloads and database details out of process logs.
+		// The durable lease owns retries; this metadata-only signal exposes
+		// a repeatedly deferred event without leaking its contents.
+		log.Printf(
+			"company-fund provider event drain deferred: kind=%s claimed=%d attempts=%d",
+			providerEventDrainFailureKind(err), result.Claimed, result.Attempts,
+		)
+	}
+	return outcome, err
+}
+
+// NotifyProviderEvent is the nonblocking callback for a handler or upstream
+// stage to call only after a provider event has been durably inserted (or
+// idempotently found) in PostgreSQL. The signal is coalescible and advisory:
+// correctness remains with durable event state plus startup/max-idle scans.
+func (runtime *CompanyFundRuntime) NotifyProviderEvent() bool {
+	if runtime == nil || runtime.providerEventLoop == nil {
+		return false
+	}
+	return runtime.providerEventLoop.Notify()
+}
+
+// ProviderEventWakeFunc returns a callback-shaped view of NotifyProviderEvent
+// for HTTP handler composition. It never performs provider I/O.
+func (runtime *CompanyFundRuntime) ProviderEventWakeFunc() func() {
+	if runtime == nil || runtime.providerEventLoop == nil {
+		return nil
+	}
+	return func() { _ = runtime.NotifyProviderEvent() }
 }
 
 func providerEventDrainFailureKind(err error) string {
@@ -382,20 +490,66 @@ func providerEventDrainFailureKind(err error) string {
 	}
 }
 
-func (runtime *CompanyFundRuntime) runReconciliationLoop(ctx context.Context) {
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			_, _ = runtime.ReconcileDueWindows(ctx)
-			timer.Reset(runtime.config.ReconciliationPollInterval)
-		case <-runtime.airwallexWake:
-			_, _ = runtime.ReconcileAirwallexWebhookWindow(ctx)
+// reconciliationCycle is the adaptive seam for daily REST compensation and
+// Airwallex webhook catch-up. Fixed minute polling is intentionally absent:
+// empty cycles back off to MaxIdle, NextDue pulls forward to the next daily
+// trigger, and NotifyAirwallexWebhook interrupts idle waits.
+func (runtime *CompanyFundRuntime) reconciliationCycle(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+	outcome := adaptiveschedule.CycleOutcome{}
+	// Drain coalesced webhook wakes first so REST catch-up stays prompt.
+	if runtime.drainAirwallexWake() {
+		result, err := runtime.ReconcileAirwallexWebhookWindow(ctx)
+		if result.Reconciliations > result.NoWork || result.Failures > 0 {
+			outcome.Worked = true
+			_ = runtime.NotifyProviderEvent()
 		}
+		if err != nil && ctx.Err() == nil {
+			return outcome, err
+		}
+	}
+
+	result, err := runtime.ReconcileDueWindows(ctx)
+	// Real provider work / failures re-accelerate; pure no-work (already
+	// terminal sync runs) must not pin minute-level polling.
+	if result.Reconciliations > result.NoWork || result.Failures > 0 {
+		outcome.Worked = true
+		_ = runtime.NotifyProviderEvent()
+	}
+	if err != nil && ctx.Err() == nil {
+		return outcome, err
+	}
+
+	now, timeErr := runtime.currentTime()
+	if timeErr == nil && runtime.schedule != nil {
+		if next, nextErr := runtime.schedule.NextTriggerAt(now); nextErr == nil {
+			// Also schedule MaxIdle maintenance so late-status / catch-up can
+			// recover without waiting for the next calendar trigger alone.
+			maintenance := now.Add(runtime.config.EventMaxIdleInterval)
+			if runtime.config.EventMaxIdleInterval <= 0 {
+				maintenance = now.Add(adaptiveschedule.DefaultMaxIdle)
+			}
+			outcome.NextDue = adaptiveschedule.EarliestDue(next, maintenance)
+		}
+	}
+	return outcome, nil
+}
+
+func (runtime *CompanyFundRuntime) drainAirwallexWake() bool {
+	if runtime == nil || runtime.airwallexWake == nil {
+		return false
+	}
+	select {
+	case <-runtime.airwallexWake:
+		// Coalesce any burst still buffered (capacity is one, but be explicit).
+		for {
+			select {
+			case <-runtime.airwallexWake:
+			default:
+				return true
+			}
+		}
+	default:
+		return false
 	}
 }
 
@@ -413,12 +567,17 @@ func (runtime *CompanyFundRuntime) NotifyAirwallexWebhook() bool {
 	if runtime == nil || runtime.dependencies.AirwallexReconciler == nil || runtime.airwallexWake == nil || !runtime.AirwallexReconciliationEnabled() {
 		return false
 	}
+	queued := false
 	select {
 	case runtime.airwallexWake <- struct{}{}:
-		return true
+		queued = true
 	default:
-		return false
 	}
+	// Also interrupt adaptive idle so catch-up does not wait for MaxIdle.
+	if runtime.reconciliationLoop != nil {
+		_ = runtime.reconciliationLoop.Notify()
+	}
+	return queued
 }
 
 // AirwallexWebhookWakeFunc returns a callback-shaped view of

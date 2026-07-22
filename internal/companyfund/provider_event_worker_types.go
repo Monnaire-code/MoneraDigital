@@ -204,6 +204,10 @@ type ProviderEventWorkerConfig struct {
 	// result is deliberately never fed into provider-event finalization: the
 	// ledger upsert is already durable and valuation repair owns later retries.
 	TransactionValuator CompanyFundTransactionValuator
+	// OnValuationRepairNeeded is an optional nonblocking process-local wake for
+	// the rate/valuation coordinator after immediate enrichment cannot finish.
+	// Durable rows remain the source of truth.
+	OnValuationRepairNeeded func()
 }
 
 func (config ProviderEventWorkerConfig) validate() error {
