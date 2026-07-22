@@ -41,14 +41,14 @@ type WebhookEventRecorder interface {
 
 // SafeheronWebhookHandler is the sync side of the deposit pipeline.
 type SafeheronWebhookHandler struct {
-	Verifier                  WebhookVerifier
-	Recorder                      WebhookEventRecorder
-	AllowedIPs                    []string
-	companyFundSourceLookup       SafeheronEventSourceLookup
-	companyFundProviderBridge     SafeheronCompanyFundProviderBridge
-	companyFundEligibility        companyfund.SafeheronWebhookEligibility
-	companyFundProviderEventWake  func()
-	depositWorkerWake             func()
+	Verifier                     WebhookVerifier
+	Recorder                     WebhookEventRecorder
+	AllowedIPs                   []string
+	companyFundSourceLookup      SafeheronEventSourceLookup
+	companyFundProviderBridge    SafeheronCompanyFundProviderBridge
+	companyFundEligibility       companyfund.SafeheronWebhookEligibility
+	companyFundProviderEventWake func()
+	depositWorkerWake            func()
 }
 
 // NewSafeheronWebhookHandler wires the public webhook receiver.

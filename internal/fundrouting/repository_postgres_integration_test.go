@@ -12,6 +12,9 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"monera-digital/internal/adaptiveschedule"
+	"monera-digital/internal/safeheron"
 )
 
 func TestRepositoryPostgresUnknownOccurrenceCreatesOnlyOpenCase(t *testing.T) {
@@ -402,6 +405,136 @@ VALUES ($1,'TRANSACTION_STATUS_CHANGED',$2,$3::jsonb,$4,'PENDING') RETURNING id`
 	}
 	if decision != "COMPANY" || commandID == 0 {
 		t.Fatalf("decision=%s command=%d", decision, commandID)
+	}
+}
+
+func TestReconcilerPostgresDrainsPastUnresolvedCaseToTerminalCase(t *testing.T) {
+	if os.Getenv("RUN_FUND_ROUTING_POSTGRES_INTEGRATION") != "1" {
+		t.Skip("set RUN_FUND_ROUTING_POSTGRES_INTEGRATION=1 to run PostgreSQL routing coverage")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		t.Fatal("DATABASE_URL is required")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%x", time.Now().UnixNano())
+	repository := NewRepository(db)
+	var webhookIDs, caseIDs []int64
+	var accountID int64
+	t.Cleanup(func() {
+		for _, caseID := range caseIDs {
+			_, _ = db.Exec(`UPDATE safeheron_transaction_routing_cases SET pending_command_id=NULL WHERE id=$1`, caseID)
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_case_actions WHERE command_id IN (
+			  SELECT id FROM safeheron_transaction_routing_case_commands WHERE case_id=$1)`, caseID)
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_case_commands WHERE case_id=$1`, caseID)
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_alerts WHERE case_id=$1`, caseID)
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_case_sources WHERE case_id=$1`, caseID)
+			_, _ = db.Exec(`DELETE FROM safeheron_transaction_routing_cases WHERE id=$1`, caseID)
+		}
+		for _, webhookID := range webhookIDs {
+			_, _ = db.Exec(`DELETE FROM company_fund_safeheron_raw_event_exclusions WHERE safeheron_webhook_event_id=$1`, webhookID)
+			_, _ = db.Exec(`DELETE FROM safeheron_webhook_events WHERE id=$1`, webhookID)
+		}
+		if accountID > 0 {
+			_, _ = db.Exec(`DELETE FROM safeheron_address_ownerships WHERE company_fund_account_id=$1`, accountID)
+			_, _ = db.Exec(`DELETE FROM company_fund_accounts WHERE id=$1`, accountID)
+		}
+	})
+
+	insertAndRoute := func(eventID, eventType, digest string, snapshot safeheron.TransactionSnapshot) RouteResult {
+		t.Helper()
+		payload, marshalErr := json.Marshal(map[string]any{"eventType": eventType, "eventDetail": snapshot})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var webhookID int64
+		if insertErr := db.QueryRow(`INSERT INTO safeheron_webhook_events
+	  (event_id,event_type,safeheron_tx_key,raw_payload,payload_digest,process_status)
+	VALUES ($1,$2,$3,$4::jsonb,$5,'PENDING') RETURNING id`, eventID, eventType, snapshot.TxKey, payload, digest).Scan(&webhookID); insertErr != nil {
+			t.Fatal(insertErr)
+		}
+		webhookIDs = append(webhookIDs, webhookID)
+		results, routeErr := repository.RouteVerifiedEvent(ctx, VerifiedEventInput{
+			WebhookEventID: webhookID,
+			EventType:      eventType,
+			PayloadDigest:  digest,
+			NetworkFamily:  "EVM",
+			Snapshot:       snapshot,
+		})
+		if routeErr != nil {
+			t.Fatal(routeErr)
+		}
+		if len(results) != 1 {
+			t.Fatalf("route results=%#v, want one occurrence", results)
+		}
+		return results[0]
+	}
+
+	blocker := routingSnapshot()
+	blocker.TxKey = "routing-blocker-" + suffix
+	blocker.TxHash = "0xblocker" + suffix
+	blocker.SourceAddress = fmt.Sprintf("0x%040x", time.Now().UnixNano())
+	blocker.DestinationAddress = fmt.Sprintf("0x%040x", time.Now().UnixNano()+1)
+	blockerResult := insertAndRoute("routing-blocker-event-"+suffix, "TRANSACTION_STATUS_CHANGED", strings.Repeat("a", 64), blocker)
+	if blockerResult.Decision.Decision != DecisionOpen {
+		t.Fatalf("blocker route=%#v, want OPEN", blockerResult)
+	}
+	caseIDs = append(caseIDs, blockerResult.CaseID)
+	if _, err := db.Exec(`UPDATE safeheron_transaction_routing_cases SET updated_at=now()-interval '1 hour' WHERE id=$1`, blockerResult.CaseID); err != nil {
+		t.Fatal(err)
+	}
+
+	companyAddress := fmt.Sprintf("0x%040x", time.Now().UnixNano()+2)
+	accountID, err = ensureRoutingTestAccount(db, "__routing_drain_"+suffix, companyAddress, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := routingSnapshot()
+	target.TxKey = "routing-terminal-" + suffix
+	target.TxHash = "0xterminal" + suffix
+	target.SourceAddress = fmt.Sprintf("0x%040x", time.Now().UnixNano()+3)
+	target.DestinationAddress = companyAddress
+	target.TransactionStatus = "CONFIRMING"
+	target.CreateTime = time.Now().Add(-time.Minute).UnixMilli()
+	initialTarget := insertAndRoute("routing-target-confirming-"+suffix, "TRANSACTION_CREATED", strings.Repeat("b", 64), target)
+	if initialTarget.Decision.Decision != DecisionOpen || initialTarget.Decision.Reason != ReasonStatusNotTerminal {
+		t.Fatalf("initial target route=%#v, want STATUS_NOT_TERMINAL OPEN", initialTarget)
+	}
+	caseIDs = append(caseIDs, initialTarget.CaseID)
+	target.TransactionStatus = "COMPLETED"
+	terminalTarget := insertAndRoute("routing-target-completed-"+suffix, "TRANSACTION_STATUS_CHANGED", strings.Repeat("c", 64), target)
+	if terminalTarget.CaseID != initialTarget.CaseID || terminalTarget.Decision.Decision != DecisionCompany || terminalTarget.CommandID != 0 {
+		t.Fatalf("terminal target route=%#v, want existing COMPANY candidate awaiting reconciliation", terminalTarget)
+	}
+
+	reconciler, err := NewReconciler(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := adaptiveschedule.DrainProcessOne(ctx, reconciler.ProcessOne, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.Worked || outcome.MoreWork {
+		t.Fatalf("reconcile outcome=%#v, want bounded complete drain", outcome)
+	}
+
+	var blockerDecision, targetDecision string
+	var commandID sql.NullInt64
+	if err := db.QueryRow(`SELECT decision FROM safeheron_transaction_routing_cases WHERE id=$1`, blockerResult.CaseID).Scan(&blockerDecision); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT decision,pending_command_id FROM safeheron_transaction_routing_cases WHERE id=$1`, initialTarget.CaseID).Scan(&targetDecision, &commandID); err != nil {
+		t.Fatal(err)
+	}
+	if blockerDecision != "OPEN" || targetDecision != "COMPANY" || !commandID.Valid {
+		t.Fatalf("blocker=%s target=%s command=%v", blockerDecision, targetDecision, commandID)
 	}
 }
 

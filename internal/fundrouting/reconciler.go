@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"monera-digital/internal/adaptiveschedule"
@@ -16,6 +17,12 @@ type Reconciler struct {
 	db                *sql.DB
 	runner            *adaptiveRunner
 	onProjectionReady func()
+	// processMu keeps one bounded OPEN-case scan coherent across the repeated
+	// ProcessOne calls made by DrainProcessOne. scanCutoff is captured from the
+	// database clock; unresolved rows move past it so each row is examined at
+	// most once per drain without blocking later rows or forming a hot loop.
+	processMu  sync.Mutex
+	scanCutoff time.Time
 }
 
 // SetOnProjectionReady registers a wake emitted only after a reconciled
@@ -56,6 +63,9 @@ func NewReconciler(db *sql.DB) (*Reconciler, error) {
 }
 
 func (r *Reconciler) ProcessOne(ctx context.Context) (_ bool, err error) {
+	r.processMu.Lock()
+	defer r.processMu.Unlock()
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -63,8 +73,14 @@ func (r *Reconciler) ProcessOne(ctx context.Context) (_ bool, err error) {
 	defer func() {
 		if err != nil {
 			_ = tx.Rollback()
+			r.scanCutoff = time.Time{}
 		}
 	}()
+	if r.scanCutoff.IsZero() {
+		if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&r.scanCutoff); err != nil {
+			return false, fmt.Errorf("load OPEN routing scan cutoff: %w", err)
+		}
+	}
 	var current openCase
 	err = tx.QueryRowContext(ctx, `
 SELECT routing.id, routing.routing_identity_key, routing.network_family, routing.version,
@@ -79,11 +95,13 @@ JOIN LATERAL (
 JOIN safeheron_webhook_events webhook ON webhook.id=source.safeheron_webhook_event_id
 WHERE routing.decision='OPEN' AND routing.pending_command_id IS NULL
   AND routing.reason_code IN ('OWNERSHIP_UNKNOWN','CUSTOMER_POOL_UNASSIGNED','COMPANY_ACCOUNT_DISABLED','BEFORE_COMPANY_MONITORING','STATUS_NOT_TERMINAL')
+  AND routing.updated_at < $1
 ORDER BY routing.updated_at, routing.id
 FOR UPDATE OF routing SKIP LOCKED
-LIMIT 1`).Scan(&current.ID, &current.RoutingIdentityKey, &current.NetworkFamily, &current.Version, &current.EventType, &current.RawPayload)
+LIMIT 1`, r.scanCutoff).Scan(&current.ID, &current.RoutingIdentityKey, &current.NetworkFamily, &current.Version, &current.EventType, &current.RawPayload)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
+		r.scanCutoff = time.Time{}
 		return false, nil
 	}
 	if err != nil {
@@ -122,11 +140,11 @@ LIMIT 1`).Scan(&current.ID, &current.RoutingIdentityKey, &current.NetworkFamily,
 	})
 	if decision.Decision == DecisionOpen {
 		_, err = tx.ExecContext(ctx, `UPDATE safeheron_transaction_routing_cases
-SET reason_code=$2, updated_at=now() WHERE id=$1 AND decision='OPEN' AND pending_command_id IS NULL`, current.ID, string(decision.Reason))
+SET reason_code=$2, updated_at=clock_timestamp() WHERE id=$1 AND decision='OPEN' AND pending_command_id IS NULL`, current.ID, string(decision.Reason))
 		if err != nil {
 			return false, err
 		}
-		return false, tx.Commit()
+		return true, tx.Commit()
 	}
 	if err = reserveReconciledProjection(ctx, tx, current, candidate, decision); err != nil {
 		return false, err
