@@ -27,6 +27,16 @@ func (r *Reconciler) SetOnProjectionReady(fn func()) {
 	r.onProjectionReady = fn
 }
 
+// Notify wakes reconciliation after routing commits a newer source for an
+// existing OPEN case. This keeps terminal status transitions out of the
+// shared MaxIdle maintenance path while PostgreSQL remains the source of truth.
+func (r *Reconciler) Notify() bool {
+	if r == nil || r.runner == nil {
+		return false
+	}
+	return r.runner.Notify()
+}
+
 type openCase struct {
 	ID                 int64
 	RoutingIdentityKey string

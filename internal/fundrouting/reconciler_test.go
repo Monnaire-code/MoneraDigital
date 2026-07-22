@@ -100,3 +100,67 @@ func TestReconcilerStopsDrainWhenCaseRemainsOpen(t *testing.T) {
 		t.Fatalf("expectations: %v", err)
 	}
 }
+
+func TestReconcilerNotifyWakesIdleRun(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	reconciler, err := NewReconciler(db)
+	if err != nil {
+		t.Fatalf("NewReconciler: %v", err)
+	}
+
+	expectEmptyReconcileCycle := func() {
+		mock.ExpectBegin()
+		mock.ExpectQuery("FOR UPDATE OF routing SKIP LOCKED").
+			WillReturnRows(sqlmock.NewRows([]string{
+				"id", "routing_identity_key", "network_family", "version", "event_type", "raw_payload",
+			}))
+		mock.ExpectRollback()
+	}
+	waitForExpectations := func(deadline time.Time) bool {
+		for time.Now().Before(deadline) {
+			if mock.ExpectationsWereMet() == nil {
+				return true
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		return mock.ExpectationsWereMet() == nil
+	}
+
+	expectEmptyReconcileCycle()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	panicValue := make(chan any, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicValue <- recovered
+			}
+			close(done)
+		}()
+		reconciler.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+		select {
+		case recovered := <-panicValue:
+			t.Errorf("reconciler run panicked: %v", recovered)
+		default:
+		}
+	}()
+
+	if !waitForExpectations(time.Now().Add(time.Second)) {
+		t.Fatal("startup reconciliation cycle did not run")
+	}
+	expectEmptyReconcileCycle()
+	if !reconciler.Notify() {
+		t.Fatal("Notify should queue a wake while reconciler is idle")
+	}
+	if !waitForExpectations(time.Now().Add(time.Second)) {
+		t.Fatal("Notify did not wake the reconciler before its 30-second idle interval")
+	}
+}

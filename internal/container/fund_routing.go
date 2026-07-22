@@ -66,14 +66,18 @@ func finalizeSafeheronRouting(c *Container) {
 			}
 		})
 	}
-	// Routing → projection wake after durable routing work in a cycle.
-	if c.FundRoutingProjectionWorker != nil {
-		worker.SetOnWorked(func() {
+	// Routing may append a terminal source to an existing OPEN case. Wake the
+	// reconciler after the source commit so the case does not wait for MaxIdle.
+	worker.SetOnWorked(func() {
+		_ = reconciler.Notify()
+		if c.FundRoutingProjectionWorker != nil {
 			_ = c.FundRoutingProjectionWorker.Notify()
-			if c.FundRoutingAlertNotifier != nil {
-				_ = c.FundRoutingAlertNotifier.Notify()
-			}
-		})
+		}
+		if c.FundRoutingAlertNotifier != nil {
+			_ = c.FundRoutingAlertNotifier.Notify()
+		}
+	})
+	if c.FundRoutingProjectionWorker != nil {
 		reconciler.SetOnProjectionReady(func() {
 			_ = c.FundRoutingProjectionWorker.Notify()
 		})
