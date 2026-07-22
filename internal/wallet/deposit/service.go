@@ -118,6 +118,73 @@ func (s *Service) SetAMLFirstPollDelay(d time.Duration) {
 	s.amlFirstPollDelay = d
 }
 
+// KYTTimeout returns the configured KYT timeout used as the schedule anchor offset.
+func (s *Service) KYTTimeout() time.Duration {
+	if s == nil || s.kytTimeout <= 0 {
+		return 20 * time.Minute
+	}
+	return s.kytTimeout
+}
+
+// AMLFirstPollDelay returns the configured first AML safety-net delay.
+func (s *Service) AMLFirstPollDelay() time.Duration {
+	if s == nil || s.amlFirstPollDelay < 0 {
+		return 5 * time.Minute
+	}
+	return s.amlFirstPollDelay
+}
+
+// EarliestKYTDue returns the soonest KYT timeout instant from durable state:
+// MIN(updated_at) + KYT_TIMEOUT for status=KYT_PENDING. Zero means no work.
+// Read-only: never rewrites updated_at.
+func (s *Service) EarliestKYTDue(ctx context.Context) (time.Time, error) {
+	if s == nil || s.repo == nil {
+		return time.Time{}, nil
+	}
+	anchor, err := s.repo.EarliestKYTPendingUpdatedAt(ctx)
+	if err != nil || anchor.IsZero() {
+		return time.Time{}, err
+	}
+	return anchor.Add(s.KYTTimeout()), nil
+}
+
+// EarliestAMLFirstPollDue returns the soonest AML first-poll instant:
+// MIN(updated_at) + AML_FIRST_POLL_DELAY for KYT_PENDING + aml_risk_level=PENDING.
+// Zero means no safety-net candidate. Read-only: never rewrites updated_at.
+func (s *Service) EarliestAMLFirstPollDue(ctx context.Context) (time.Time, error) {
+	if s == nil || s.repo == nil {
+		return time.Time{}, nil
+	}
+	anchor, err := s.repo.EarliestAmlPendingUpdatedAt(ctx)
+	if err != nil || anchor.IsZero() {
+		return time.Time{}, err
+	}
+	return anchor.Add(s.AMLFirstPollDelay()), nil
+}
+
+// RiskDueFromAnchor is the pure schedule helper: due = anchor + delay.
+func RiskDueFromAnchor(anchor time.Time, delay time.Duration) time.Time {
+	if anchor.IsZero() || delay < 0 {
+		return time.Time{}
+	}
+	return anchor.Add(delay)
+}
+
+// FloorOverdueDue prevents zero-delay hot loops when a due instant is still in
+// the past after a scan attempt (still-pending AML, transient errors, remaining rows).
+func FloorOverdueDue(due, now time.Time, floor time.Duration) time.Time {
+	if due.IsZero() {
+		return time.Time{}
+	}
+	if floor <= 0 {
+		floor = time.Second
+	}
+	if !due.After(now) {
+		return now.Add(floor)
+	}
+	return due
+}
+
 // ProcessOne is the KYT-aware deposit state machine entry (SPEC §6.4 + §6.5).
 //
 // Single-transaction structure (v1.6):

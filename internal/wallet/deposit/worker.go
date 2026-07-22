@@ -17,18 +17,18 @@ type WorkerConfig struct {
 	Interval time.Duration
 	// MaxIdle is the progressive idle ceiling (default 10m).
 	MaxIdle time.Duration
-	// KYTScanInterval is the follow-up cadence while deposit activity has armed
-	// risk recovery (default 1m). Fully idle systems fall back to MaxIdle.
+	// KYTScanInterval is retained for config compatibility; risk scans are
+	// scheduled from durable updated_at + KYT_TIMEOUT, not this cadence.
 	KYTScanInterval time.Duration
-	// AMLPollInterval is the follow-up cadence while deposit activity has armed
-	// risk recovery (default 60s). SQL minAge still gates actual AML polls.
+	// AMLPollInterval re-arms AML after a still-pending or retryable scan
+	// (default 60s). First poll uses AML_FIRST_POLL_DELAY from DB anchors.
 	AMLPollInterval time.Duration
 	// PanicBackoff pauses after a panic before the next cycle (default 5s).
 	PanicBackoff time.Duration
 }
 
 // Worker drains PENDING webhook events through Service.ProcessOne and runs
-// KYT/AML follow-up on demand with adaptive idle backoff.
+// KYT/AML follow-up from durable DB due times with adaptive idle backoff.
 type Worker struct {
 	svc    *Service
 	config WorkerConfig
@@ -36,8 +36,15 @@ type Worker struct {
 	mu   sync.Mutex
 	loop *adaptiveschedule.Loop
 
-	nextKYT time.Time
-	nextAML time.Time
+	// amlRearm is a process-local retry schedule after AML still-pending or
+	// retryable errors. Lost on restart; recovered via DB first-poll due.
+	amlRearm time.Time
+
+	// lastKYTDue / lastAMLDue retain the most recent successful durable due so a
+	// transient earliest-due query failure does not silently drop NextDue and
+	// fall through to MaxIdle-only discovery.
+	lastKYTDue time.Time
+	lastAMLDue time.Time
 }
 
 func NewWorker(svc *Service, cfg WorkerConfig) *Worker {
@@ -95,14 +102,10 @@ func (w *Worker) Run(ctx context.Context) {
 	if w == nil || w.svc == nil {
 		return
 	}
-	log.Printf("deposit worker started: minIdle=%s maxIdle=%s kytScan=%s amlPoll=%s",
-		w.config.Interval, w.config.MaxIdle, w.config.KYTScanInterval, w.config.AMLPollInterval)
+	log.Printf("deposit worker started: minIdle=%s maxIdle=%s amlPoll=%s kytTimeout=%s amlFirst=%s",
+		w.config.Interval, w.config.MaxIdle, w.config.AMLPollInterval,
+		w.svc.KYTTimeout(), w.svc.AMLFirstPollDelay())
 	defer log.Println("deposit worker stopped")
-
-	// Startup recovery: risk scans are eligible immediately once.
-	now := time.Now()
-	w.nextKYT = now
-	w.nextAML = now
 
 	w.mu.Lock()
 	loop := w.loop
@@ -111,6 +114,8 @@ func (w *Worker) Run(ctx context.Context) {
 		log.Printf("deposit worker adaptive schedule disabled")
 		return
 	}
+	// Startup recovery: first cycle queries DB due times and processes any
+	// already-overdue KYT/AML work (no process-local timer to restore).
 	loop.Run(ctx)
 }
 
@@ -132,34 +137,85 @@ func (w *Worker) cycle(ctx context.Context) (outcome adaptiveschedule.CycleOutco
 	outcome.MoreWork = drain.MoreWork
 
 	now := time.Now()
-	if drain.Worked {
-		// New deposits may enter KYT_PENDING; schedule risk follow-up by business cadence.
-		w.nextKYT = now.Add(w.config.KYTScanInterval)
-		w.nextAML = now.Add(w.config.AMLPollInterval)
-	}
+	kytDue, amlDue := w.loadRiskDues(ctx)
 
-	if !w.nextKYT.IsZero() && !w.nextKYT.After(now) {
+	// Run overdue risk work this cycle (immediate for already-due rows).
+	if riskDueNow(kytDue, now) {
 		w.runWithRecover(ctx, "KYT scan", w.svc.ScanKYTTimeouts)
-		w.nextKYT = time.Time{}
 	}
-	if !w.nextAML.IsZero() && !w.nextAML.After(now) {
+	amlShouldRun := riskDueNow(amlDue, now) || riskDueNow(w.amlRearm, now)
+	if amlShouldRun {
 		w.runWithRecover(ctx, "AML poll", w.svc.ScanAmlPending)
-		w.nextAML = time.Time{}
+		// After a poll attempt, still-pending / retryable errors keep the same
+		// updated_at anchor (must not rewrite it). Re-arm with AML_POLL_INTERVAL
+		// so we do not form a zero-delay hot loop on the still-overdue DB due.
+		w.amlRearm = now.Add(w.config.AMLPollInterval)
 	}
 
-	// Fully idle maintenance: re-arm risk checks at MaxIdle so stranded KYT/AML
-	// rows recover without 1s/1m empty loops.
-	if !outcome.Worked {
-		if w.nextKYT.IsZero() {
-			w.nextKYT = now.Add(w.config.MaxIdle)
-		}
-		if w.nextAML.IsZero() {
-			w.nextAML = now.Add(w.config.MaxIdle)
+	// Recompute durable dues after scans (rows may have left KYT_PENDING).
+	kytDue, amlDue = w.loadRiskDues(ctx)
+	if !amlDue.IsZero() && !riskDueNow(amlDue, now) {
+		// First poll still in the future: drop process-local rearm so DB due wins.
+		if riskDueNow(w.amlRearm, now) || w.amlRearm.IsZero() {
+			w.amlRearm = time.Time{}
 		}
 	}
+	if amlDue.IsZero() {
+		w.amlRearm = time.Time{}
+	}
 
-	outcome.NextDue = adaptiveschedule.EarliestDue(w.nextKYT, w.nextAML)
+	// Floor overdue dues so adaptive wait is never zero solely due to past NextDue.
+	// KYT uses MinIdle floor; AML prefers AMLPollInterval rearm / floor.
+	nextKYT := FloorOverdueDue(kytDue, now, w.config.Interval)
+	nextAML := amlDue
+	if !w.amlRearm.IsZero() {
+		nextAML = adaptiveschedule.EarliestDue(FloorOverdueDue(amlDue, now, w.config.AMLPollInterval), w.amlRearm)
+	} else {
+		nextAML = FloorOverdueDue(amlDue, now, w.config.AMLPollInterval)
+	}
+
+	outcome.NextDue = adaptiveschedule.EarliestDue(nextKYT, nextAML)
 	return outcome, drainErr
+}
+
+func (w *Worker) loadRiskDues(ctx context.Context) (kytDue, amlDue time.Time) {
+	if w == nil || w.svc == nil {
+		return time.Time{}, time.Time{}
+	}
+	now := time.Now()
+
+	kytDue, kytErr := w.svc.EarliestKYTDue(ctx)
+	if kytErr != nil {
+		log.Printf("deposit worker earliest KYT due: %v", kytErr)
+		kytDue = retainDueOnQueryError(w.lastKYTDue, now, w.config.Interval)
+	} else {
+		w.lastKYTDue = kytDue
+	}
+
+	amlDue, amlErr := w.svc.EarliestAMLFirstPollDue(ctx)
+	if amlErr != nil {
+		log.Printf("deposit worker earliest AML due: %v", amlErr)
+		amlDue = retainDueOnQueryError(w.lastAMLDue, now, w.config.AMLPollInterval)
+	} else {
+		w.lastAMLDue = amlDue
+	}
+	return kytDue, amlDue
+}
+
+// retainDueOnQueryError keeps the last successful due when a read fails. With no
+// history, schedule a short floor rearm so risk work is retried well before MaxIdle.
+func retainDueOnQueryError(last, now time.Time, floor time.Duration) time.Time {
+	if !last.IsZero() {
+		return last
+	}
+	if floor <= 0 {
+		floor = time.Second
+	}
+	return now.Add(floor)
+}
+
+func riskDueNow(due, now time.Time) bool {
+	return !due.IsZero() && !due.After(now)
 }
 
 func (w *Worker) drainOnce(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {

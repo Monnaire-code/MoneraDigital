@@ -180,14 +180,16 @@ func TestWorker_DefaultsIntervalAndBackoff(t *testing.T) {
 
 func TestWorker_ScanKYTSafelyRecoversPanic(t *testing.T) {
 	base := newMockRepo()
+	// Overdue KYT anchor so the worker schedules an immediate risk scan.
+	base.kytPendingAnchor = time.Now().Add(-time.Hour)
 	panickingRepo := &panickingScanRepo{mockRepo: base}
 	svc := NewService(panickingRepo, nil, nil)
-	svc.SetKYTDeps(nil, true, 100, 1*time.Millisecond)
+	svc.SetKYTDeps(nil, true, 100, time.Minute)
 
 	w := NewWorker(svc, WorkerConfig{
-		Interval:        time.Second,
-		KYTScanInterval: 10 * time.Millisecond,
-		PanicBackoff:    5 * time.Millisecond,
+		Interval:     20 * time.Millisecond,
+		MaxIdle:      50 * time.Millisecond,
+		PanicBackoff: 5 * time.Millisecond,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

@@ -49,6 +49,11 @@ type Config struct {
 	// OnCycle is optional metadata-only instrumentation after each cycle.
 	// It must not log secrets, provider payloads, or database URLs.
 	OnCycle func(CycleOutcome, error, time.Duration)
+	// SharedMaintenance, when set (or when the process-wide gate is installed),
+	// gates pure empty rediscovery cycles onto one aggregate quiet window so
+	// independent scanners cannot phase-skew MaxIdle into continuous DB load.
+	// Notify wakes and real NextDue still bypass the gate.
+	SharedMaintenance *MaintenanceWindow
 }
 
 // Loop is the coordination seam for one background task kind.
@@ -97,6 +102,9 @@ func New(config Config, cycle CycleFunc) (*Loop, error) {
 	normalized, err := NormalizeConfig(config)
 	if err != nil {
 		return nil, err
+	}
+	if normalized.SharedMaintenance == nil {
+		normalized.SharedMaintenance = ProcessMaintenance()
 	}
 	return &Loop{
 		config: normalized,
@@ -184,6 +192,8 @@ func (loop *Loop) Stop() {
 //  4. Notify interrupts the idle wait and resets delay to MinIdle after the cycle.
 //  5. Cycle errors and panics are isolated; the loop continues with progressive idle.
 //  6. NextDue can pull the next wake earlier than progressive idle.
+//  7. SharedMaintenance gates empty rediscovery (no wake / no due) onto one
+//     process-wide quiet window so MaxIdle is an aggregate budget.
 func (loop *Loop) Run(ctx context.Context) {
 	if loop == nil || loop.cycle == nil {
 		return
@@ -193,6 +203,10 @@ func (loop *Loop) Run(ctx context.Context) {
 	}
 
 	idle := time.Duration(0) // first cycle immediately
+	var forcedDue time.Time
+	// pendingWake is set when wait() consumes a Notify token so the next
+	// iteration can bypass SharedMaintenance (wake is no longer in the channel).
+	pendingWake := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return
@@ -200,7 +214,42 @@ func (loop *Loop) Run(ctx context.Context) {
 
 		// Drain pending wake before the cycle so a burst of signals collapses
 		// into one scan; further wakes during the cycle still re-arm after.
-		loop.drainWakes()
+		hadWake := loop.drainWakes() || pendingWake
+		pendingWake = false
+		now := loop.config.Now()
+		dueForced := !forcedDue.IsZero() && !now.Before(forcedDue)
+
+		// Pure empty rediscovery: wait for the shared maintenance window instead
+		// of each task independently polling toward its own MaxIdle phase.
+		// Business Notify (woken) and real NextDue bypass the gate.
+		if m := loop.config.SharedMaintenance; m != nil && idle > 0 && !hadWake && !dueForced {
+			allowed, nextWin := m.Allow(now)
+			if !allowed {
+				wait := time.Duration(0)
+				if !nextWin.IsZero() {
+					wait = nextWin.Sub(now)
+				}
+				if wait < 0 {
+					wait = 0
+				}
+				if dueWait, ok := waitUntil(now, forcedDue); ok && (wait == 0 || dueWait < wait) {
+					wait = dueWait
+				}
+				if wait > 0 {
+					ok, woken := loop.wait(ctx, wait)
+					if !ok {
+						return
+					}
+					if woken || loop.drainWakes() {
+						// Business signal: run cycle next, outside the gate.
+						idle = loop.config.MinIdle
+						pendingWake = true
+					}
+					continue
+				}
+				continue
+			}
+		}
 
 		started := loop.config.Now()
 		outcome, err := loop.runCycle(ctx)
@@ -208,6 +257,7 @@ func (loop *Loop) Run(ctx context.Context) {
 		if loop.config.OnCycle != nil {
 			loop.config.OnCycle(outcome, err, elapsed)
 		}
+		forcedDue = outcome.NextDue
 
 		if err := ctx.Err(); err != nil {
 			return
@@ -234,13 +284,15 @@ func (loop *Loop) Run(ctx context.Context) {
 		if wait <= 0 {
 			continue
 		}
-		if !loop.wait(ctx, wait) {
+		ok, woken := loop.wait(ctx, wait)
+		if !ok {
 			return
 		}
-		// A wake during idle restores responsiveness: next empty cycle still
-		// progresses from MinIdle only after another empty result.
-		if loop.drainWakes() {
+		// A wake during idle restores responsiveness. wait() consumes the wake
+		// token, so remember it for the next iteration's gate bypass.
+		if woken || loop.drainWakes() {
 			idle = loop.config.MinIdle
+			pendingWake = true
 		}
 	}
 }
@@ -257,16 +309,19 @@ func (loop *Loop) runCycle(ctx context.Context) (outcome CycleOutcome, err error
 	return loop.cycle(ctx)
 }
 
-func (loop *Loop) wait(ctx context.Context, d time.Duration) bool {
+// wait blocks until d elapses, ctx cancels, or a wake arrives.
+// ok=false means the loop should exit; woken=true means a Notify interrupted the wait
+// (the wake token is consumed here and will not appear in drainWakes).
+func (loop *Loop) wait(ctx context.Context, d time.Duration) (ok bool, woken bool) {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return false
+		return false, false
 	case <-timer.C:
-		return true
+		return true, false
 	case <-loop.wake:
-		return true
+		return true, true
 	}
 }
 

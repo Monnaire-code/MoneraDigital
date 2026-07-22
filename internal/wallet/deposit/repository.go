@@ -47,6 +47,13 @@ type Repository interface {
 	// in-flight (aml_risk_level='PENDING') and that has been waiting at least
 	// minAge. Pass 0 to skip the time guard (tests / manual backfill).
 	LockOneAmlPending(ctx context.Context, tx Tx, minAge time.Duration) (*DepositRow, error)
+	// EarliestKYTPendingUpdatedAt returns MIN(updated_at) for KYT_PENDING rows
+	// without locking or mutating. Zero time means no such row. The timestamp is
+	// the KYT timeout anchor and must not be rewritten by scheduling reads.
+	EarliestKYTPendingUpdatedAt(ctx context.Context) (time.Time, error)
+	// EarliestAmlPendingUpdatedAt returns MIN(updated_at) for KYT_PENDING rows
+	// with aml_risk_level='PENDING'. Zero time means no safety-net candidate.
+	EarliestAmlPendingUpdatedAt(ctx context.Context) (time.Time, error)
 	FindDepositByTxKey(ctx context.Context, tx Tx, txKey string) (*DepositRow, bool, error)
 	IncrementEventAttemptsNoTx(ctx context.Context, eventID int64) error
 
@@ -567,6 +574,35 @@ func (r *DBRepository) LockOneKYTPendingTimeout(ctx context.Context, tx Tx, thre
 		return nil, fmt.Errorf("lock KYT_PENDING timeout: %w", err)
 	}
 	return out, nil
+}
+
+func (r *DBRepository) EarliestKYTPendingUpdatedAt(ctx context.Context) (time.Time, error) {
+	var ts sql.NullTime
+	err := r.db.QueryRowContext(ctx,
+		`SELECT MIN(updated_at) FROM deposits WHERE status = 'KYT_PENDING'`,
+	).Scan(&ts)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("earliest KYT_PENDING updated_at: %w", err)
+	}
+	if !ts.Valid {
+		return time.Time{}, nil
+	}
+	return ts.Time, nil
+}
+
+func (r *DBRepository) EarliestAmlPendingUpdatedAt(ctx context.Context) (time.Time, error) {
+	var ts sql.NullTime
+	err := r.db.QueryRowContext(ctx,
+		`SELECT MIN(updated_at) FROM deposits
+		  WHERE status = 'KYT_PENDING' AND aml_risk_level = 'PENDING'`,
+	).Scan(&ts)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("earliest AML pending updated_at: %w", err)
+	}
+	if !ts.Valid {
+		return time.Time{}, nil
+	}
+	return ts.Time, nil
 }
 
 func (r *DBRepository) LockOneAmlPending(ctx context.Context, tx Tx, minAge time.Duration) (*DepositRow, error) {

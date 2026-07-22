@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -570,4 +571,48 @@ func TestLockOneAmlPending_NoRows(t *testing.T) {
 		t.Fatalf("expected ErrNoPending, got %v", err)
 	}
 	_ = tx.Rollback()
+}
+
+func TestEarliestKYTPendingUpdatedAt_ReadOnly(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	anchor := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`SELECT MIN\(updated_at\) FROM deposits WHERE status = 'KYT_PENDING'`).
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(anchor))
+
+	r := NewRepository(db)
+	got, err := r.EarliestKYTPendingUpdatedAt(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(anchor) {
+		t.Fatalf("got %s want %s", got, anchor)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEarliestAmlPendingUpdatedAt_Empty(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`aml_risk_level = 'PENDING'`).
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(nil))
+
+	r := NewRepository(db)
+	got, err := r.EarliestAmlPendingUpdatedAt(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsZero() {
+		t.Fatalf("expected zero time, got %s", got)
+	}
 }

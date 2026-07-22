@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/alert"
 	"monera-digital/internal/cache"
 	"monera-digital/internal/companyfund"
@@ -228,6 +229,18 @@ func splitNonEmpty(csv string) []string {
 	return out
 }
 
+// installProcessMaintenanceWindow aligns all adaptiveschedule loops that do not
+// override SharedMaintenance onto one MaxIdle quiet budget. Prefer the company-
+// fund event idle knob when set so stage/prod keep a single operator control.
+func installProcessMaintenanceWindow() {
+	maxIdle := viper.GetDuration("COMPANY_FUND_EVENT_MAX_IDLE_INTERVAL")
+	if maxIdle <= 0 {
+		maxIdle = adaptiveschedule.DefaultMaxIdle
+	}
+	adaptiveschedule.SetProcessMaintenance(adaptiveschedule.NewMaintenanceWindow(maxIdle))
+	log.Printf("adaptive schedule shared maintenance window: maxIdle=%s", maxIdle)
+}
+
 func applyDefault(m map[string]int, key string, def int) {
 	if v, ok := m[key]; !ok || v <= 0 {
 		m[key] = def
@@ -343,6 +356,10 @@ type Container struct {
 // NewContainer 创建依赖注入容器
 func NewContainer(db *sql.DB, jwtSecret string, opts ...ContainerOption) *Container {
 	c := &Container{DB: db, JWTSecret: jwtSecret}
+
+	// Aggregate pure-fallback DB scans onto one process-wide MaxIdle quiet window
+	// before any option starts background loops (ADR 0002 / #53).
+	installProcessMaintenanceWindow()
 
 	// 初始化缓存
 	c.TokenBlacklist = cache.NewTokenBlacklist()
