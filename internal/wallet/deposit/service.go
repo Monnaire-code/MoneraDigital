@@ -636,17 +636,25 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 		return true, fmt.Errorf("find deposit for KYT alert: %w", err)
 	}
 
-	if !found {
-		companyResult, companyErr := s.handleCompanyFundAMLAlert(ctx, CompanyFundAMLAlertInput{
-			TransactionKey: alert.TxKey,
-			ScreeningState: effectiveState,
-			RiskLevel:      SummarizeRiskLevel(amlReports),
-		})
-		if companyErr != nil {
-			return true, fmt.Errorf("handle company-fund AML alert: %w", companyErr)
+	companyResult, companyErr := s.handleCompanyFundAMLAlert(ctx, CompanyFundAMLAlertInput{
+		TransactionKey: alert.TxKey,
+		ScreeningState: effectiveState,
+		RiskLevel:      SummarizeRiskLevel(amlReports),
+	})
+	if companyErr != nil {
+		return true, fmt.Errorf("handle company-fund AML alert: %w", companyErr)
+	}
+	if companyResult == CompanyFundAMLAlertDeferred {
+		if err := tx.Rollback(); err != nil {
+			txClosed = true
+			return true, fmt.Errorf("rollback deferred company-fund AML event: %w", err)
 		}
-		switch companyResult {
-		case CompanyFundAMLAlertApplied:
+		txClosed = true
+		return false, nil
+	}
+
+	if !found {
+		if companyResult == CompanyFundAMLAlertApplied {
 			if err := s.repo.MarkEventDone(ctx, tx, evt.ID); err != nil {
 				return true, fmt.Errorf("mark company-fund AML event done: %w", err)
 			}
@@ -655,13 +663,6 @@ func (s *Service) processKYTAlert(ctx context.Context, tx Tx, evt *Event, alert 
 			}
 			txClosed = true
 			return true, nil
-		case CompanyFundAMLAlertDeferred:
-			if err := tx.Rollback(); err != nil {
-				txClosed = true
-				return true, fmt.Errorf("rollback deferred company-fund AML event: %w", err)
-			}
-			txClosed = true
-			return false, nil
 		}
 
 		// Out-of-order: alert arrived before TRANSACTION_STATUS_CHANGED created the deposit row.

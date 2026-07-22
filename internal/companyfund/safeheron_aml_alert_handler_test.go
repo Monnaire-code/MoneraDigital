@@ -2,7 +2,6 @@ package companyfund
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"regexp"
 	"testing"
@@ -10,16 +9,16 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestSafeheronAMLAlertHandler_UpdatesLinkedCompanyTransaction(t *testing.T) {
+func TestSafeheronAMLAlertHandler_UpdatesAllProjectedCompanyMovements(t *testing.T) {
 	db, mock := newCompanyFundMockDB(t)
 	defer db.Close()
 
 	mock.ExpectQuery(regexp.QuoteMeta(selectSafeheronCompanyFundTransactionForAMLAlertSQL)).
 		WithArgs("safeheron-tx").
-		WillReturnRows(sqlmock.NewRows([]string{"company_fund_transaction_id"}).AddRow(int64(71)))
+		WillReturnRows(sqlmock.NewRows([]string{"company_case_count", "pending_company_projection_count", "pending_customer_projection_count"}).AddRow(2, 0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(updateSafeheronCompanyFundTransactionAMLAlertSQL)).
-		WithArgs(int64(71), "safeheron-tx", string(AMLScreeningStateScreened), string(AMLRiskLevelLow)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs("safeheron-tx", string(AMLScreeningStateScreened), string(AMLRiskLevelLow)).
+		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	result, err := NewSafeheronAMLAlertHandler(db).HandleCompanyFundAMLAlert(context.Background(), SafeheronAMLAlertInput{
 		TransactionKey: "safeheron-tx",
@@ -34,24 +33,36 @@ func TestSafeheronAMLAlertHandler_UpdatesLinkedCompanyTransaction(t *testing.T) 
 	}
 }
 
-func TestSafeheronAMLAlertHandler_DefersUntilCompanyProjectionExists(t *testing.T) {
-	db, mock := newCompanyFundMockDB(t)
-	defer db.Close()
-
-	mock.ExpectQuery(regexp.QuoteMeta(selectSafeheronCompanyFundTransactionForAMLAlertSQL)).
-		WithArgs("safeheron-tx").
-		WillReturnRows(sqlmock.NewRows([]string{"company_fund_transaction_id"}).AddRow(nil))
-
-	result, err := NewSafeheronAMLAlertHandler(db).HandleCompanyFundAMLAlert(context.Background(), SafeheronAMLAlertInput{
-		TransactionKey: "safeheron-tx",
-		ScreeningState: "TRIGGERED",
-		RiskLevel:      "LOW",
-	})
-	if err != nil || result != SafeheronAMLAlertDeferred {
-		t.Fatalf("HandleCompanyFundAMLAlert() = %q, %v", result, err)
+func TestSafeheronAMLAlertHandler_DefersUntilEveryRequiredProjectionExists(t *testing.T) {
+	testCases := []struct {
+		name                      string
+		pendingCompanyProjection  int
+		pendingCustomerProjection int
+	}{
+		{name: "company projection pending", pendingCompanyProjection: 1},
+		{name: "customer projection pending", pendingCustomerProjection: 1},
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, mock := newCompanyFundMockDB(t)
+			defer db.Close()
+
+			mock.ExpectQuery(regexp.QuoteMeta(selectSafeheronCompanyFundTransactionForAMLAlertSQL)).
+				WithArgs("safeheron-tx").
+				WillReturnRows(sqlmock.NewRows([]string{"company_case_count", "pending_company_projection_count", "pending_customer_projection_count"}).AddRow(1, testCase.pendingCompanyProjection, testCase.pendingCustomerProjection))
+
+			result, err := NewSafeheronAMLAlertHandler(db).HandleCompanyFundAMLAlert(context.Background(), SafeheronAMLAlertInput{
+				TransactionKey: "safeheron-tx",
+				ScreeningState: "TRIGGERED",
+				RiskLevel:      "LOW",
+			})
+			if err != nil || result != SafeheronAMLAlertDeferred {
+				t.Fatalf("HandleCompanyFundAMLAlert() = %q, %v", result, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -61,7 +72,7 @@ func TestSafeheronAMLAlertHandler_LeavesCustomerAlertToDepositPipeline(t *testin
 
 	mock.ExpectQuery(regexp.QuoteMeta(selectSafeheronCompanyFundTransactionForAMLAlertSQL)).
 		WithArgs("customer-tx").
-		WillReturnError(sql.ErrNoRows)
+		WillReturnRows(sqlmock.NewRows([]string{"company_case_count", "pending_company_projection_count", "pending_customer_projection_count"}).AddRow(0, 0, 0))
 
 	result, err := NewSafeheronAMLAlertHandler(db).HandleCompanyFundAMLAlert(context.Background(), SafeheronAMLAlertInput{
 		TransactionKey: "customer-tx",

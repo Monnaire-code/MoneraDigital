@@ -26,6 +26,9 @@ type ProjectionWorker struct {
 	// onProviderEventInserted wakes company-fund provider-event processing after
 	// a durable company provider-event row is written.
 	onProviderEventInserted func()
+	// onCustomerEventInserted wakes the deposit worker after a durable synthetic
+	// customer transaction event is written.
+	onCustomerEventInserted func()
 }
 
 const maxProjectionActionAttempts = 8
@@ -82,6 +85,15 @@ func (worker *ProjectionWorker) SetOnProviderEventInserted(fn func()) {
 		return
 	}
 	worker.onProviderEventInserted = fn
+}
+
+// SetOnCustomerEventInserted registers a wake after durable synthetic customer
+// event inserts so a DUAL AML event waits only for projection, not MaxIdle.
+func (worker *ProjectionWorker) SetOnCustomerEventInserted(fn func()) {
+	if worker == nil {
+		return
+	}
+	worker.onCustomerEventInserted = fn
 }
 
 // Notify wakes projection after upstream routing creates durable actions.
@@ -226,6 +238,9 @@ ON CONFLICT (event_id) DO NOTHING`, syntheticEventID, action.CaseID, action.Targ
 	rows, rowsErr := result.RowsAffected()
 	if rowsErr != nil {
 		return worker.retryAction(ctx, action, "CUSTOMER_EVENT_INSERT_UNKNOWN", rowsErr)
+	}
+	if rows > 0 && worker.onCustomerEventInserted != nil {
+		worker.onCustomerEventInserted()
 	}
 	if rows == 0 {
 		var exists bool

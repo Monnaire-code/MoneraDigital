@@ -175,8 +175,9 @@ func (r *DBRepository) LockNextPendingEvent(ctx context.Context, tx Tx) (*Event,
 			        COALESCE(safeheron_tx_key, ''), COALESCE(customer_ref_id, ''),
 			        raw_payload, process_status, process_attempts,
 			        COALESCE(error_message, ''), COALESCE(authorizing_routing_action_id, 0)
-		 FROM safeheron_webhook_events
-		 WHERE process_status = 'PENDING'`
+			 FROM safeheron_webhook_events
+			 WHERE process_status = 'PENDING'`
+	orderBy := `ORDER BY received_at`
 	if !r.transactionClaimsEnabled {
 		query += ` AND event_type = 'AML_KYT_ALERT'`
 		if r.routingProjectionClaimsEnabled {
@@ -189,12 +190,17 @@ func (r *DBRepository) LockNextPendingEvent(ctx context.Context, tx Tx) (*Event,
 			    WHERE action.id=safeheron_webhook_events.authorizing_routing_action_id
 			      AND action.status IN ('PENDING','RETRYABLE') AND command.status='PENDING'
 			  ))`
+			// A deferred AML event must never block the synthetic customer event
+			// that creates the deposit required by a DUAL routing case. The
+			// authorization predicates above keep this priority scoped to the
+			// current routing command only.
+			orderBy = `ORDER BY CASE WHEN event_id LIKE 'routing-customer:%' THEN 0 ELSE 1 END, received_at`
 		}
 	}
 	query += `
-		 ORDER BY received_at
-		 FOR UPDATE SKIP LOCKED
-		 LIMIT 1`
+			 ` + orderBy + `
+			 FOR UPDATE SKIP LOCKED
+			 LIMIT 1`
 	row := asSQLTx(tx).QueryRowContext(ctx, query)
 	var e Event
 	if err := row.Scan(

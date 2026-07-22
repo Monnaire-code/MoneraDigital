@@ -106,6 +106,45 @@ func TestProjectionWorkerCustomerAdmissionRequiresTerminalStatusAndAssignmentTim
 	}
 }
 
+func TestProjectionWorkerApplyCustomerWakesDepositAfterDurableSyntheticEvent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	worker, err := NewProjectionWorker(db, &projectionEventInserterStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeCount := 0
+	worker.SetOnCustomerEventInserted(func() { wakeCount++ })
+	action := projectionAction{
+		ID: 9, CaseID: 11, CommandID: 12,
+		RoutingIdentityKey: "occurrence-1",
+		TargetUserID:       sql.NullInt64{Int64: 7, Valid: true},
+	}
+	mock.ExpectExec("effective_event_time >= pool.assigned_at(?s).*transactionStatus").
+		WithArgs("routing-customer:9", int64(11), int64(7), int64(9), worker.workerID).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT deposit.id").WithArgs(int64(11)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT attempt_count FROM safeheron_transaction_routing_case_actions").
+		WithArgs(int64(9), worker.workerID).
+		WillReturnRows(sqlmock.NewRows([]string{"attempt_count"}).AddRow(0))
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_case_actions action").
+		WithArgs(int64(9), "WAITING_CUSTOMER_PROJECTION", "", worker.workerID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := worker.applyCustomer(context.Background(), action); err != nil {
+		t.Fatalf("applyCustomer: %v", err)
+	}
+	if wakeCount != 1 {
+		t.Fatalf("deposit wake count = %d, want 1 after the durable synthetic event insert", wakeCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProjectionWorkerCompleteCompanyRejectsConflictingStoredResult(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

@@ -2,7 +2,6 @@ package companyfund
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,23 +10,28 @@ import (
 )
 
 const selectSafeheronCompanyFundTransactionForAMLAlertSQL = `
-SELECT company_fund_transaction_id
+SELECT COUNT(*) AS company_case_count,
+       COUNT(*) FILTER (WHERE company_fund_transaction_id IS NULL) AS pending_company_projection_count,
+       COUNT(*) FILTER (WHERE requires_customer_projection AND deposit_id IS NULL) AS pending_customer_projection_count
 FROM safeheron_transaction_routing_cases
 WHERE safeheron_tx_key = $1
-  AND decision IN ('COMPANY', 'DUAL')
-  AND requires_company_projection
-ORDER BY id DESC
-LIMIT 1`
+  AND requires_company_projection`
 
 const updateSafeheronCompanyFundTransactionAMLAlertSQL = `
-UPDATE company_fund_transactions
-SET aml_screening_state = $3,
-    aml_risk_level = $4,
+UPDATE company_fund_transactions AS transaction
+SET aml_screening_state = $2,
+    aml_risk_level = $3,
     last_synced_at = NOW(),
     updated_at = NOW()
-WHERE id = $1
-  AND channel = 'SAFEHERON'
-  AND provider_transaction_id = $2`
+WHERE transaction.channel = 'SAFEHERON'
+  AND transaction.provider_transaction_id = $1
+  AND EXISTS (
+    SELECT 1
+    FROM safeheron_transaction_routing_cases AS routing
+    WHERE routing.safeheron_tx_key = $1
+      AND routing.requires_company_projection
+      AND routing.company_fund_transaction_id = transaction.id
+  )`
 
 var ErrInvalidSafeheronAMLAlertRisk = errors.New("invalid Safeheron AML alert risk")
 
@@ -64,15 +68,19 @@ func (h *SafeheronAMLAlertHandler) HandleCompanyFundAMLAlert(ctx context.Context
 		return SafeheronAMLAlertNotCompany, nil
 	}
 
-	var transactionID sql.NullInt64
-	err := h.db.QueryRowContext(ctx, selectSafeheronCompanyFundTransactionForAMLAlertSQL, transactionKey).Scan(&transactionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return SafeheronAMLAlertNotCompany, nil
-	}
+	var companyCaseCount, pendingCompanyProjectionCount, pendingCustomerProjectionCount int64
+	err := h.db.QueryRowContext(ctx, selectSafeheronCompanyFundTransactionForAMLAlertSQL, transactionKey).Scan(
+		&companyCaseCount,
+		&pendingCompanyProjectionCount,
+		&pendingCustomerProjectionCount,
+	)
 	if err != nil {
 		return SafeheronAMLAlertNotCompany, fmt.Errorf("find company transaction for Safeheron AML alert: %w", err)
 	}
-	if !transactionID.Valid {
+	if companyCaseCount == 0 {
+		return SafeheronAMLAlertNotCompany, nil
+	}
+	if pendingCompanyProjectionCount > 0 || pendingCustomerProjectionCount > 0 {
 		return SafeheronAMLAlertDeferred, nil
 	}
 
@@ -81,7 +89,7 @@ func (h *SafeheronAMLAlertHandler) HandleCompanyFundAMLAlert(ctx context.Context
 		return SafeheronAMLAlertNotCompany, err
 	}
 	result, err := h.db.ExecContext(ctx, updateSafeheronCompanyFundTransactionAMLAlertSQL,
-		transactionID.Int64, transactionKey, screeningState, riskLevel)
+		transactionKey, screeningState, riskLevel)
 	if err != nil {
 		return SafeheronAMLAlertNotCompany, fmt.Errorf("update company transaction AML alert: %w", err)
 	}
@@ -89,7 +97,7 @@ func (h *SafeheronAMLAlertHandler) HandleCompanyFundAMLAlert(ctx context.Context
 	if err != nil {
 		return SafeheronAMLAlertNotCompany, fmt.Errorf("read company transaction AML update result: %w", err)
 	}
-	if updated != 1 {
+	if updated == 0 {
 		return SafeheronAMLAlertNotCompany, fmt.Errorf("company transaction AML update affected %d rows", updated)
 	}
 	return SafeheronAMLAlertApplied, nil

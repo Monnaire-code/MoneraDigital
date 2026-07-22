@@ -60,6 +60,11 @@ func finalizeSafeheronRouting(c *Container) {
 		if c.CompanyFundRuntime != nil {
 			projectionWorker.SetOnProviderEventInserted(c.CompanyFundRuntime.ProviderEventWakeFunc())
 		}
+		projectionWorker.SetOnCustomerEventInserted(func() {
+			if c.DepositWorker != nil {
+				_ = c.DepositWorker.Notify()
+			}
+		})
 	}
 	// Routing → projection wake after durable routing work in a cycle.
 	if c.FundRoutingProjectionWorker != nil {
