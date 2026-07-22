@@ -69,24 +69,43 @@ func finalizeSafeheronRouting(c *Container) {
 				_ = c.FundRoutingAlertNotifier.Notify()
 			}
 		})
+		reconciler.SetOnProjectionReady(func() {
+			_ = c.FundRoutingProjectionWorker.Notify()
+		})
 	}
-	go worker.Run(ctx)
-	go reconciler.Run(ctx)
-	go escalator.Run(ctx)
+	if c.FundRoutingAlertNotifier != nil {
+		escalator.SetOnAlertCreated(func() {
+			_ = c.FundRoutingAlertNotifier.Notify()
+		})
+	}
+	runContainerBackgroundTask(ctx, "fund_routing", worker.Run)
+	runContainerBackgroundTask(ctx, "fund_routing_reconciliation", reconciler.Run)
+	runContainerBackgroundTask(ctx, "fund_routing_sla_escalation", escalator.Run)
 	metricsMonitor, metricsErr := fundrouting.NewMetricsMonitor(c.DB)
 	if metricsErr != nil {
 		panic(metricsErr)
 	}
-	go metricsMonitor.Run(ctx)
+	runContainerBackgroundTask(ctx, "fund_routing_metrics", metricsMonitor.Run)
 	if c.FundRoutingAlertNotifier != nil {
-		go c.FundRoutingAlertNotifier.Run(ctx)
+		runContainerBackgroundTask(ctx, "fund_routing_alert_delivery", c.FundRoutingAlertNotifier.Run)
 	}
 	if c.FundRoutingProjectionWorker != nil {
-		go c.FundRoutingProjectionWorker.Run(ctx)
+		runContainerBackgroundTask(ctx, "fund_routing_projection", c.FundRoutingProjectionWorker.Run)
 	}
 	// Re-bind webhook wakes once routing workers exist so transaction events
 	// advance both deposit and routing without fixed second-level polling.
 	wireSafeheronWebhookWorkerWakes(c)
+}
+
+func runContainerBackgroundTask(ctx context.Context, kind string, run func(context.Context)) {
+	go func() {
+		defer func() {
+			if recover() != nil {
+				log.Printf("fund routing task panic recovered: kind=%s", kind)
+			}
+		}()
+		run(ctx)
+	}()
 }
 
 // wireSafeheronWebhookWorkerWakes attaches process-local wakes after durable

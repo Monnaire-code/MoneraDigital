@@ -377,6 +377,25 @@ func TestFinalizeProviderEvent_RetryRequiresFutureBackoffAndLeaseOwner(t *testin
 	assertCompanyFundMockExpectations(t, mock)
 }
 
+func TestNextProviderEventDueReadsEarliestDurableRetryOrLease(t *testing.T) {
+	db, mock := newCompanyFundMockDB(t)
+	defer db.Close()
+	repository := NewDBRepository(db)
+	due := time.Now().Add(time.Minute).Round(time.Microsecond)
+	mock.ExpectQuery("SELECT min\\(due_at\\)").
+		WithArgs(SafeheronProviderClaimAll).
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(due))
+
+	got, err := repository.NextProviderEventDue(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(due) {
+		t.Fatalf("NextProviderEventDue=%s, want %s", got, due)
+	}
+	assertCompanyFundMockExpectations(t, mock)
+}
+
 func TestCompanyFundRepositorySQLContracts(t *testing.T) {
 	for _, contract := range []string{
 		"FOR UPDATE SKIP LOCKED",

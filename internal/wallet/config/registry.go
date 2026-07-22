@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -102,21 +101,17 @@ func (r *Registry) Load(ctx context.Context) error {
 func (r *Registry) StartBackgroundRefresh(ctx context.Context) {
 	go func() {
 		defer func() {
-			if rv := recover(); rv != nil {
-				log.Printf("registry refresh panic recovered: %v\n%s", rv, debug.Stack())
+			if recover() != nil {
+				log.Printf("registry refresh panic recovered: kind=background_refresh")
 			}
 		}()
-		maxIdle := adaptiveschedule.DefaultMaxIdle
-		if r.refreshInterval > maxIdle {
-			maxIdle = r.refreshInterval
-		}
 		loop, err := adaptiveschedule.New(adaptiveschedule.Config{
 			Name:    "wallet-coin-registry",
 			MinIdle: r.refreshInterval,
-			MaxIdle: maxIdle,
+			MaxIdle: adaptiveschedule.MaxIdleAtLeast(r.refreshInterval),
 		}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
 			if err := r.Load(ctx); err != nil {
-				log.Printf("Registry refresh failed: %v", err)
+				log.Printf("registry refresh deferred: kind=database_query")
 				r.mu.RLock()
 				alertFn := r.onAlert
 				r.mu.RUnlock()

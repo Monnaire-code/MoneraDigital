@@ -131,7 +131,10 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 			Low:      low,
 			Target:   target,
 		})
-		go c.PoolReplenisher.Run(ctx)
+		c.PoolManager.SetOnAllocated(func() {
+			_ = c.PoolReplenisher.Notify()
+		})
+		runContainerBackgroundTask(ctx, "wallet_pool_replenisher", c.PoolReplenisher.Run)
 
 		log.Printf("Safeheron pool enabled: replenisher interval=%s low=%v target=%v",
 			interval, low, target)
@@ -206,7 +209,7 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 			AMLPollInterval: amlPollInterval,
 			PanicBackoff:    5 * time.Second,
 		})
-		go c.DepositWorker.Run(ctx)
+		runContainerBackgroundTask(ctx, "deposit_worker", c.DepositWorker.Run)
 		wireSafeheronWebhookWorkerWakes(c)
 
 		log.Printf("Safeheron deposit pipeline enabled: worker interval=%s maxIdle=10m", workerInterval)
@@ -332,6 +335,8 @@ type Container struct {
 	companyFundRuntimeFinalized bool
 	companyFundAuxCancel        context.CancelFunc
 	companyFundAuxDone          chan struct{}
+	companyFundRateRefreshLoop  *adaptiveschedule.Loop
+	companyFundValuationLoop    *adaptiveschedule.Loop
 	safeheronRuntimeContext     context.Context
 
 	// 服务

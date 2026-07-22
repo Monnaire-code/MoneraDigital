@@ -58,17 +58,19 @@ func TestProviderEventWorker_ProcessNextInvokesOptionalValuatorAfterSuccessfulUp
 	lease := validProviderEventWorkerLease()
 	repository := &providerEventWorkerRepositoryStub{lease: &lease}
 	valuator := &providerEventWorkerValuatorStub{result: CompanyFundValuationProcessResult{Err: errors.New("temporary valuation cache failure")}}
+	movementWakeCount := 0
 	worker, err := NewProviderEventWorker(repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"payment"}`)}, map[Channel]ProviderEventNormalizer{
 		ChannelAirwallex: &providerEventNormalizerStub{result: ProviderEventNormalizationResult{Movements: []TransactionUpsertInput{
 			validProviderEventWorkerMovement("valuation-hook"),
 		}}},
 	}, ProviderEventWorkerConfig{
-		Owner:               "company-fund-test-worker",
-		LeaseDuration:       time.Minute,
-		RenewInterval:       30 * time.Second,
-		RetryPolicy:         ProviderEventRetryPolicy{InitialDelay: time.Second, MaxDelay: 4 * time.Second},
-		Now:                 time.Now,
-		TransactionValuator: valuator,
+		Owner:                   "company-fund-test-worker",
+		LeaseDuration:           time.Minute,
+		RenewInterval:           30 * time.Second,
+		RetryPolicy:             ProviderEventRetryPolicy{InitialDelay: time.Second, MaxDelay: 4 * time.Second},
+		Now:                     time.Now,
+		TransactionValuator:     valuator,
+		OnValuationRepairNeeded: func() { movementWakeCount++ },
 	})
 	if err != nil {
 		t.Fatalf("NewProviderEventWorker() error = %v", err)
@@ -83,6 +85,9 @@ func TestProviderEventWorker_ProcessNextInvokesOptionalValuatorAfterSuccessfulUp
 	}
 	if len(repository.finalizations) != 1 || repository.finalizations[0].outcome != ProviderEventFinalizeProcessed {
 		t.Fatalf("valuation failure must not alter finalization: %#v", repository.finalizations)
+	}
+	if movementWakeCount != 1 {
+		t.Fatalf("valuation coordinator wakes=%d, want 1 after durable movement", movementWakeCount)
 	}
 }
 

@@ -86,3 +86,46 @@ func TestCompanyFundCurrentValuationLoops_UseIndependentRefreshAndSweepIntervals
 		t.Fatal("valuation sweep loop did not stop")
 	}
 }
+
+func TestCompanyFundRateRefreshSuccessWakesValuationSweep(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	refresher := &companyFundLoopRateRefresherStub{notify: make(chan struct{}, 2)}
+	valuator := &companyFundLoopValuationSweeperStub{notify: make(chan struct{}, 3)}
+	valuationLoop := newCompanyFundCurrentValuationSweepLoop(valuator, time.Hour, 10)
+	rateLoop := newCompanyFundCurrentRateRefreshLoop(refresher, time.Hour, func() {
+		_ = valuationLoop.Notify()
+	})
+	valuationDone := make(chan struct{})
+	rateDone := make(chan struct{})
+	go func() {
+		defer close(valuationDone)
+		valuationLoop.Run(ctx)
+	}()
+	select {
+	case <-valuator.notify:
+	case <-time.After(time.Second):
+		t.Fatal("valuation startup sweep did not run")
+	}
+	go func() {
+		defer close(rateDone)
+		rateLoop.Run(ctx)
+	}()
+
+	select {
+	case <-refresher.notify:
+	case <-time.After(time.Second):
+		t.Fatal("rate refresh did not run")
+	}
+	deadline := time.After(time.Second)
+	for valuator.calls.Load() < 2 {
+		select {
+		case <-valuator.notify:
+		case <-deadline:
+			t.Fatalf("successful refresh did not wake valuation; calls=%d", valuator.calls.Load())
+		}
+	}
+	cancel()
+	<-rateDone
+	<-valuationDone
+}

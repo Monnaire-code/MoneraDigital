@@ -42,7 +42,27 @@ func NewAlertNotifier(db *sql.DB, sender RoutingAlertSender) (*AlertNotifier, er
 	}
 	n := &AlertNotifier{db: db, sender: sender, workerID: newProjectionWorkerID()}
 	n.runner = newAdaptiveRunner("fund routing alert notifier", time.Second, adaptiveschedule.DefaultMaxIdle, n.ProcessOne)
+	n.runner.setNextDue(n.NextDue)
 	return n, nil
+}
+
+// NextDue returns the earliest durable delivery retry or lease recovery deadline.
+func (n *AlertNotifier) NextDue(ctx context.Context) (time.Time, error) {
+	var due sql.NullTime
+	err := n.db.QueryRowContext(ctx, `
+SELECT min(due_at) FROM (
+  SELECT next_attempt_at AS due_at
+  FROM safeheron_transaction_routing_alert_deliveries
+  WHERE status='FAILED_DEFINITE' AND next_attempt_at > now()
+  UNION ALL
+  SELECT lease_expires_at AS due_at
+  FROM safeheron_transaction_routing_alert_deliveries
+  WHERE status='DISPATCHING' AND lease_expires_at > now()
+) deadlines`).Scan(&due)
+	if err != nil || !due.Valid {
+		return time.Time{}, err
+	}
+	return due.Time, nil
 }
 
 // Notify wakes alert delivery after durable alert rows are written.

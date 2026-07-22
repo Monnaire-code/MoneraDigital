@@ -1,8 +1,11 @@
 package deposit
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -105,6 +108,11 @@ func TestWorker_BacksOffWhenMarkErrorFails(t *testing.T) {
 }
 
 func TestWorker_PanicRecovered(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	secret := "postgresql://user:password@host/database"
 	repo := newMockRepo()
 	repo.owners["0xdest"] = 42
 	reg := newTestRegistry("ETH", "ETHEREUM", "K", "0.0001", 11)
@@ -115,7 +123,7 @@ func TestWorker_PanicRecovered(t *testing.T) {
 	var panicCount atomic.Int32
 	svc.SetSerialFunc(func() string {
 		panicCount.Add(1)
-		panic("synthetic panic")
+		panic(secret)
 	})
 
 	enqueueRaw(t, repo, PayloadEnvelope{
@@ -146,6 +154,9 @@ func TestWorker_PanicRecovered(t *testing.T) {
 
 	if panicCount.Load() < 1 {
 		t.Errorf("expected at least one serial-fn invocation, got %d", panicCount.Load())
+	}
+	if strings.Contains(output.String(), secret) {
+		t.Fatalf("deposit worker log leaked panic data: %s", output.String())
 	}
 }
 

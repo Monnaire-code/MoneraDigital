@@ -52,7 +52,27 @@ func NewProjectionWorker(db *sql.DB, events ProviderEventInserter) (*ProjectionW
 	}
 	worker := &ProjectionWorker{db: db, events: events, workerID: newProjectionWorkerID()}
 	worker.runner = newAdaptiveRunner("fund routing projection worker", time.Second, adaptiveschedule.DefaultMaxIdle, worker.ProcessOne)
+	worker.runner.setNextDue(worker.NextDue)
 	return worker, nil
+}
+
+// NextDue returns the earliest durable retry or abandoned lease deadline.
+func (worker *ProjectionWorker) NextDue(ctx context.Context) (time.Time, error) {
+	var due sql.NullTime
+	err := worker.db.QueryRowContext(ctx, `
+SELECT min(due_at) FROM (
+  SELECT next_attempt_at AS due_at
+  FROM safeheron_transaction_routing_case_actions
+  WHERE status='RETRYABLE' AND next_attempt_at > now()
+  UNION ALL
+  SELECT lease_expires_at AS due_at
+  FROM safeheron_transaction_routing_case_actions
+  WHERE status IN ('PENDING','RETRYABLE') AND lease_expires_at > now()
+) deadlines`).Scan(&due)
+	if err != nil || !due.Valid {
+		return time.Time{}, err
+	}
+	return due.Time, nil
 }
 
 // SetOnProviderEventInserted registers a wake after durable company provider

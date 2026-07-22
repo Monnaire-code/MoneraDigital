@@ -18,6 +18,10 @@ type ProviderEventWorker struct {
 	config      ProviderEventWorkerConfig
 }
 
+type providerEventDueRepository interface {
+	NextProviderEventDue(context.Context) (time.Time, error)
+}
+
 func NewProviderEventWorker(
 	repository ProviderEventWorkerRepository,
 	payloads ProviderEventPayloadReader,
@@ -50,6 +54,19 @@ func NewProviderEventWorker(
 	return &ProviderEventWorker{repository: repository, payloads: payloads, normalizers: registered, config: config}, nil
 }
 
+// NextProviderEventDue exposes the repository's durable retry deadline to the
+// runtime without making it part of the worker's required storage contract.
+func (worker *ProviderEventWorker) NextProviderEventDue(ctx context.Context) (time.Time, error) {
+	if worker == nil {
+		return time.Time{}, nil
+	}
+	repository, ok := worker.repository.(providerEventDueRepository)
+	if !ok {
+		return time.Time{}, nil
+	}
+	return repository.NextProviderEventDue(ctx)
+}
+
 // ProcessNext claims and processes at most one event. Claiming is delegated to
 // the repository first, so all source reads, decrypts, parsing, normalization,
 // and movement upserts happen outside its short claim transaction.
@@ -57,6 +74,7 @@ func (worker *ProviderEventWorker) ProcessNext(ctx context.Context) (result Prov
 	var (
 		lease         *ProviderEventLease
 		stopHeartbeat func() error
+		valuationWake bool
 	)
 	defer func() {
 		if recover() == nil {
@@ -145,7 +163,11 @@ func (worker *ProviderEventWorker) ProcessNext(ctx context.Context) (result Prov
 					processingErr = fmt.Errorf("upsert provider event movement %q: %w", movement.MovementKey, processingErr)
 					break
 				}
-				worker.valueSuccessfulLedgerTransactionBestEffort(processingContext, upserted.ID)
+				valuation := worker.valueSuccessfulLedgerTransactionBestEffort(processingContext, upserted.ID)
+				if !valuationWake && valuationRepairNeeded(valuation) {
+					worker.notifyValuationRepairNeeded()
+					valuationWake = true
+				}
 				result.MovementCount++
 			}
 		}
@@ -166,19 +188,33 @@ func (worker *ProviderEventWorker) ProcessNext(ctx context.Context) (result Prov
 	return result, nil
 }
 
+func (worker *ProviderEventWorker) notifyValuationRepairNeeded() {
+	if worker == nil || worker.config.OnValuationRepairNeeded == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	worker.config.OnValuationRepairNeeded()
+}
+
+func valuationRepairNeeded(result CompanyFundValuationProcessResult) bool {
+	return result.Err != nil || result.Result.Reason == USDValuationReasonRateMissing || result.Result.Reason == USDValuationReasonCacheStale
+}
+
 // valueSuccessfulLedgerTransactionBestEffort keeps optional USD enrichment
 // outside the provider-event success/retry decision. The upsert has already
 // committed; the valuator's own repair sweep handles temporary failures. A
 // defensive panic recovery also prevents a faulty optional integration from
 // turning a completed financial movement into a duplicate provider retry.
-func (worker *ProviderEventWorker) valueSuccessfulLedgerTransactionBestEffort(ctx context.Context, transactionID int64) {
+func (worker *ProviderEventWorker) valueSuccessfulLedgerTransactionBestEffort(ctx context.Context, transactionID int64) (result CompanyFundValuationProcessResult) {
 	if worker == nil || worker.config.TransactionValuator == nil || transactionID <= 0 {
-		return
+		return CompanyFundValuationProcessResult{TransactionID: transactionID, Skipped: true}
 	}
 	defer func() {
-		_ = recover()
+		if recover() != nil {
+			result = CompanyFundValuationProcessResult{TransactionID: transactionID, Err: errors.New("company-fund immediate valuation panicked")}
+		}
 	}()
-	_ = worker.config.TransactionValuator.ValueTransaction(ctx, transactionID)
+	return worker.config.TransactionValuator.ValueTransaction(ctx, transactionID)
 }
 
 func (worker *ProviderEventWorker) finalizeProcessingFailure(ctx context.Context, lease *ProviderEventLease, result ProviderEventWorkerResult, processingErr error) (ProviderEventWorkerResult, error) {
@@ -257,7 +293,13 @@ func (worker *ProviderEventWorker) startLeaseHeartbeat(parent context.Context, e
 	var heartbeatErr error
 
 	go func() {
-		defer close(done)
+		defer func() {
+			if recover() != nil {
+				heartbeatErr = errors.New("provider event lease heartbeat panicked")
+				cancel()
+			}
+			close(done)
+		}()
 		ticker := time.NewTicker(worker.config.RenewInterval)
 		defer ticker.Stop()
 		for {

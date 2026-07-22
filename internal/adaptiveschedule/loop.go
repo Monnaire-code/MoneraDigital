@@ -20,6 +20,15 @@ const (
 	DefaultMaxIdle = 10 * time.Minute
 )
 
+// MaxIdleAtLeast keeps the aggregate maintenance floor without allowing a
+// task's normal cadence to exceed its configured MaxIdle bound.
+func MaxIdleAtLeast(minIdle time.Duration) time.Duration {
+	if minIdle > DefaultMaxIdle {
+		return minIdle
+	}
+	return DefaultMaxIdle
+}
+
 // CycleOutcome describes one bounded work cycle for the coordinator.
 //
 // Worked means the cycle processed at least one unit of durable work.

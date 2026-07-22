@@ -5,10 +5,33 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"monera-digital/internal/companyfund"
 )
+
+func TestProjectionWorkerNextDueReadsEarliestDurableRetryOrLease(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	worker, err := NewProjectionWorker(db, &projectionEventInserterStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	due := time.Now().Add(time.Minute).Round(time.Microsecond)
+	mock.ExpectQuery("SELECT min\\(due_at\\)").WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(due))
+
+	got, err := worker.NextDue(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(due) {
+		t.Fatalf("NextDue=%s, want %s", got, due)
+	}
+}
 
 type projectionEventInserterStub struct {
 	inputs []companyfund.ProviderEventInput

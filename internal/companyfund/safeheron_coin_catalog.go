@@ -174,6 +174,7 @@ func (c *SafeheronCoinCatalog) Start(parent context.Context) {
 }
 
 func (c *SafeheronCoinCatalog) run(ctx context.Context, done chan struct{}, interval time.Duration) {
+	defer recoverCompanyFundTask("safeheron_coin_catalog")
 	defer func() {
 		c.runMu.Lock()
 		if c.runDone == done {
@@ -182,14 +183,10 @@ func (c *SafeheronCoinCatalog) run(ctx context.Context, done chan struct{}, inte
 		c.runMu.Unlock()
 		close(done)
 	}()
-	maxIdle := adaptiveschedule.DefaultMaxIdle
-	if interval > maxIdle {
-		maxIdle = interval
-	}
 	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
 		Name:    "company-fund-safeheron-coin-catalog",
 		MinIdle: interval,
-		MaxIdle: maxIdle,
+		MaxIdle: adaptiveschedule.MaxIdleAtLeast(interval),
 	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
 		err := c.Refresh(ctx)
 		return adaptiveschedule.CycleOutcome{}, err

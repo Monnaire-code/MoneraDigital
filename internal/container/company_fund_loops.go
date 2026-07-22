@@ -66,10 +66,10 @@ func startCompanyFundCoreLoops(
 	if c.CompanyFundSafeheronCoinCatalog != nil {
 		c.CompanyFundSafeheronCoinCatalog.Start(ctx)
 	}
+	startCompanyFundAuxiliaryLoops(c, ctx, config, c.CompanyFundSafeheronCollector, refresher, valuator)
 	if runtime != nil {
 		runtime.Start(ctx)
 	}
-	startCompanyFundAuxiliaryLoops(c, ctx, config, c.CompanyFundSafeheronCollector, refresher, valuator)
 }
 
 func startCompanyFundAuxiliaryLoops(
@@ -126,39 +126,63 @@ func startCompanyFundAuxiliaryLoops(
 	c.companyFundAuxCancel = cancel
 	c.companyFundAuxDone = done
 
+	var valuationLoop *adaptiveschedule.Loop
+	if valuator != nil {
+		valuationLoop = newCompanyFundCurrentValuationSweepLoop(valuator, valuationInterval, valuationBatch)
+		c.companyFundValuationLoop = valuationLoop
+	}
+	var rateRefreshLoop *adaptiveschedule.Loop
+	if refresher != nil {
+		rateRefreshLoop = newCompanyFundCurrentRateRefreshLoop(refresher, refreshInterval, func() {
+			if valuationLoop != nil {
+				_ = valuationLoop.Notify()
+			}
+		})
+		c.companyFundRateRefreshLoop = rateRefreshLoop
+	}
+
 	var waitGroup sync.WaitGroup
 	if collector != nil {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
+		runCompanyFundAuxTask(&waitGroup, "safeheron_collector", func() {
 			runCompanyFundSafeheronCollector(ctx, collector, collectorInterval, collectorBatch, c)
-		}()
+		})
 	}
-	if refresher != nil {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			runCompanyFundCurrentRateRefreshLoop(ctx, refresher, refreshInterval)
-		}()
+	if rateRefreshLoop != nil {
+		runCompanyFundAuxTask(&waitGroup, "rate_refresh", func() {
+			rateRefreshLoop.Run(ctx)
+		})
 	}
-	if valuator != nil {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			runCompanyFundCurrentValuationSweepLoop(ctx, valuator, valuationInterval, valuationBatch)
-		}()
+	if valuationLoop != nil {
+		runCompanyFundAuxTask(&waitGroup, "valuation_sweep", func() {
+			valuationLoop.Run(ctx)
+		})
 	}
 	go func() {
+		defer func() {
+			if recover() != nil {
+				log.Printf("company-fund auxiliary panic recovered: kind=completion")
+			}
+		}()
 		waitGroup.Wait()
 		close(done)
 	}()
 }
 
+func runCompanyFundAuxTask(waitGroup *sync.WaitGroup, kind string, run func()) {
+	waitGroup.Add(1)
+	go func() {
+		defer waitGroup.Done()
+		defer func() {
+			if recover() != nil {
+				log.Printf("company-fund auxiliary panic recovered: kind=%s", kind)
+			}
+		}()
+		run()
+	}()
+}
+
 func companyFundAdaptiveMaxIdle(minIdle time.Duration) time.Duration {
-	if minIdle > adaptiveschedule.DefaultMaxIdle {
-		return minIdle
-	}
-	return adaptiveschedule.DefaultMaxIdle
+	return adaptiveschedule.MaxIdleAtLeast(minIdle)
 }
 
 func runCompanyFundSafeheronCollector(
@@ -202,6 +226,14 @@ func runCompanyFundCurrentRateRefreshLoop(
 	refresher companyFundCurrentRateRefresher,
 	minIdle time.Duration,
 ) {
+	newCompanyFundCurrentRateRefreshLoop(refresher, minIdle, nil).Run(ctx)
+}
+
+func newCompanyFundCurrentRateRefreshLoop(
+	refresher companyFundCurrentRateRefresher,
+	minIdle time.Duration,
+	onRefreshed func(),
+) *adaptiveschedule.Loop {
 	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
 		Name:    "company-fund-current-rate-refresh",
 		MinIdle: minIdle,
@@ -214,14 +246,17 @@ func runCompanyFundCurrentRateRefreshLoop(
 		if err != nil && ctx.Err() == nil {
 			log.Printf("company-fund current USD rate refresh failed")
 		}
+		if err == nil && onRefreshed != nil {
+			onRefreshed()
+		}
 		// Maintenance-only: never report Worked so idle can reach MaxIdle.
 		return adaptiveschedule.CycleOutcome{}, err
 	})
 	if err != nil {
 		log.Printf("company-fund current USD rate refresh loop disabled: adaptive schedule invalid")
-		return
+		return nil
 	}
-	loop.Run(ctx)
+	return loop
 }
 
 // runCompanyFundCurrentValuationSweepLoop owns only database valuation repair
@@ -233,6 +268,14 @@ func runCompanyFundCurrentValuationSweepLoop(
 	minIdle time.Duration,
 	batchSize int,
 ) {
+	newCompanyFundCurrentValuationSweepLoop(valuator, minIdle, batchSize).Run(ctx)
+}
+
+func newCompanyFundCurrentValuationSweepLoop(
+	valuator companyFundCurrentValuationSweeper,
+	minIdle time.Duration,
+	batchSize int,
+) *adaptiveschedule.Loop {
 	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
 		Name:    "company-fund-valuation-sweep",
 		MinIdle: minIdle,
@@ -250,9 +293,22 @@ func runCompanyFundCurrentValuationSweepLoop(
 	})
 	if err != nil {
 		log.Printf("company-fund USD valuation repair sweep disabled: adaptive schedule invalid")
+		return nil
+	}
+	return loop
+}
+
+func notifyCompanyFundValuationWork(c *Container) {
+	if c == nil {
 		return
 	}
-	loop.Run(ctx)
+	if c.companyFundRateRefreshLoop != nil {
+		_ = c.companyFundRateRefreshLoop.Notify()
+		return
+	}
+	if c.companyFundValuationLoop != nil {
+		_ = c.companyFundValuationLoop.Notify()
+	}
 }
 
 func stopCompanyFundAuxiliaryLoops(c *Container) {

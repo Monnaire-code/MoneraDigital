@@ -317,7 +317,9 @@ func finalizeCompanyFundRuntime(c *Container) {
 		c.CompanyFundRepository,
 		payloadReader,
 		normalizers,
-		companyFundProviderEventWorkerConfig(config, valuator),
+		companyFundProviderEventWorkerConfig(config, valuator, func() {
+			notifyCompanyFundValuationWork(c)
+		}),
 	)
 	if err != nil {
 		log.Printf("company-fund workers disabled: provider event worker configuration is invalid")
@@ -618,7 +620,11 @@ func newCompanyFundCurrentValuationRuntime(c *Container, config companyFundRunti
 	return cache, refresher, valuator
 }
 
-func companyFundProviderEventWorkerConfig(config companyFundRuntimeConfig, valuator companyfund.CompanyFundTransactionValuator) companyfund.ProviderEventWorkerConfig {
+func companyFundProviderEventWorkerConfig(
+	config companyFundRuntimeConfig,
+	valuator companyfund.CompanyFundTransactionValuator,
+	onValuationRepairNeeded func(),
+) companyfund.ProviderEventWorkerConfig {
 	leaseDuration := companyFundDurationOrDefault(config.EventLeaseDuration, defaultCompanyFundEventLeaseDuration)
 	renewInterval := companyFundDurationOrDefault(config.EventRenewInterval, defaultCompanyFundEventLeaseRenewInterval)
 	return companyfund.ProviderEventWorkerConfig{
@@ -629,8 +635,9 @@ func companyFundProviderEventWorkerConfig(config companyFundRuntimeConfig, valua
 			InitialDelay: companyFundDurationOrDefault(config.EventRetryInitial, defaultCompanyFundEventRetryInitialDelay),
 			MaxDelay:     companyFundDurationOrDefault(config.EventRetryMax, defaultCompanyFundEventRetryMaxDelay),
 		},
-		Now:                 time.Now,
-		TransactionValuator: valuator,
+		Now:                     time.Now,
+		TransactionValuator:     valuator,
+		OnValuationRepairNeeded: onValuationRepairNeeded,
 	}
 }
 

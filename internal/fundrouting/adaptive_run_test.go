@@ -63,3 +63,20 @@ func TestAdaptiveRunner_DrainUsesSharedSeam(t *testing.T) {
 		t.Fatalf("outcome=%#v n=%d", outcome, n)
 	}
 }
+
+func TestAdaptiveRunner_PublishesDurableRetryDueAfterQueueDrains(t *testing.T) {
+	t.Parallel()
+	due := time.Now().Add(30 * time.Second).Round(time.Microsecond)
+	runner := newAdaptiveRunner("test-next-due", time.Second, time.Minute, func(context.Context) (bool, error) {
+		return false, nil
+	})
+	runner.setNextDue(func(context.Context) (time.Time, error) { return due, nil })
+
+	outcome, err := runner.cycle(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.NextDue.Equal(due) {
+		t.Fatalf("NextDue=%s, want %s", outcome.NextDue, due)
+	}
+}

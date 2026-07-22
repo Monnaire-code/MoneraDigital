@@ -2,6 +2,7 @@ package fundrouting
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ type adaptiveRunner struct {
 	// onWorked is optional; invoked after a cycle that processed work (for
 	// downstream wakes such as routing → projection).
 	onWorked func()
+	nextDue  func(context.Context) (time.Time, error)
 }
 
 func newAdaptiveRunner(name string, minIdle, maxIdle time.Duration, process adaptiveschedule.ProcessOneFunc) *adaptiveRunner {
@@ -49,6 +51,11 @@ func newAdaptiveRunner(name string, minIdle, maxIdle time.Duration, process adap
 
 func (r *adaptiveRunner) cycle(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
 	outcome, err := adaptiveschedule.DrainProcessOne(ctx, r.process, 100)
+	if !outcome.MoreWork && r.nextDue != nil {
+		due, dueErr := r.nextDue(ctx)
+		outcome.NextDue = adaptiveschedule.EarliestDue(outcome.NextDue, due)
+		err = errors.Join(err, dueErr)
+	}
 	if err != nil && ctx.Err() == nil {
 		log.Printf("%s cycle error", r.name)
 	}
@@ -56,6 +63,13 @@ func (r *adaptiveRunner) cycle(ctx context.Context) (adaptiveschedule.CycleOutco
 		r.onWorked()
 	}
 	return outcome, err
+}
+
+func (r *adaptiveRunner) setNextDue(fn func(context.Context) (time.Time, error)) {
+	if r == nil {
+		return
+	}
+	r.nextDue = fn
 }
 
 func (r *adaptiveRunner) Notify() bool {

@@ -31,6 +31,31 @@ func TestNormalizeConfigDefaultsAndRejectsInvalid(t *testing.T) {
 	}
 }
 
+func TestNewUsesProcessMaintenanceByDefault(t *testing.T) {
+	previous := ProcessMaintenance()
+	window := NewMaintenanceWindow(time.Minute)
+	SetProcessMaintenance(window)
+	t.Cleanup(func() { SetProcessMaintenance(previous) })
+	loop, err := New(Config{}, func(context.Context) (CycleOutcome, error) {
+		return CycleOutcome{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loop.config.SharedMaintenance != window {
+		t.Fatal("every adaptive loop must join the process maintenance window by default")
+	}
+}
+
+func TestMaxIdleAtLeastPreservesAggregateFloorAndLongerCadence(t *testing.T) {
+	if got := MaxIdleAtLeast(5 * time.Minute); got != DefaultMaxIdle {
+		t.Fatalf("MaxIdleAtLeast(5m)=%s, want %s", got, DefaultMaxIdle)
+	}
+	if got := MaxIdleAtLeast(15 * time.Minute); got != 15*time.Minute {
+		t.Fatalf("MaxIdleAtLeast(15m)=%s, want 15m", got)
+	}
+}
+
 func TestLoop_StartupScanRunsImmediately(t *testing.T) {
 	t.Parallel()
 

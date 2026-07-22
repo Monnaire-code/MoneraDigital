@@ -534,6 +534,7 @@ func (r *AccountRegistry) Start(parent context.Context) {
 	r.mu.Unlock()
 
 	go func() {
+		defer recoverCompanyFundTask("account_registry")
 		defer func() {
 			r.mu.Lock()
 			if r.runDone == done {
@@ -545,14 +546,10 @@ func (r *AccountRegistry) Start(parent context.Context) {
 			close(done)
 		}()
 
-		maxIdle := adaptiveschedule.DefaultMaxIdle
-		if interval > maxIdle {
-			maxIdle = interval
-		}
 		loop, err := adaptiveschedule.New(adaptiveschedule.Config{
 			Name:    "company-fund-account-registry",
 			MinIdle: interval,
-			MaxIdle: maxIdle,
+			MaxIdle: adaptiveschedule.MaxIdleAtLeast(interval),
 		}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
 			err := r.Refresh(ctx)
 			// Maintenance-only: never report Worked so idle can reach MaxIdle.

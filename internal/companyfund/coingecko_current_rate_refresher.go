@@ -371,6 +371,7 @@ func (r *CoinGeckoCurrentRateRefresher) Start(parent context.Context) {
 	r.mu.Unlock()
 
 	go func() {
+		defer recoverCompanyFundTask("current_rate_refresh")
 		defer func() {
 			r.mu.Lock()
 			if r.runDone == done {
@@ -381,14 +382,10 @@ func (r *CoinGeckoCurrentRateRefresher) Start(parent context.Context) {
 			r.mu.Unlock()
 			close(done)
 		}()
-		maxIdle := adaptiveschedule.DefaultMaxIdle
-		if interval > maxIdle {
-			maxIdle = interval
-		}
 		loop, err := adaptiveschedule.New(adaptiveschedule.Config{
 			Name:    "company-fund-coingecko-rate-refresher",
 			MinIdle: interval,
-			MaxIdle: maxIdle,
+			MaxIdle: adaptiveschedule.MaxIdleAtLeast(interval),
 		}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
 			_, err := r.Refresh(ctx)
 			// Maintenance-only cadence under the shared idle budget.

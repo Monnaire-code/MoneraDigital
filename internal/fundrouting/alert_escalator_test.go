@@ -3,9 +3,33 @@ package fundrouting
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestAlertEscalatorNextDueReadsEarliestMissingSLAThreshold(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	escalator, err := NewAlertEscalator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	due := time.Now().Add(time.Hour).Round(time.Microsecond)
+	mock.ExpectQuery("SELECT min\\(routing.created_at \\+ threshold.minimum_age\\)").
+		WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(due))
+
+	got, err := escalator.NextDue(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(due) {
+		t.Fatalf("NextDue=%s, want %s", got, due)
+	}
+}
 
 func TestAlertEscalatorCreatesAtMostOneMissingOpenSLALevel(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -17,11 +41,16 @@ func TestAlertEscalatorCreatesAtMostOneMissingOpenSLALevel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wakeCount := 0
+	escalator.SetOnAlertCreated(func() { wakeCount++ })
 	mock.ExpectQuery("INSERT INTO safeheron_transaction_routing_alerts").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(8))
 	processed, err := escalator.ProcessOne(context.Background())
 	if err != nil || !processed {
 		t.Fatalf("ProcessOne = %v, %v", processed, err)
+	}
+	if wakeCount != 1 {
+		t.Fatalf("notifier wakes=%d, want 1 after alert insert", wakeCount)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -35,11 +64,16 @@ func TestAlertEscalatorReturnsIdleWhenNoThresholdIsDue(t *testing.T) {
 	}
 	defer db.Close()
 	escalator, _ := NewAlertEscalator(db)
+	wakeCount := 0
+	escalator.SetOnAlertCreated(func() { wakeCount++ })
 	mock.ExpectQuery("INSERT INTO safeheron_transaction_routing_alerts").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	processed, err := escalator.ProcessOne(context.Background())
 	if err != nil || processed {
 		t.Fatalf("ProcessOne = %v, %v", processed, err)
+	}
+	if wakeCount != 0 {
+		t.Fatalf("idle escalator emitted %d notifier wakes", wakeCount)
 	}
 }
 

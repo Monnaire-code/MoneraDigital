@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"runtime/debug"
 	"sync"
 	"time"
 
@@ -121,8 +120,8 @@ func (w *Worker) Run(ctx context.Context) {
 
 func (w *Worker) cycle(ctx context.Context) (outcome adaptiveschedule.CycleOutcome, err error) {
 	defer func() {
-		if rv := recover(); rv != nil {
-			log.Printf("deposit worker panic recovered: %v\n%s", rv, debug.Stack())
+		if recover() != nil {
+			log.Printf("deposit worker panic recovered: kind=cycle")
 			outcome = adaptiveschedule.CycleOutcome{}
 			err = errors.New("deposit worker cycle panicked")
 			select {
@@ -186,7 +185,7 @@ func (w *Worker) loadRiskDues(ctx context.Context) (kytDue, amlDue time.Time) {
 
 	kytDue, kytErr := w.svc.EarliestKYTDue(ctx)
 	if kytErr != nil {
-		log.Printf("deposit worker earliest KYT due: %v", kytErr)
+		log.Printf("deposit worker earliest KYT due deferred: kind=database_query")
 		kytDue = retainDueOnQueryError(w.lastKYTDue, now, w.config.Interval)
 	} else {
 		w.lastKYTDue = kytDue
@@ -194,7 +193,7 @@ func (w *Worker) loadRiskDues(ctx context.Context) (kytDue, amlDue time.Time) {
 
 	amlDue, amlErr := w.svc.EarliestAMLFirstPollDue(ctx)
 	if amlErr != nil {
-		log.Printf("deposit worker earliest AML due: %v", amlErr)
+		log.Printf("deposit worker earliest AML due deferred: kind=database_query")
 		amlDue = retainDueOnQueryError(w.lastAMLDue, now, w.config.AMLPollInterval)
 	} else {
 		w.lastAMLDue = amlDue
@@ -230,7 +229,7 @@ func (w *Worker) drainOnce(ctx context.Context) (adaptiveschedule.CycleOutcome, 
 		}
 		processed, err := w.svc.ProcessOne(ctx)
 		if err != nil {
-			log.Printf("deposit worker process error: %v", err)
+			log.Printf("deposit worker process deferred: kind=%s", depositWorkerErrorKind(err))
 			// Surface error and stop this drain; adaptive loop will back off.
 			return adaptiveschedule.CycleOutcome{Worked: claimed > 0}, err
 		}
@@ -246,8 +245,8 @@ func (w *Worker) drainOnce(ctx context.Context) (adaptiveschedule.CycleOutcome, 
 // the adaptive loop (poison-event ordering). Production uses cycle() via Run.
 func (w *Worker) drainSafely(ctx context.Context) {
 	defer func() {
-		if rv := recover(); rv != nil {
-			log.Printf("deposit worker panic recovered: %v\n%s", rv, debug.Stack())
+		if recover() != nil {
+			log.Printf("deposit worker panic recovered: kind=drain")
 			select {
 			case <-ctx.Done():
 			case <-time.After(w.config.PanicBackoff):
@@ -261,7 +260,7 @@ func (w *Worker) drainSafely(ctx context.Context) {
 		}
 		processed, err := w.svc.ProcessOne(ctx)
 		if err != nil {
-			log.Printf("deposit worker process error: %v", err)
+			log.Printf("deposit worker process deferred: kind=%s", depositWorkerErrorKind(err))
 			if errors.Is(err, ErrMarkErrorFailed) || errors.Is(err, ErrKYTAPIBackoff) {
 				return
 			}
@@ -275,9 +274,20 @@ func (w *Worker) drainSafely(ctx context.Context) {
 
 func (w *Worker) runWithRecover(ctx context.Context, label string, fn func(context.Context)) {
 	defer func() {
-		if rv := recover(); rv != nil {
-			log.Printf("deposit worker %s panic recovered: %v\n%s", label, rv, debug.Stack())
+		if recover() != nil {
+			log.Printf("deposit worker risk task panic recovered: kind=%s", label)
 		}
 	}()
 	fn(ctx)
+}
+
+func depositWorkerErrorKind(err error) string {
+	switch {
+	case errors.Is(err, ErrMarkErrorFailed):
+		return "mark_error_failed"
+	case errors.Is(err, ErrKYTAPIBackoff):
+		return "kyt_api_backoff"
+	default:
+		return "processing_error"
+	}
 }

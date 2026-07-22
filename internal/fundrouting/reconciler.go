@@ -13,8 +13,18 @@ import (
 )
 
 type Reconciler struct {
-	db     *sql.DB
-	runner *adaptiveRunner
+	db                *sql.DB
+	runner            *adaptiveRunner
+	onProjectionReady func()
+}
+
+// SetOnProjectionReady registers a wake emitted only after a reconciled
+// routing command and its actions commit durably.
+func (r *Reconciler) SetOnProjectionReady(fn func()) {
+	if r == nil {
+		return
+	}
+	r.onProjectionReady = fn
 }
 
 type openCase struct {
@@ -106,12 +116,18 @@ SET reason_code=$2, updated_at=now() WHERE id=$1 AND decision='OPEN' AND pending
 		if err != nil {
 			return false, err
 		}
-		return true, tx.Commit()
+		return false, tx.Commit()
 	}
 	if err = reserveReconciledProjection(ctx, tx, current, candidate, decision); err != nil {
 		return false, err
 	}
-	return true, tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	if r.onProjectionReady != nil {
+		r.onProjectionReady()
+	}
+	return true, nil
 }
 
 func reserveReconciledProjection(ctx context.Context, tx *sql.Tx, current openCase, candidate Candidate, decision DecisionResult) error {

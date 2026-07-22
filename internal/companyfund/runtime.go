@@ -32,6 +32,10 @@ type CompanyFundProviderEventProcessor interface {
 	ProcessNext(ctx context.Context) (ProviderEventWorkerResult, error)
 }
 
+type companyFundProviderEventDueProvider interface {
+	NextProviderEventDue(ctx context.Context) (time.Time, error)
+}
+
 // CompanyFundAccountSnapshotProvider is satisfied by AccountRegistry. The
 // runner takes one immutable snapshot per reconciliation cycle, so a cache
 // refresh cannot change the selected account halfway through a provider scan.
@@ -164,13 +168,13 @@ type CompanyFundReconciliationCycleResult struct {
 // CompanyFundRuntime owns the in-process timing only. PostgreSQL sync-run
 // leases remain the authoritative cross-replica coordination and retry state.
 type CompanyFundRuntime struct {
-	dependencies        CompanyFundRuntimeDependencies
-	config              CompanyFundRuntimeConfig
-	schedule            *ReconciliationDailySchedule
-	airwallexContract   AirwallexFinancialTransactionsReconciliationContract
-	airwallexWake       chan struct{}
-	providerEventLoop   *adaptiveschedule.Loop
-	reconciliationLoop  *adaptiveschedule.Loop
+	dependencies       CompanyFundRuntimeDependencies
+	config             CompanyFundRuntimeConfig
+	schedule           *ReconciliationDailySchedule
+	airwallexContract  AirwallexFinancialTransactionsReconciliationContract
+	airwallexWake      chan struct{}
+	providerEventLoop  *adaptiveschedule.Loop
+	reconciliationLoop *adaptiveschedule.Loop
 
 	mu        sync.Mutex
 	running   bool
@@ -344,6 +348,9 @@ func (runtime *CompanyFundRuntime) Start(parent context.Context) {
 
 	go func() {
 		defer func() {
+			if recover() != nil {
+				log.Printf("company-fund runtime panic recovered: kind=runtime")
+			}
 			runtime.mu.Lock()
 			if runtime.runDone == done {
 				runtime.running = false
@@ -392,6 +399,7 @@ func (runtime *CompanyFundRuntime) Run(ctx context.Context) {
 		loops.Add(1)
 		go func() {
 			defer loops.Done()
+			defer recoverCompanyFundTask("provider_event")
 			runtime.providerEventLoop.Run(ctx)
 		}()
 	}
@@ -399,10 +407,17 @@ func (runtime *CompanyFundRuntime) Run(ctx context.Context) {
 		loops.Add(1)
 		go func() {
 			defer loops.Done()
+			defer recoverCompanyFundTask("reconciliation")
 			runtime.reconciliationLoop.Run(ctx)
 		}()
 	}
 	loops.Wait()
+}
+
+func recoverCompanyFundTask(kind string) {
+	if recover() != nil {
+		log.Printf("company-fund runtime panic recovered: kind=%s", kind)
+	}
 }
 
 // providerEventCycle is the adaptive-schedule seam for durable provider
@@ -413,6 +428,13 @@ func (runtime *CompanyFundRuntime) providerEventCycle(ctx context.Context) (adap
 	outcome := adaptiveschedule.CycleOutcome{
 		Worked:   result.Claimed > 0,
 		MoreWork: result.LimitReached,
+	}
+	if !outcome.MoreWork {
+		if dueProvider, ok := runtime.dependencies.ProviderEventWorker.(companyFundProviderEventDueProvider); ok {
+			due, dueErr := dueProvider.NextProviderEventDue(ctx)
+			outcome.NextDue = adaptiveschedule.EarliestDue(outcome.NextDue, due)
+			err = errors.Join(err, dueErr)
+		}
 	}
 	if err != nil && ctx.Err() == nil {
 		// Keep provider payloads and database details out of process logs.

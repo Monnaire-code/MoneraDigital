@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"runtime/debug"
 	"sync"
 	"time"
 
@@ -85,8 +84,8 @@ func (r *Replenisher) Run(ctx context.Context) {
 
 func (r *Replenisher) tick(ctx context.Context) bool {
 	defer func() {
-		if rv := recover(); rv != nil {
-			log.Printf("pool replenisher panic recovered: %v\n%s", rv, debug.Stack())
+		if recover() != nil {
+			log.Printf("pool replenisher panic recovered: kind=maintenance_cycle")
 		}
 	}()
 
@@ -99,7 +98,7 @@ func (r *Replenisher) tick(ctx context.Context) bool {
 
 		count, err := r.mgr.repo.CountByStatus(ctx, family, StatusAvailable)
 		if err != nil {
-			log.Printf("pool replenish check error (%s): %v", family, err)
+			log.Printf("pool replenish check deferred: family=%s kind=repository_error", family)
 			continue
 		}
 
@@ -110,16 +109,16 @@ func (r *Replenisher) tick(ctx context.Context) bool {
 		log.Printf("pool replenish: %s %d→%d", family, count, target)
 		worked = true
 		if err := r.mgr.Replenish(ctx, family, target); err != nil {
-			log.Printf("pool replenish failed (%s): %v", family, err)
-			r.alert(family, count, target, err)
+			log.Printf("pool replenish failed: family=%s kind=replenish_error", family)
+			r.alert(family, count, target)
 		}
 	}
 	return worked
 }
 
-func (r *Replenisher) alert(family string, current, target int, err error) {
-	log.Printf("ALERT: pool replenish failed family=%s current=%d target=%d err=%v",
-		family, current, target, err)
+func (r *Replenisher) alert(family string, current, target int) {
+	log.Printf("ALERT: pool replenish failed family=%s current=%d target=%d",
+		family, current, target)
 
 	if fn := r.mgr.getAlertFn(); fn != nil {
 		fn("ERROR", "Pool Replenish Failed",

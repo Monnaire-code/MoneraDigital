@@ -26,8 +26,8 @@ func TestCompanyFundRuntime_DrainProviderEventsIsBoundedAndStopsAtConfiguredLimi
 	if err != nil {
 		t.Fatalf("DrainProviderEvents() error = %v", err)
 	}
-	if result.Attempts != 2 || result.Claimed != 2 || !result.LimitReached || worker.calls != 2 {
-		t.Fatalf("DrainProviderEvents() result = %#v workerCalls=%d", result, worker.calls)
+	if result.Attempts != 2 || result.Claimed != 2 || !result.LimitReached || worker.callCount() != 2 {
+		t.Fatalf("DrainProviderEvents() result = %#v workerCalls=%d", result, worker.callCount())
 	}
 }
 
@@ -59,8 +59,8 @@ func TestCompanyFundRuntime_StartIsTheExplicitBoundaryForBackgroundEventPolling(
 		EventPollInterval:    time.Hour,
 		EventMaxIdleInterval: time.Hour,
 	})
-	if worker.calls != 0 {
-		t.Fatalf("NewCompanyFundRuntime() must not poll before Start, calls=%d", worker.calls)
+	if worker.callCount() != 0 {
+		t.Fatalf("NewCompanyFundRuntime() must not poll before Start, calls=%d", worker.callCount())
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,8 +86,8 @@ func TestCompanyFundRuntime_ProviderEventWakeCoalescesBeforeStart(t *testing.T) 
 	if runtime.NotifyProviderEvent() {
 		t.Fatal("second provider-event wake should coalesce while one wake is pending")
 	}
-	if worker.calls != 0 {
-		t.Fatalf("NotifyProviderEvent must not process work before Start; calls=%d", worker.calls)
+	if worker.callCount() != 0 {
+		t.Fatalf("NotifyProviderEvent must not process work before Start, calls=%d", worker.callCount())
 	}
 }
 
@@ -121,11 +121,11 @@ func TestCompanyFundRuntime_ProviderEventWakeDrainsWithoutWaitingMaxIdle(t *test
 	_ = runtime.NotifyProviderEvent()
 
 	deadline := time.After(500 * time.Millisecond)
-	for worker.calls < 3 {
+	for worker.callCount() < 3 {
 		select {
 		case <-worker.notify:
 		case <-deadline:
-			t.Fatalf("wake did not drain promptly; calls=%d", worker.calls)
+			t.Fatalf("wake did not drain promptly; calls=%d", worker.callCount())
 		}
 	}
 }
@@ -140,6 +140,20 @@ func TestCompanyFundRuntime_DefaultsEventMaxIdleToTenMinutes(t *testing.T) {
 	}
 	if runtime.config.EventPollInterval != time.Second {
 		t.Fatalf("EventPollInterval = %s, want 1s", runtime.config.EventPollInterval)
+	}
+}
+
+func TestCompanyFundRuntime_ProviderEventCyclePublishesDurableRetryDue(t *testing.T) {
+	due := time.Now().Add(45 * time.Second).Round(time.Microsecond)
+	worker := &companyFundRuntimeEventWorkerStub{due: due}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{ProviderEventWorker: worker}, CompanyFundRuntimeConfig{})
+
+	outcome, err := runtime.providerEventCycle(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.NextDue.Equal(due) {
+		t.Fatalf("NextDue=%s, want %s", outcome.NextDue, due)
 	}
 }
 
@@ -547,9 +561,11 @@ type companyFundRuntimeEventWorkerCall struct {
 }
 
 type companyFundRuntimeEventWorkerStub struct {
+	mu      sync.Mutex
 	results []companyFundRuntimeEventWorkerCall
 	calls   int
 	notify  chan struct{}
+	due     time.Time
 }
 
 type companyFundRuntimeContinuousEventWorkerStub struct {
@@ -578,6 +594,8 @@ func (stub *companyFundRuntimeBlockingSafeheronReconciler) Reconcile(ctx context
 }
 
 func (stub *companyFundRuntimeEventWorkerStub) ProcessNext(context.Context) (ProviderEventWorkerResult, error) {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
 	if stub.notify != nil {
 		select {
 		case stub.notify <- struct{}{}:
@@ -591,6 +609,16 @@ func (stub *companyFundRuntimeEventWorkerStub) ProcessNext(context.Context) (Pro
 	call := stub.results[stub.calls]
 	stub.calls++
 	return call.result, call.err
+}
+
+func (stub *companyFundRuntimeEventWorkerStub) callCount() int {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	return stub.calls
+}
+
+func (stub *companyFundRuntimeEventWorkerStub) NextProviderEventDue(context.Context) (time.Time, error) {
+	return stub.due, nil
 }
 
 type companyFundRuntimeSafeheronCall struct {

@@ -20,6 +20,8 @@ func TestReconcilerReservesCompanyProjectionForNewlyEnabledAccount(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
+	wakeCount := 0
+	reconciler.SetOnProjectionReady(func() { wakeCount++ })
 	snapshot := routingSnapshot()
 	candidates, err := BuildCandidates(snapshot, "EVM")
 	if err != nil {
@@ -47,6 +49,52 @@ func TestReconcilerReservesCompanyProjectionForNewlyEnabledAccount(t *testing.T)
 	}
 	if !processed {
 		t.Fatal("expected an OPEN case to be processed")
+	}
+	if wakeCount != 1 {
+		t.Fatalf("projection wakes=%d, want 1 after committed reconciliation", wakeCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestReconcilerStopsDrainWhenCaseRemainsOpen(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	reconciler, err := NewReconciler(db)
+	if err != nil {
+		t.Fatalf("NewReconciler: %v", err)
+	}
+	wakeCount := 0
+	reconciler.SetOnProjectionReady(func() { wakeCount++ })
+	snapshot := routingSnapshot()
+	candidates, err := BuildCandidates(snapshot, "EVM")
+	if err != nil {
+		t.Fatalf("BuildCandidates: %v", err)
+	}
+	payload, _ := json.Marshal(map[string]any{"eventType": "TRANSACTION_STATUS_CHANGED", "eventDetail": snapshot})
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE OF routing SKIP LOCKED").WillReturnRows(sqlmock.NewRows([]string{
+		"id", "routing_identity_key", "network_family", "version", "event_type", "raw_payload",
+	}).AddRow(11, candidates[0].RoutingIdentityKey, "EVM", 1, "TRANSACTION_STATUS_CHANGED", payload))
+	mock.ExpectQuery("FROM safeheron_address_ownerships").WithArgs("EVM", "0xsource").WillReturnRows(ownershipRows())
+	mock.ExpectQuery("FROM safeheron_address_ownerships").WithArgs("EVM", "0xdest").WillReturnRows(ownershipRows())
+	mock.ExpectExec("UPDATE safeheron_transaction_routing_cases").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	processed, err := reconciler.ProcessOne(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOne: %v", err)
+	}
+	if processed {
+		t.Fatal("an unresolved OPEN case must stop the drain until a later wake")
+	}
+	if wakeCount != 0 {
+		t.Fatalf("unresolved case emitted %d projection wakes", wakeCount)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
