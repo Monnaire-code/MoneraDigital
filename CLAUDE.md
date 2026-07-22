@@ -107,6 +107,16 @@ Frontend code must match: `data.userId`, `data.accessToken`, etc.
 
 ---
 
+## Git Commit Contract
+
+遵循 **Conventional Commit 首行 + Lore Git Trailers**；完整约束以 `AGENTS.md` 的“Git 工作流”为准。
+
+- 业务功能与修复分别使用 `feat(<scope>): <why>`、`fix(<scope>): <why>`；文档、CI、测试和重构使用准确的 `docs:`、`ci:`、`test:`、`refactor:` 或 `chore:` 前缀。
+- 首行表达变更原因；所有 Lore `Key: value` 元数据连续放在提交信息最底部。
+- `Tested:` 记录验证证据；存在缺口时追加 `Not-tested:`。
+
+---
+
 ## Go Backend Structure (`internal/`)
 
 ```

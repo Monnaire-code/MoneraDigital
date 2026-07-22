@@ -56,7 +56,8 @@ func TestProviderEventDrainFailureKindDoesNotExposeUnderlyingErrorText(t *testin
 func TestCompanyFundRuntime_StartIsTheExplicitBoundaryForBackgroundEventPolling(t *testing.T) {
 	worker := &companyFundRuntimeEventWorkerStub{notify: make(chan struct{}, 1)}
 	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{ProviderEventWorker: worker}, CompanyFundRuntimeConfig{
-		EventPollInterval: time.Hour,
+		EventPollInterval:    time.Hour,
+		EventMaxIdleInterval: time.Hour,
 	})
 	if worker.calls != 0 {
 		t.Fatalf("NewCompanyFundRuntime() must not poll before Start, calls=%d", worker.calls)
@@ -70,6 +71,85 @@ func TestCompanyFundRuntime_StartIsTheExplicitBoundaryForBackgroundEventPolling(
 	case <-worker.notify:
 	case <-time.After(time.Second):
 		t.Fatal("Start() did not begin the event polling loop")
+	}
+}
+
+func TestCompanyFundRuntime_ProviderEventWakeCoalescesBeforeStart(t *testing.T) {
+	worker := &companyFundRuntimeEventWorkerStub{}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{ProviderEventWorker: worker}, CompanyFundRuntimeConfig{
+		EventPollInterval:    time.Hour,
+		EventMaxIdleInterval: time.Hour,
+	})
+	if !runtime.NotifyProviderEvent() {
+		t.Fatal("first provider-event wake should queue before Start")
+	}
+	if runtime.NotifyProviderEvent() {
+		t.Fatal("second provider-event wake should coalesce while one wake is pending")
+	}
+	if worker.calls != 0 {
+		t.Fatalf("NotifyProviderEvent must not process work before Start; calls=%d", worker.calls)
+	}
+}
+
+func TestCompanyFundRuntime_ProviderEventWakeDrainsWithoutWaitingMaxIdle(t *testing.T) {
+	worker := &companyFundRuntimeEventWorkerStub{
+		notify: make(chan struct{}, 8),
+		results: []companyFundRuntimeEventWorkerCall{
+			{result: ProviderEventWorkerResult{}}, // startup empty
+			{result: ProviderEventWorkerResult{Claimed: true, EventID: 9, Outcome: ProviderEventFinalizeProcessed}},
+			{result: ProviderEventWorkerResult{}}, // drain complete
+		},
+	}
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{ProviderEventWorker: worker}, CompanyFundRuntimeConfig{
+		EventPollInterval:    30 * time.Millisecond,
+		EventMaxIdleInterval: time.Hour, // deep idle ceiling must not block wake
+		EventDrainLimit:      10,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.Start(ctx)
+	defer runtime.Stop()
+
+	// Wait for startup scan (empty).
+	select {
+	case <-worker.notify:
+	case <-time.After(time.Second):
+		t.Fatal("startup scan missing")
+	}
+
+	_ = runtime.NotifyProviderEvent()
+
+	deadline := time.After(500 * time.Millisecond)
+	for worker.calls < 3 {
+		select {
+		case <-worker.notify:
+		case <-deadline:
+			t.Fatalf("wake did not drain promptly; calls=%d", worker.calls)
+		}
+	}
+}
+
+func TestCompanyFundRuntime_DefaultsEventMaxIdleToTenMinutes(t *testing.T) {
+	runtime, err := NewCompanyFundRuntime(CompanyFundRuntimeDependencies{}, CompanyFundRuntimeConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.config.EventMaxIdleInterval != 10*time.Minute {
+		t.Fatalf("EventMaxIdleInterval = %s, want 10m", runtime.config.EventMaxIdleInterval)
+	}
+	if runtime.config.EventPollInterval != time.Second {
+		t.Fatalf("EventPollInterval = %s, want 1s", runtime.config.EventPollInterval)
+	}
+}
+
+func TestCompanyFundRuntime_NotifyProviderEventIsNoopWithoutWorker(t *testing.T) {
+	runtime := newCompanyFundRuntimeForTest(t, CompanyFundRuntimeDependencies{}, CompanyFundRuntimeConfig{})
+	if runtime.NotifyProviderEvent() {
+		t.Fatal("NotifyProviderEvent must be a safe no-op without a provider-event worker")
+	}
+	if runtime.ProviderEventWakeFunc() != nil {
+		t.Fatal("ProviderEventWakeFunc must be nil without a provider-event worker")
 	}
 }
 

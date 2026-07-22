@@ -68,4 +68,30 @@ func finalizeSafeheronRouting(c *Container) {
 		c.FundRoutingProjectionWorker = projectionWorker
 		go projectionWorker.Run(ctx)
 	}
+	// Re-bind webhook wakes once routing workers exist so transaction events
+	// advance both deposit and routing without fixed second-level polling.
+	wireSafeheronWebhookWorkerWakes(c)
+}
+
+// wireSafeheronWebhookWorkerWakes attaches process-local wakes after durable
+// Safeheron webhook persistence. Pointers are read on each call so partial
+// container assembly remains safe.
+func wireSafeheronWebhookWorkerWakes(c *Container) {
+	if c == nil || c.SafeheronWebhookHandler == nil {
+		return
+	}
+	c.SafeheronWebhookHandler.SetDepositWorkerWake(func() {
+		if c.DepositWorker != nil {
+			_ = c.DepositWorker.Notify()
+		}
+		if c.FundRoutingWorker != nil {
+			_ = c.FundRoutingWorker.Notify()
+		}
+		if c.FundRoutingAlertNotifier != nil {
+			_ = c.FundRoutingAlertNotifier.Notify()
+		}
+		if c.FundRoutingProjectionWorker != nil {
+			_ = c.FundRoutingProjectionWorker.Notify()
+		}
+	})
 }

@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/safeheron"
 )
 
@@ -27,14 +27,24 @@ type NetworkFamilyResolver interface {
 type Worker struct {
 	store    RoutingStore
 	resolver NetworkFamilyResolver
-	interval time.Duration
+	runner   *adaptiveRunner
 }
 
 func NewWorker(store RoutingStore, resolver NetworkFamilyResolver) (*Worker, error) {
 	if store == nil || resolver == nil {
 		return nil, fmt.Errorf("Safeheron routing store and network resolver are required")
 	}
-	return &Worker{store: store, resolver: resolver, interval: time.Second}, nil
+	worker := &Worker{store: store, resolver: resolver}
+	worker.runner = newAdaptiveRunner("Safeheron routing worker", time.Second, adaptiveschedule.DefaultMaxIdle, worker.ProcessOne)
+	return worker, nil
+}
+
+// Notify wakes routing after a durable transaction webhook is available.
+func (worker *Worker) Notify() bool {
+	if worker == nil || worker.runner == nil {
+		return false
+	}
+	return worker.runner.Notify()
 }
 
 func (worker *Worker) ProcessOne(ctx context.Context) (bool, error) {
@@ -90,25 +100,8 @@ func (worker *Worker) reject(ctx context.Context, eventID int64, code string) er
 }
 
 func (worker *Worker) Run(ctx context.Context) {
-	log.Printf("Safeheron routing worker started: interval=%s", worker.interval)
-	defer log.Printf("Safeheron routing worker stopped")
-	ticker := time.NewTicker(worker.interval)
-	defer ticker.Stop()
-	for {
-		for {
-			processed, err := worker.ProcessOne(ctx)
-			if err != nil {
-				log.Printf("Safeheron routing worker error: %v", err)
-				break
-			}
-			if !processed {
-				break
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	if worker == nil || worker.runner == nil {
+		return
 	}
+	worker.runner.Run(ctx)
 }

@@ -206,8 +206,9 @@ func WithSafeheronPool(ctx context.Context) ContainerOption {
 			PanicBackoff:    5 * time.Second,
 		})
 		go c.DepositWorker.Run(ctx)
+		wireSafeheronWebhookWorkerWakes(c)
 
-		log.Printf("Safeheron deposit pipeline enabled: worker interval=%s", workerInterval)
+		log.Printf("Safeheron deposit pipeline enabled: worker interval=%s maxIdle=10m", workerInterval)
 		log.Printf("[KYT] enabled=%v scan_interval=%s timeout=%s orphan_max_retry=%d",
 			kytEnabled, kytScanInterval, kytTimeout, kytOrphanMaxRetry)
 	}

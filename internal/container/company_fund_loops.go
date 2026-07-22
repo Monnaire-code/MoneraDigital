@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/companyfund"
 	"monera-digital/internal/fundrouting"
 	"monera-digital/internal/handlers"
@@ -130,7 +131,7 @@ func startCompanyFundAuxiliaryLoops(
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			runCompanyFundSafeheronCollector(ctx, collector, collectorInterval, collectorBatch)
+			runCompanyFundSafeheronCollector(ctx, collector, collectorInterval, collectorBatch, c)
 		}()
 	}
 	if refresher != nil {
@@ -153,30 +154,44 @@ func startCompanyFundAuxiliaryLoops(
 	}()
 }
 
+func companyFundAdaptiveMaxIdle(minIdle time.Duration) time.Duration {
+	if minIdle > adaptiveschedule.DefaultMaxIdle {
+		return minIdle
+	}
+	return adaptiveschedule.DefaultMaxIdle
+}
+
 func runCompanyFundSafeheronCollector(
 	ctx context.Context,
 	collector *companyfund.SafeheronProviderEventCollector,
-	interval time.Duration,
+	minIdle time.Duration,
 	batchSize int,
+	c *Container,
 ) {
-	collect := func() {
-		if _, err := collector.Collect(ctx, batchSize); err != nil && ctx.Err() == nil {
-			// The collector error can wrap source payload/database details; keep
-			// process logs metadata-only and let the next bounded tick repair it.
+	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+		Name:    "company-fund-safeheron-collector",
+		MinIdle: minIdle,
+		MaxIdle: companyFundAdaptiveMaxIdle(minIdle),
+	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+		result, err := collector.Collect(ctx, batchSize)
+		if err != nil && ctx.Err() == nil {
 			log.Printf("company-fund Safeheron raw-event collector failed")
 		}
-	}
-	collect()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			collect()
+		// Newly bridged inbox rows re-accelerate; empty compensation backs off.
+		worked := result.Inserted > 0
+		if worked && c != nil && c.CompanyFundRuntime != nil {
+			_ = c.CompanyFundRuntime.NotifyProviderEvent()
 		}
+		return adaptiveschedule.CycleOutcome{
+			Worked:   worked,
+			MoreWork: worked && result.Inserted >= batchSize && batchSize > 0,
+		}, err
+	})
+	if err != nil {
+		log.Printf("company-fund Safeheron raw-event collector disabled: adaptive schedule invalid")
+		return
 	}
+	loop.Run(ctx)
 }
 
 // runCompanyFundCurrentRateRefreshLoop owns only provider/cache refresh. It
@@ -185,9 +200,13 @@ func runCompanyFundSafeheronCollector(
 func runCompanyFundCurrentRateRefreshLoop(
 	ctx context.Context,
 	refresher companyFundCurrentRateRefresher,
-	interval time.Duration,
+	minIdle time.Duration,
 ) {
-	refresh := func() {
+	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+		Name:    "company-fund-current-rate-refresh",
+		MinIdle: minIdle,
+		MaxIdle: companyFundAdaptiveMaxIdle(minIdle),
+	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
 		result, err := refresher.Refresh(ctx)
 		if result.RestoreFailed && ctx.Err() == nil {
 			log.Printf("company-fund current USD rate snapshot restore failed")
@@ -195,18 +214,14 @@ func runCompanyFundCurrentRateRefreshLoop(
 		if err != nil && ctx.Err() == nil {
 			log.Printf("company-fund current USD rate refresh failed")
 		}
+		// Maintenance-only: never report Worked so idle can reach MaxIdle.
+		return adaptiveschedule.CycleOutcome{}, err
+	})
+	if err != nil {
+		log.Printf("company-fund current USD rate refresh loop disabled: adaptive schedule invalid")
+		return
 	}
-	refresh()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			refresh()
-		}
-	}
+	loop.Run(ctx)
 }
 
 // runCompanyFundCurrentValuationSweepLoop owns only database valuation repair
@@ -215,28 +230,29 @@ func runCompanyFundCurrentRateRefreshLoop(
 func runCompanyFundCurrentValuationSweepLoop(
 	ctx context.Context,
 	valuator companyFundCurrentValuationSweeper,
-	interval time.Duration,
+	minIdle time.Duration,
 	batchSize int,
 ) {
-	sweep := func() {
+	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+		Name:    "company-fund-valuation-sweep",
+		MinIdle: minIdle,
+		MaxIdle: companyFundAdaptiveMaxIdle(minIdle),
+	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
 		result := valuator.Sweep(ctx, batchSize)
 		if result.Err != nil && ctx.Err() == nil {
-			// Valuation repair is best-effort and must never affect provider-event
-			// retry/finalization semantics.
 			log.Printf("company-fund USD valuation repair sweep failed")
 		}
+		worked := result.Applied > 0
+		return adaptiveschedule.CycleOutcome{
+			Worked:   worked,
+			MoreWork: worked && result.Applied >= batchSize && batchSize > 0,
+		}, result.Err
+	})
+	if err != nil {
+		log.Printf("company-fund USD valuation repair sweep disabled: adaptive schedule invalid")
+		return
 	}
-	sweep()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			sweep()
-		}
-	}
+	loop.Run(ctx)
 }
 
 func stopCompanyFundAuxiliaryLoops(c *Container) {

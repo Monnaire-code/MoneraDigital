@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/safeheron"
 )
 
@@ -181,16 +182,22 @@ func (c *SafeheronCoinCatalog) run(ctx context.Context, done chan struct{}, inte
 		c.runMu.Unlock()
 		close(done)
 	}()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			_ = c.Refresh(ctx)
-		}
+	maxIdle := adaptiveschedule.DefaultMaxIdle
+	if interval > maxIdle {
+		maxIdle = interval
 	}
+	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+		Name:    "company-fund-safeheron-coin-catalog",
+		MinIdle: interval,
+		MaxIdle: maxIdle,
+	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+		err := c.Refresh(ctx)
+		return adaptiveschedule.CycleOutcome{}, err
+	})
+	if err != nil {
+		return
+	}
+	loop.Run(ctx)
 }
 
 func (c *SafeheronCoinCatalog) Stop() {

@@ -7,10 +7,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/companyfund"
 )
 
@@ -21,8 +21,8 @@ type ProviderEventInserter interface {
 type ProjectionWorker struct {
 	db       *sql.DB
 	events   ProviderEventInserter
-	interval time.Duration
 	workerID string
+	runner   *adaptiveRunner
 }
 
 const maxProjectionActionAttempts = 8
@@ -47,7 +47,17 @@ func NewProjectionWorker(db *sql.DB, events ProviderEventInserter) (*ProjectionW
 	if db == nil || events == nil {
 		return nil, fmt.Errorf("fund routing projection database and provider event inserter are required")
 	}
-	return &ProjectionWorker{db: db, events: events, interval: time.Second, workerID: newProjectionWorkerID()}, nil
+	worker := &ProjectionWorker{db: db, events: events, workerID: newProjectionWorkerID()}
+	worker.runner = newAdaptiveRunner("fund routing projection worker", time.Second, adaptiveschedule.DefaultMaxIdle, worker.ProcessOne)
+	return worker, nil
+}
+
+// Notify wakes projection after upstream routing creates durable actions.
+func (worker *ProjectionWorker) Notify() bool {
+	if worker == nil || worker.runner == nil {
+		return false
+	}
+	return worker.runner.Notify()
 }
 
 func (worker *ProjectionWorker) ProcessOne(ctx context.Context) (bool, error) {
@@ -647,27 +657,10 @@ func newProjectionWorkerID() string {
 }
 
 func (worker *ProjectionWorker) Run(ctx context.Context) {
-	log.Printf("fund routing projection worker started")
-	defer log.Printf("fund routing projection worker stopped")
-	ticker := time.NewTicker(worker.interval)
-	defer ticker.Stop()
-	for {
-		for {
-			processed, err := worker.ProcessOne(ctx)
-			if err != nil {
-				log.Printf("fund routing projection worker error: %v", err)
-				break
-			}
-			if !processed {
-				break
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	if worker == nil || worker.runner == nil {
+		return
 	}
+	worker.runner.Run(ctx)
 }
 
 func routingResultDigest(identity string, resultID int64) string {

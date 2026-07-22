@@ -5,54 +5,87 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"sync"
 	"time"
+
+	"monera-digital/internal/adaptiveschedule"
 )
 
 type ReplenisherConfig struct {
+	// Interval is the minimum idle wait after a healthy check (default 10m).
 	Interval time.Duration
-	Low      map[string]int
-	Target   map[string]int
+	// MaxIdle is the progressive ceiling (default 10m).
+	MaxIdle time.Duration
+	Low     map[string]int
+	Target  map[string]int
 }
 
 type Replenisher struct {
 	mgr    *Manager
 	config ReplenisherConfig
+
+	mu   sync.Mutex
+	loop *adaptiveschedule.Loop
 }
 
 func NewReplenisher(mgr *Manager, cfg ReplenisherConfig) *Replenisher {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 10 * time.Minute
 	}
+	if cfg.MaxIdle <= 0 {
+		cfg.MaxIdle = adaptiveschedule.DefaultMaxIdle
+	}
+	if cfg.MaxIdle < cfg.Interval {
+		cfg.MaxIdle = cfg.Interval
+	}
 	return &Replenisher{mgr: mgr, config: cfg}
 }
 
-func (r *Replenisher) Run(ctx context.Context) {
-	log.Printf("pool replenisher started: interval=%s low=%v target=%v",
-		r.config.Interval, r.config.Low, r.config.Target)
-
-	r.tick(ctx)
-
-	ticker := time.NewTicker(r.config.Interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("pool replenisher stopped")
-			return
-		case <-ticker.C:
-			r.tick(ctx)
-		}
+// Notify wakes pool maintenance after a real allocation or known low watermark.
+func (r *Replenisher) Notify() bool {
+	if r == nil {
+		return false
 	}
+	r.mu.Lock()
+	loop := r.loop
+	r.mu.Unlock()
+	if loop == nil {
+		return false
+	}
+	return loop.Notify()
 }
 
-func (r *Replenisher) tick(ctx context.Context) {
+func (r *Replenisher) Run(ctx context.Context) {
+	log.Printf("pool replenisher started: minIdle=%s maxIdle=%s low=%v target=%v",
+		r.config.Interval, r.config.MaxIdle, r.config.Low, r.config.Target)
+	defer log.Println("pool replenisher stopped")
+
+	loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+		Name:    "wallet-pool-replenisher",
+		MinIdle: r.config.Interval,
+		MaxIdle: r.config.MaxIdle,
+	}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+		worked := r.tick(ctx)
+		return adaptiveschedule.CycleOutcome{Worked: worked}, nil
+	})
+	if err != nil {
+		log.Printf("pool replenisher adaptive schedule disabled")
+		return
+	}
+	r.mu.Lock()
+	r.loop = loop
+	r.mu.Unlock()
+	loop.Run(ctx)
+}
+
+func (r *Replenisher) tick(ctx context.Context) bool {
 	defer func() {
 		if rv := recover(); rv != nil {
 			log.Printf("pool replenisher panic recovered: %v\n%s", rv, debug.Stack())
 		}
 	}()
 
+	worked := false
 	for family, low := range r.config.Low {
 		target, ok := r.config.Target[family]
 		if !ok {
@@ -65,18 +98,18 @@ func (r *Replenisher) tick(ctx context.Context) {
 			continue
 		}
 
-		log.Printf("pool replenish check: %s=%d", family, count)
-
 		if count >= low {
 			continue
 		}
 
 		log.Printf("pool replenish: %s %d→%d", family, count, target)
+		worked = true
 		if err := r.mgr.Replenish(ctx, family, target); err != nil {
 			log.Printf("pool replenish failed (%s): %v", family, err)
 			r.alert(family, count, target, err)
 		}
 	}
+	return worked
 }
 
 func (r *Replenisher) alert(family string, current, target int, err error) {

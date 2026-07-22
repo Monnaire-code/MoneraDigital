@@ -418,7 +418,24 @@ export function useDebounce<T>(value: T, delay: number): T {
 
 ## Git 工作流
 
-**提交格式**: 使用 Lore Commit Protocol；首行说明为什么做此变更，并根据实际情况记录 `Constraint` / `Rejected` / `Confidence` / `Scope-risk` / `Directive` / `Tested` / `Not-tested` trailers。
+### 提交格式（强制）
+
+所有提交使用 **Conventional Commit 首行 + Lore Git Trailers**：
+
+```text
+fix(fund-routing): avoid alerting operators before a transaction settles
+
+Constraint: provider events are initially non-terminal
+Rejected: alert every webhook | creates routine noise
+Confidence: high
+Scope-risk: narrow
+Tested: go test ./internal/fundrouting
+```
+
+- 首行必须是 `<type>(<scope>): <why>`；业务新功能使用 `feat:`，Bug 修复使用 `fix:`。不改变业务行为的提交使用最贴切的 `docs:`、`test:`、`refactor:`、`ci:` 或 `chore:`，不得伪装成 `feat:` / `fix:`。
+- 首行说明**为什么**做此变更，不复述代码改动；`scope` 可省略。
+- Lore 元数据必须连续放在提交信息**最底部**，使用 Git Trailer 的 `Key: value` 格式；不得在 trailer 后追加普通正文。
+- 按实际情况记录 `Constraint`、`Rejected`、`Confidence`、`Scope-risk`、`Directive`、`Tested`、`Not-tested`。`Tested` 必须说明本次验证；有验证缺口时必须补充 `Not-tested`。
 
 **功能实现流程**:
 1. 明确领域边界、验收标准和依赖关系

@@ -92,6 +92,8 @@ func newSafeheronCompanyFundBridgeHandler(
 	}}, recorder, nil)
 	handler.SetCompanyFundBridge(source, bridge)
 	handler.SetCompanyFundEligibility(eligibility)
+	// default: no wake unless individual tests attach one
+
 	return handler
 }
 
@@ -156,7 +158,10 @@ func TestSafeheronCompanyFundBridge_DuplicateWebhookAcksAndBridgesIdempotently(t
 		WithArgs(eventID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "payload_digest"}).AddRow(91, digest))
 
-	w := runWebhook(newSafeheronCompanyFundBridgeHandler(deposits, deposits, bridge, &safeheronCompanyFundEligibilityStub{decision: companyfund.SafeheronWebhookEligibilityDecision{Candidate: true}}, body), `{"safeheron":"retry"}`)
+	handler := newSafeheronCompanyFundBridgeHandler(deposits, deposits, bridge, &safeheronCompanyFundEligibilityStub{decision: companyfund.SafeheronWebhookEligibilityDecision{Candidate: true}}, body)
+	var wakeCalls int
+	handler.SetCompanyFundProviderEventWake(func() { wakeCalls++ })
+	w := runWebhook(handler, `{"safeheron":"retry"}`)
 	assertSafeheronCompanyFundAck(t, w.Code, w.Body.String())
 	if len(bridge.inputs) != 1 || bridge.inputs[0].ProviderEventID != eventID ||
 		bridge.inputs[0].SourceKind != companyfund.ProviderEventSourceExistingSafeheronWebhookRef ||
@@ -164,8 +169,42 @@ func TestSafeheronCompanyFundBridge_DuplicateWebhookAcksAndBridgesIdempotently(t
 		bridge.inputs[0].SourcePayloadDigest != digest {
 		t.Fatalf("duplicate bridge input = %#v", bridge.inputs)
 	}
+	if wakeCalls != 1 {
+		t.Fatalf("provider-event wake calls = %d, want 1 after durable bridge insert", wakeCalls)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSafeheronCompanyFundBridge_DoesNotWakeWhenInsertFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	body := []byte(`{"eventType":"TRANSACTION_STATUS_CHANGED","wake-fail":true}`)
+	digest := safeheronBridgePayloadDigest(body)
+	eventID := safeheronBridgeEventID(body)
+	deposits := deposit.NewRepository(db)
+	bridge := &safeheronCompanyFundBridgeStub{err: errors.New("insert failed")}
+	mock.ExpectExec("INSERT INTO safeheron_webhook_events").
+		WithArgs(eventID, "TRANSACTION_STATUS_CHANGED", "tx-company-fund", "customer-7", body, digest).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT payload_digest FROM safeheron_webhook_events WHERE event_id = $1")).
+		WithArgs(eventID).
+		WillReturnRows(sqlmock.NewRows([]string{"payload_digest"}).AddRow(digest))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, payload_digest FROM safeheron_webhook_events WHERE event_id = $1")).
+		WithArgs(eventID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "payload_digest"}).AddRow(91, digest))
+
+	handler := newSafeheronCompanyFundBridgeHandler(deposits, deposits, bridge, &safeheronCompanyFundEligibilityStub{decision: companyfund.SafeheronWebhookEligibilityDecision{Candidate: true}}, body)
+	var wakeCalls int
+	handler.SetCompanyFundProviderEventWake(func() { wakeCalls++ })
+	_ = runWebhook(handler, `{"safeheron":"fail-insert"}`)
+	if wakeCalls != 0 {
+		t.Fatalf("wake calls = %d, want 0 when bridge insert fails", wakeCalls)
 	}
 }
 

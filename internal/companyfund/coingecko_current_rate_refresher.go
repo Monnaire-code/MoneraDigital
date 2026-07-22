@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+
+	"monera-digital/internal/adaptiveschedule"
 )
 
 const defaultCoinGeckoCurrentRateRefreshInterval = 5 * time.Minute
@@ -379,17 +381,23 @@ func (r *CoinGeckoCurrentRateRefresher) Start(parent context.Context) {
 			r.mu.Unlock()
 			close(done)
 		}()
-		_, _ = r.Refresh(ctx)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				_, _ = r.Refresh(ctx)
-			}
+		maxIdle := adaptiveschedule.DefaultMaxIdle
+		if interval > maxIdle {
+			maxIdle = interval
 		}
+		loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+			Name:    "company-fund-coingecko-rate-refresher",
+			MinIdle: interval,
+			MaxIdle: maxIdle,
+		}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+			_, err := r.Refresh(ctx)
+			// Maintenance-only cadence under the shared idle budget.
+			return adaptiveschedule.CycleOutcome{}, err
+		})
+		if err != nil {
+			return
+		}
+		loop.Run(ctx)
 	}()
 }
 

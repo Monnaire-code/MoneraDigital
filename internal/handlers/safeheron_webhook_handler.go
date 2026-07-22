@@ -42,11 +42,13 @@ type WebhookEventRecorder interface {
 // SafeheronWebhookHandler is the sync side of the deposit pipeline.
 type SafeheronWebhookHandler struct {
 	Verifier                  WebhookVerifier
-	Recorder                  WebhookEventRecorder
-	AllowedIPs                []string
-	companyFundSourceLookup   SafeheronEventSourceLookup
-	companyFundProviderBridge SafeheronCompanyFundProviderBridge
-	companyFundEligibility    companyfund.SafeheronWebhookEligibility
+	Recorder                      WebhookEventRecorder
+	AllowedIPs                    []string
+	companyFundSourceLookup       SafeheronEventSourceLookup
+	companyFundProviderBridge     SafeheronCompanyFundProviderBridge
+	companyFundEligibility        companyfund.SafeheronWebhookEligibility
+	companyFundProviderEventWake  func()
+	depositWorkerWake             func()
 }
 
 // NewSafeheronWebhookHandler wires the public webhook receiver.
@@ -73,6 +75,25 @@ func (h *SafeheronWebhookHandler) SetCompanyFundEligibility(eligibility companyf
 		return
 	}
 	h.companyFundEligibility = eligibility
+}
+
+// SetCompanyFundProviderEventWake attaches an optional process-local wake used
+// only after a provider event has been durably inserted. The callback is
+// advisory: durable event state remains the source of truth.
+func (h *SafeheronWebhookHandler) SetCompanyFundProviderEventWake(wake func()) {
+	if h == nil {
+		return
+	}
+	h.companyFundProviderEventWake = wake
+}
+
+// SetDepositWorkerWake attaches an optional process-local wake used only after
+// a Safeheron webhook event has been durably inserted into the deposit inbox.
+func (h *SafeheronWebhookHandler) SetDepositWorkerWake(wake func()) {
+	if h == nil {
+		return
+	}
+	h.depositWorkerWake = wake
 }
 
 // Receive handles POST /api/webhooks/safeheron. It:
@@ -194,6 +215,11 @@ func (h *SafeheronWebhookHandler) Receive(c *gin.Context) {
 		log.Printf("[webhook] ERROR ip=%s insert failed eventId=%s", clientIP, eventID)
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
+	}
+	// Wake deposit/routing consumers only after durable persistence. Idempotent
+	// duplicates still wake so a prior lost signal can be repaired.
+	if h.depositWorkerWake != nil {
+		h.depositWorkerWake()
 	}
 	if h.companyFundEligibility != nil {
 		source, sourceErr := h.lookupCompanyFundSafeheronSource(c.Request.Context(), eventID, payloadDigest)

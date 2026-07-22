@@ -5,20 +5,24 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"time"
+
+	"monera-digital/internal/adaptiveschedule"
 )
 
 type AlertEscalator struct {
-	db       *sql.DB
-	interval time.Duration
+	db     *sql.DB
+	runner *adaptiveRunner
 }
 
 func NewAlertEscalator(db *sql.DB) (*AlertEscalator, error) {
 	if db == nil {
 		return nil, fmt.Errorf("fund routing alert escalation database is required")
 	}
-	return &AlertEscalator{db: db, interval: time.Minute}, nil
+	e := &AlertEscalator{db: db}
+	// SLA thresholds are 1h/24h; min idle can be 1m while fully idle backs off to MaxIdle.
+	e.runner = newAdaptiveRunner("fund routing OPEN-case SLA escalator", time.Minute, adaptiveschedule.DefaultMaxIdle, e.ProcessOne)
+	return e, nil
 }
 
 func openCaseSLAEscalationSQL() string {
@@ -60,25 +64,8 @@ func (e *AlertEscalator) ProcessOne(ctx context.Context) (bool, error) {
 }
 
 func (e *AlertEscalator) Run(ctx context.Context) {
-	log.Printf("fund routing OPEN-case SLA escalator started")
-	defer log.Printf("fund routing OPEN-case SLA escalator stopped")
-	ticker := time.NewTicker(e.interval)
-	defer ticker.Stop()
-	for {
-		for {
-			processed, err := e.ProcessOne(ctx)
-			if err != nil {
-				log.Printf("fund routing SLA escalator error: %v", err)
-				break
-			}
-			if !processed {
-				break
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	if e == nil || e.runner == nil {
+		return
 	}
+	e.runner.Run(ctx)
 }

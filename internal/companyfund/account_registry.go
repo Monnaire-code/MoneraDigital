@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+
+	"monera-digital/internal/adaptiveschedule"
 )
 
 const defaultAccountRegistryRefreshInterval = time.Minute
@@ -508,8 +510,9 @@ func (r *AccountRegistry) recordRefreshFailure(err error) {
 	r.mu.Unlock()
 }
 
-// Start begins at most one periodic refresh loop. It does not synchronously
+// Start begins at most one adaptive refresh loop. It does not synchronously
 // refresh; callers that require an initial snapshot should call Refresh first.
+// Empty refreshes progressively back off to MaxIdle (default 10m).
 func (r *AccountRegistry) Start(parent context.Context) {
 	if r == nil {
 		return
@@ -542,16 +545,23 @@ func (r *AccountRegistry) Start(parent context.Context) {
 			close(done)
 		}()
 
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				_ = r.Refresh(ctx)
-			}
+		maxIdle := adaptiveschedule.DefaultMaxIdle
+		if interval > maxIdle {
+			maxIdle = interval
 		}
+		loop, err := adaptiveschedule.New(adaptiveschedule.Config{
+			Name:    "company-fund-account-registry",
+			MinIdle: interval,
+			MaxIdle: maxIdle,
+		}, func(ctx context.Context) (adaptiveschedule.CycleOutcome, error) {
+			err := r.Refresh(ctx)
+			// Maintenance-only: never report Worked so idle can reach MaxIdle.
+			return adaptiveschedule.CycleOutcome{}, err
+		})
+		if err != nil {
+			return
+		}
+		loop.Run(ctx)
 	}()
 }
 

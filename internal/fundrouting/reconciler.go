@@ -6,15 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"monera-digital/internal/adaptiveschedule"
 	"monera-digital/internal/safeheron"
 )
 
 type Reconciler struct {
-	db       *sql.DB
-	interval time.Duration
+	db     *sql.DB
+	runner *adaptiveRunner
 }
 
 type openCase struct {
@@ -30,7 +30,9 @@ func NewReconciler(db *sql.DB) (*Reconciler, error) {
 	if db == nil {
 		return nil, fmt.Errorf("fund routing reconciliation database is required")
 	}
-	return &Reconciler{db: db, interval: 30 * time.Second}, nil
+	r := &Reconciler{db: db}
+	r.runner = newAdaptiveRunner("fund routing OPEN-case reconciler", 30*time.Second, adaptiveschedule.DefaultMaxIdle, r.ProcessOne)
+	return r, nil
 }
 
 func (r *Reconciler) ProcessOne(ctx context.Context) (_ bool, err error) {
@@ -160,18 +162,8 @@ func findCandidate(candidates []Candidate, identity string) (Candidate, bool) {
 }
 
 func (r *Reconciler) Run(ctx context.Context) {
-	log.Printf("fund routing OPEN-case reconciler started")
-	defer log.Printf("fund routing OPEN-case reconciler stopped")
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
-	for {
-		if _, err := r.ProcessOne(ctx); err != nil {
-			log.Printf("fund routing OPEN-case reconciler error: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	if r == nil || r.runner == nil {
+		return
 	}
+	r.runner.Run(ctx)
 }
