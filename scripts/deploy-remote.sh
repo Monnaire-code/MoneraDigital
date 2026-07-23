@@ -189,6 +189,22 @@ health_check() {
 run_migration() {
     trace "migrate"
     local actual migration_exit
+    # Load the app .env so the migrate binary inherits ADR 0003 variables
+    # (MIGRATION_DATABASE_URL, APP_ENV, ...) the same way the systemd server
+    # unit does via EnvironmentFile. Without this, monera-migrate reads empty
+    # env and fails closed on "migration database URL is required".
+    if [[ "${MONERA_DEPLOY_FAKE:-0}" != "1" || -n "${MONERA_DEPLOY_FAKE_MIGRATION_ENV_PROBE:-}" ]]; then
+        if [[ -f "$ENV_FILE" ]]; then
+            set -a
+            # shellcheck disable=SC1090
+            . "$ENV_FILE"
+            set +a
+        fi
+    fi
+    if [[ -n "${MONERA_DEPLOY_FAKE_MIGRATION_ENV_PROBE:-}" ]]; then
+        printf 'MIGRATION_DATABASE_URL=%s\nAPP_ENV=%s\n' \
+            "${MIGRATION_DATABASE_URL:-}" "${APP_ENV:-}" > "$MONERA_DEPLOY_FAKE_MIGRATION_ENV_PROBE"
+    fi
     if [[ "${MONERA_DEPLOY_FAKE:-0}" == "1" ]]; then
         trace "migration-print-ceiling"
         [[ "${MONERA_DEPLOY_FAKE_PRINT_CEILING_EXIT_CODE:-0}" == "0" ]] || return 1
