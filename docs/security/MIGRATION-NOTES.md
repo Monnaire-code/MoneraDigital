@@ -97,6 +97,19 @@ Resolution order for the migrate binary:
 3. **Stage / production** must set `MIGRATION_DATABASE_URL` to a direct URL.
 4. Reject any migration URL whose hostname contains `-pooler` (case-insensitive).
 
+> **Entrypoint contract:** `cmd/migrate` is the only sanctioned entrypoint for
+> production migrate/rollback. Pooler rejection and the stage/production
+> dedicated-URL requirement are enforced there (ADR 0003 rule A / config C).
+> The library-level `NewMigrator` itself does not re-check the DSN — any
+> alternate entrypoint (script, worker) must call `ResolveMigrationDSN` before
+> opening a connection, or it silently bypasses those guards.
+>
+> **DSN form:** `MIGRATION_DATABASE_URL` / `DATABASE_URL` must be a
+> `postgresql://` (or `postgres://`) URL. The libpq keyword/value form
+> (`host=... sslmode=...`) is not accepted by the resolver. Neon's default
+> connection string is already the URL form, so this only matters if an
+> operator hand-translates a DSN.
+
 ```bash
 # Stage/production (illustrative)
 MIGRATION_DATABASE_URL="postgresql://...@ep-xxx....neon.tech/neondb?sslmode=require" \

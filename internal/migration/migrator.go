@@ -34,8 +34,6 @@ type Migrator struct {
 	db          *sql.DB
 	migrations  []Migration
 	lockTimeout time.Duration
-	// now is injectable for tests; defaults to time.Now.
-	now func() time.Time
 	// lockPollInterval is the sleep between try-lock attempts (tests may shrink).
 	lockPollInterval time.Duration
 }
@@ -60,18 +58,22 @@ func NewMigrator(db *sql.DB) *Migrator {
 		db:               db,
 		migrations:       []Migration{},
 		lockTimeout:      DefaultAdvisoryLockTimeout,
-		now:              time.Now,
 		lockPollInterval: 100 * time.Millisecond,
 	}
 }
 
 // SetAdvisoryLockTimeout overrides the bound for session advisory lock acquisition.
-// Non-positive values are ignored (keep default).
-func (m *Migrator) SetAdvisoryLockTimeout(d time.Duration) {
-	if m == nil || d <= 0 {
-		return
+// A non-positive duration is rejected so the library cannot accidentally request an
+// infinite wait — fail-closed mirrors ParseAdvisoryLockTimeout (ADR 0003).
+func (m *Migrator) SetAdvisoryLockTimeout(d time.Duration) error {
+	if m == nil {
+		return fmt.Errorf("SetAdvisoryLockTimeout: nil migrator")
+	}
+	if d <= 0 {
+		return fmt.Errorf("SetAdvisoryLockTimeout: duration must be positive, got %s", d)
 	}
 	m.lockTimeout = d
+	return nil
 }
 
 // Register registers a migration

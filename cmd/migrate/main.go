@@ -96,7 +96,9 @@ func main() {
 	defer db.Close()
 
 	m := migration.NewMigrator(db)
-	m.SetAdvisoryLockTimeout(lockTimeout)
+	if err := m.SetAdvisoryLockTimeout(lockTimeout); err != nil {
+		log.Fatal("Set advisory lock timeout:", err)
+	}
 	// Register in version order. Order matters: each migration is
 	// recorded in the `migrations` tracking table with its version, and
 	// the runner refuses to re-apply an already-recorded version.

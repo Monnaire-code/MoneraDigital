@@ -17,7 +17,9 @@ func TestAcquireAdvisoryLock_TimeoutHardFailure(t *testing.T) {
 	defer db.Close()
 
 	m := NewMigrator(db)
-	m.SetAdvisoryLockTimeout(30 * time.Millisecond)
+	if err := m.SetAdvisoryLockTimeout(30 * time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
 	m.lockPollInterval = 5 * time.Millisecond
 
 	conn, err := db.Conn(context.Background())
@@ -47,7 +49,9 @@ func TestAcquireAdvisoryLock_Success(t *testing.T) {
 	defer db.Close()
 
 	m := NewMigrator(db)
-	m.SetAdvisoryLockTimeout(time.Second)
+	if err := m.SetAdvisoryLockTimeout(time.Second); err != nil {
+		t.Fatal(err)
+	}
 	conn, err := db.Conn(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -133,3 +137,29 @@ func (r *diagRows) Next(dest []driver.Value) error {
 var _ driver.QueryerContext = (*diagConn)(nil)
 var _ driver.ExecerContext = (*diagConn)(nil)
 var _ driver.NamedValueChecker = (*diagConn)(nil)
+
+// SetAdvisoryLockTimeout must fail closed on non-positive bounds so library
+// callers cannot accidentally request an infinite lock wait. This mirrors the
+// CLI-side ParseAdvisoryLockTimeout fail-closed semantics (ADR 0003).
+func TestSetAdvisoryLockTimeout_RejectsNonPositive(t *testing.T) {
+	t.Parallel()
+	m := NewMigrator(nil)
+	before := m.lockTimeout
+
+	cases := []time.Duration{0, -1, -time.Second}
+	for _, d := range cases {
+		if err := m.SetAdvisoryLockTimeout(d); err == nil {
+			t.Fatalf("SetAdvisoryLockTimeout(%s) should error", d)
+		}
+		if m.lockTimeout != before {
+			t.Fatalf("SetAdvisoryLockTimeout(%s) mutated lockTimeout to %s", d, m.lockTimeout)
+		}
+	}
+
+	if err := m.SetAdvisoryLockTimeout(5 * time.Second); err != nil {
+		t.Fatalf("positive duration should succeed: %v", err)
+	}
+	if m.lockTimeout != 5*time.Second {
+		t.Fatalf("lockTimeout=%s want 5s", m.lockTimeout)
+	}
+}
