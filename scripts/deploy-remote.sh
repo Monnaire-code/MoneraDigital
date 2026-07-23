@@ -193,12 +193,22 @@ run_migration() {
     # (MIGRATION_DATABASE_URL, APP_ENV, ...) the same way the systemd server
     # unit does via EnvironmentFile. Without this, monera-migrate reads empty
     # env and fails closed on "migration database URL is required".
+    # Parse KEY=VALUE lines directly instead of shell `source`: a DSN query
+    # string like "?sslmode=require&channel_binding=require" contains '&',
+    # which `source` treats as a shell background operator and chokes on.
     if [[ "${MONERA_DEPLOY_FAKE:-0}" != "1" || -n "${MONERA_DEPLOY_FAKE_MIGRATION_ENV_PROBE:-}" ]]; then
         if [[ -f "$ENV_FILE" ]]; then
-            set -a
-            # shellcheck disable=SC1090
-            . "$ENV_FILE"
-            set +a
+            local _line _key _val
+            while IFS= read -r _line || [[ -n "$_line" ]]; do
+                [[ -z "$_line" || "$_line" == \#* ]] && continue
+                _key="${_line%%=*}"
+                _val="${_line#*=}"
+                # Strip one matching surrounding quote pair (systemd semantics).
+                if [[ ${#_val} -ge 2 && "${_val:0:1}" == "${_val: -1}" && "${_val:0:1}" =~ [\"|\'] ]]; then
+                    _val="${_val:1:${#_val}-2}"
+                fi
+                [[ -n "$_key" ]] && export "$_key=$_val"
+            done < "$ENV_FILE"
         fi
     fi
     if [[ -n "${MONERA_DEPLOY_FAKE_MIGRATION_ENV_PROBE:-}" ]]; then

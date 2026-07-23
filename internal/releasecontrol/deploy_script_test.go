@@ -225,52 +225,77 @@ func TestDeployRemoteStandardMigrationFailureRollsBackMigrateBinary(t *testing.T
 // /opt/monera-digital/.env into the migrate process environment, so ADR 0003
 // variables (MIGRATION_DATABASE_URL, APP_ENV) reach monera-migrate. Without
 // this, the merged migrate binary reads neither variable and fails closed.
+// The table includes a realistic Neon DSN whose query string contains '&',
+// which a naive shell `source` would misparse.
 func TestDeployRemoteLoadsEnvFileBeforeMigration(t *testing.T) {
 	t.Parallel()
 	root := deployScriptRepositoryRoot(t)
 	script := filepath.Join(root, "scripts", "deploy-remote.sh")
 	sha := "0123456789abcdef0123456789abcdef01234567"
-	tmp := t.TempDir()
-	appDir := filepath.Join(tmp, "app")
-	deployDir := filepath.Join(tmp, "deploy")
-	tracePath := filepath.Join(tmp, "trace")
-	probePath := filepath.Join(tmp, "probe")
-	if err := os.MkdirAll(appDir, 0o755); err != nil {
-		t.Fatal(err)
+
+	cases := []struct {
+		name    string
+		envBody string
+		wantSub string // substring that must appear in the probe
+	}{
+		{
+			name: "plain_dsn",
+			envBody: "DATABASE_URL=postgresql://test@localhost/test\n" +
+				"MIGRATION_DATABASE_URL=postgresql://migrator:secret@ep-direct.neon.tech/neondb?sslmode=require\n" +
+				"APP_ENV=test\n",
+			wantSub: "ep-direct.neon.tech",
+		},
+		{
+			name: "dsn_with_ampersand_query",
+			envBody: "DATABASE_URL=postgresql://test@localhost/test\n" +
+				"MIGRATION_DATABASE_URL=postgresql://neondb_owner:secret@ep-dawn-surf.neon.tech/neondb?sslmode=require&channel_binding=require\n" +
+				"APP_ENV=test\n",
+			wantSub: "channel_binding=require",
+		},
 	}
-	if err := os.MkdirAll(deployDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// .env carries the ADR 0003 variables the migrate binary must see.
-	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte(
-		"DATABASE_URL=postgresql://test@localhost/test\n"+
-			"MIGRATION_DATABASE_URL=postgresql://migrator:secret@ep-direct.neon.tech/neondb?sslmode=require\n"+
-			"APP_ENV=test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(deployDir, "artifact-sha"), []byte(sha+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("bash", script, "--env", "test", "--release-mode", "standard", "--artifact-sha", sha, "--expected-migration-ceiling", "060")
-	cmd.Env = append(os.Environ(),
-		"MONERA_DEPLOY_FAKE=1",
-		"MONERA_DEPLOY_APP_DIR="+appDir,
-		"MONERA_DEPLOY_SRC="+deployDir,
-		"MONERA_DEPLOY_TRACE="+tracePath,
-		"MONERA_DEPLOY_FAKE_MIGRATION_ENV_PROBE="+probePath,
-	)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("deploy failed: %v\n%s", err, output)
-	}
-	probe, err := os.ReadFile(probePath)
-	if err != nil {
-		t.Fatalf("env probe not written; .env was not loaded before migrate: %v", err)
-	}
-	if !strings.Contains(string(probe), "ep-direct.neon.tech") {
-		t.Fatalf("MIGRATION_DATABASE_URL from .env did not reach migrate env; probe=%s", probe)
-	}
-	if !strings.Contains(string(probe), "APP_ENV=test") {
-		t.Fatalf("APP_ENV from .env did not reach migrate env; probe=%s", probe)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tmp := t.TempDir()
+			appDir := filepath.Join(tmp, "app")
+			deployDir := filepath.Join(tmp, "deploy")
+			tracePath := filepath.Join(tmp, "trace")
+			probePath := filepath.Join(tmp, "probe")
+			if err := os.MkdirAll(appDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(deployDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte(tc.envBody), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(deployDir, "artifact-sha"), []byte(sha+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", script, "--env", "test", "--release-mode", "standard", "--artifact-sha", sha, "--expected-migration-ceiling", "060")
+			cmd.Env = append(os.Environ(),
+				"MONERA_DEPLOY_FAKE=1",
+				"MONERA_DEPLOY_APP_DIR="+appDir,
+				"MONERA_DEPLOY_SRC="+deployDir,
+				"MONERA_DEPLOY_TRACE="+tracePath,
+				"MONERA_DEPLOY_FAKE_MIGRATION_ENV_PROBE="+probePath,
+			)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("deploy failed: %v\n%s", err, output)
+			}
+			probe, err := os.ReadFile(probePath)
+			if err != nil {
+				t.Fatalf("env probe not written; .env was not loaded before migrate: %v", err)
+			}
+			if !strings.Contains(string(probe), tc.wantSub) {
+				t.Fatalf("expected %q in migrate env probe; probe=%s", tc.wantSub, probe)
+			}
+			if !strings.Contains(string(probe), "APP_ENV=test") {
+				t.Fatalf("APP_ENV from .env did not reach migrate env; probe=%s", probe)
+			}
+		})
 	}
 }
 
