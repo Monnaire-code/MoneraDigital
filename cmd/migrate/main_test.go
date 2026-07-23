@@ -291,3 +291,43 @@ func TestMigrationFailureExitCodeIsDedicatedOnlyToIndeterminateControlledCommit(
 		t.Fatalf("ordinary failure exit = %d", got)
 	}
 }
+
+func TestMigrateCLI_RejectsPoolerMigrationURL(t *testing.T) {
+	t.Parallel()
+	cmd := exec.Command("go", "run", ".", "-dry-run")
+	cmd.Env = append(os.Environ(),
+		"APP_ENV=production",
+		"MIGRATION_DATABASE_URL=postgresql://u:secret-pass@ep-foo-pooler.neon.tech/db?sslmode=require",
+		"DATABASE_URL=",
+		"EXPECTED_MIGRATION_CEILING=",
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected pooler reject, got success:\n%s", out)
+	}
+	msg := string(out)
+	if !strings.Contains(strings.ToLower(msg), "pooler") {
+		t.Fatalf("expected pooler wording in output:\n%s", msg)
+	}
+	if strings.Contains(msg, "secret-pass") {
+		t.Fatalf("password leaked in CLI output:\n%s", msg)
+	}
+}
+
+func TestMigrateCLI_RequiresDedicatedURLOnProduction(t *testing.T) {
+	t.Parallel()
+	cmd := exec.Command("go", "run", ".", "-dry-run")
+	cmd.Env = append(os.Environ(),
+		"APP_ENV=production",
+		"MIGRATION_DATABASE_URL=",
+		"DATABASE_URL=postgresql://u:p@localhost:5432/db",
+		"EXPECTED_MIGRATION_CEILING=",
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected missing MIGRATION_DATABASE_URL failure:\n%s", out)
+	}
+	if !strings.Contains(string(out), "MIGRATION_DATABASE_URL") {
+		t.Fatalf("output should mention required var:\n%s", out)
+	}
+}

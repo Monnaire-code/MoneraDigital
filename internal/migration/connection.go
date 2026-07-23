@@ -64,6 +64,8 @@ func ResolveMigrationDSN(in ResolveMigrationDSNInput) (string, error) {
 
 func isLocalStyleAppEnv(appEnv string) bool {
 	switch appEnv {
+	// Empty APP_ENV is treated as local for developer convenience, but pooler
+	// hosts are still rejected for whichever DSN is selected.
 	case "", "local", "development", "dev", "test":
 		return true
 	default:

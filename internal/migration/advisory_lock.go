@@ -13,8 +13,8 @@ import (
 // AdvisoryLockTimeoutError means the migration session could not take the
 // advisory lock within the configured bound (ADR 0003).
 type AdvisoryLockTimeoutError struct {
-	Key        int64
-	Timeout    time.Duration
+	Key         int64
+	Timeout     time.Duration
 	Diagnostics string
 }
 
@@ -49,36 +49,58 @@ func (m *Migrator) acquireAdvisoryLock(ctx context.Context, conn queryRower) err
 	if poll <= 0 {
 		poll = 100 * time.Millisecond
 	}
-	nowFn := m.now
-	if nowFn == nil {
-		nowFn = time.Now
+	if poll > timeout {
+		poll = timeout
 	}
-	deadline := nowFn().Add(timeout)
 	key := MigrationAdvisoryLockKey
 
-	for {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("acquire migration lock: %w", err)
+	// Bound the whole acquire loop with a single context deadline so we do not
+	// stack time.After timers and so cancellation is consistent.
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	timer := time.NewTimer(0)
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
 		}
+	}
+	defer timer.Stop()
+
+	for {
+		if err := waitCtx.Err(); err != nil {
+			return m.advisoryLockTimeout(conn, key, timeout)
+		}
+
 		var acquired bool
-		err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&acquired)
+		err := conn.QueryRowContext(waitCtx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&acquired)
 		if err != nil {
+			if waitCtx.Err() != nil {
+				return m.advisoryLockTimeout(conn, key, timeout)
+			}
 			return fmt.Errorf("acquire migration lock: %w", err)
 		}
 		if acquired {
 			return nil
 		}
-		if !nowFn().Before(deadline) {
-			diag := m.collectAdvisoryLockHolderDiagnostics(ctx, conn, key)
-			log.Printf("migration advisory lock timeout: key=%d timeout=%s %s", key, timeout, diag)
-			return &AdvisoryLockTimeoutError{Key: key, Timeout: timeout, Diagnostics: diag}
-		}
+
+		timer.Reset(poll)
 		select {
-		case <-ctx.Done():
-			return fmt.Errorf("acquire migration lock: %w", ctx.Err())
-		case <-time.After(poll):
+		case <-waitCtx.Done():
+			return m.advisoryLockTimeout(conn, key, timeout)
+		case <-timer.C:
 		}
 	}
+}
+
+func (m *Migrator) advisoryLockTimeout(conn queryRower, key int64, timeout time.Duration) error {
+	// Short independent budget: waitCtx is already expired when we get here.
+	diagCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	diag := m.collectAdvisoryLockHolderDiagnostics(diagCtx, conn, key)
+	log.Printf("migration advisory lock timeout: key=%d timeout=%s %s", key, timeout, diag)
+	return &AdvisoryLockTimeoutError{Key: key, Timeout: timeout, Diagnostics: diag}
 }
 
 func (m *Migrator) releaseAdvisoryLock(ctx context.Context, conn queryRower) {
@@ -90,6 +112,8 @@ func (m *Migrator) releaseAdvisoryLock(ctx context.Context, conn queryRower) {
 // collectAdvisoryLockHolderDiagnostics is best-effort and never terminates backends.
 func (m *Migrator) collectAdvisoryLockHolderDiagnostics(ctx context.Context, conn queryRower, key int64) string {
 	classid, objid := AdvisoryLockClassAndObj(key)
+	// objsubid=2 is session-level advisory lock (PostgreSQL locktag convention).
+	// Scope to current_database() so other DBs on a shared instance are ignored.
 	rows, err := conn.QueryContext(ctx, `
 SELECT l.pid,
        COALESCE(a.state, ''),
@@ -100,7 +124,9 @@ SELECT l.pid,
  WHERE l.locktype = 'advisory'
    AND l.classid = $1
    AND l.objid = $2
+   AND l.objsubid = 2
    AND l.granted = true
+   AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
  LIMIT 5`, classid, objid)
 	if err != nil {
 		return "holder_diagnostics=unavailable"
