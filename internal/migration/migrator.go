@@ -31,8 +31,13 @@ func IsControlledCommitOutcomeIndeterminate(err error) bool {
 
 // Migrator manages database migrations
 type Migrator struct {
-	db         *sql.DB
-	migrations []Migration
+	db          *sql.DB
+	migrations  []Migration
+	lockTimeout time.Duration
+	// now is injectable for tests; defaults to time.Now.
+	now func() time.Time
+	// lockPollInterval is the sleep between try-lock attempts (tests may shrink).
+	lockPollInterval time.Duration
 }
 
 // ControlledMigration marks a migration that may only run under an exact
@@ -52,9 +57,21 @@ type migrationSession interface {
 // NewMigrator creates a new migrator instance
 func NewMigrator(db *sql.DB) *Migrator {
 	return &Migrator{
-		db:         db,
-		migrations: []Migration{},
+		db:               db,
+		migrations:       []Migration{},
+		lockTimeout:      DefaultAdvisoryLockTimeout,
+		now:              time.Now,
+		lockPollInterval: 100 * time.Millisecond,
 	}
+}
+
+// SetAdvisoryLockTimeout overrides the bound for session advisory lock acquisition.
+// Non-positive values are ignored (keep default).
+func (m *Migrator) SetAdvisoryLockTimeout(d time.Duration) {
+	if m == nil || d <= 0 {
+		return
+	}
+	m.lockTimeout = d
 }
 
 // Register registers a migration
@@ -195,17 +212,10 @@ func (m *Migrator) MigrateWithExpectedCeiling(expectedCeiling string) error {
 		return err
 	}
 
-	// 8675309 is an arbitrary 32-bit key. The memorable value makes it
-	// easy to look up in pg_locks if a stuck run is suspected.
-	const advisoryLockKey int64 = 8675309
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, advisoryLockKey); err != nil {
-		return fmt.Errorf("acquire migration lock: %w", err)
+	if err := m.acquireAdvisoryLock(ctx, conn); err != nil {
+		return err
 	}
-	defer func() {
-		if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, advisoryLockKey); err != nil {
-			log.Printf("warning: failed to release migration lock: %v", err)
-		}
-	}()
+	defer m.releaseAdvisoryLock(ctx, conn)
 
 	applied, err := getAppliedMigrations(ctx, conn)
 	if err != nil {
@@ -297,15 +307,10 @@ func (m *Migrator) Rollback() error {
 		return err
 	}
 
-	const advisoryLockKey int64 = 8675309
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, advisoryLockKey); err != nil {
-		return fmt.Errorf("acquire migration lock: %w", err)
+	if err := m.acquireAdvisoryLock(ctx, conn); err != nil {
+		return err
 	}
-	defer func() {
-		if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, advisoryLockKey); err != nil {
-			log.Printf("warning: failed to release migration lock: %v", err)
-		}
-	}()
+	defer m.releaseAdvisoryLock(ctx, conn)
 
 	applied, err := getAppliedMigrations(ctx, conn)
 	if err != nil {

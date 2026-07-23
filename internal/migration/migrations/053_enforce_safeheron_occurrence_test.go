@@ -97,7 +97,7 @@ func TestMigration053RunnerCommitsDDLAndProvenanceAtomically(t *testing.T) {
 	migrationB := &EnforceSafeheronOccurrence{}
 	migrator.Register(migrationB)
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS public.migrations").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(`SELECT pg_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, version, name, executed_at FROM public.migrations ORDER BY executed_at ASC`)).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "version", "name", "executed_at"}).AddRow(1, "052", "A", time.Now()),
 	)

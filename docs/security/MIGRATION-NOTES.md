@@ -83,16 +83,48 @@ re-apply a similar reset, the operator must:
 3. Run by hand via `psql` with rotated credentials.
 4. Never add it to the `registerMigrations` list.
 
-### 2.5 Advisory lock to prevent concurrent runs
+### 2.5 Migration connection URL (direct vs pooler)
 
-`internal/migration/migrator.go::Migrate()` and `Rollback()` now
-acquire a session-level `pg_advisory_lock(8675309)` before any DDL or
+**Business** traffic may use a Neon **pooled** `DATABASE_URL`.
+
+**Migrations** must use a **direct / unpooled** connection so session-level
+advisory locks attach to a real backend session (see ADR 0003 / issue #35).
+
+Resolution order for the migrate binary:
+
+1. If `MIGRATION_DATABASE_URL` is set, use it.
+2. Otherwise fall back to `DATABASE_URL` (intended for local direct URLs only).
+3. **Stage / production** must set `MIGRATION_DATABASE_URL` to a direct URL.
+4. Reject any migration URL whose hostname contains `-pooler` (case-insensitive).
+
+```bash
+# Stage/production (illustrative)
+MIGRATION_DATABASE_URL="postgresql://...@ep-xxx....neon.tech/neondb?sslmode=require" \
+EXPECTED_MIGRATION_CEILING=060 \
+./monera-migrate -exact-version 060
+
+# Do NOT point migrations at ep-xxx-pooler....neon.tech
+```
+
+### 2.6 Advisory lock to prevent concurrent runs
+
+`internal/migration/migrator.go::Migrate()` and `Rollback()` acquire a
+session-level advisory lock (key `8675309`) before any DDL or
 `migrations` row insert, and release it via `defer`. Two concurrent
-invocations (e.g., a deploy step racing a local ops run) now serialise
-cleanly instead of interleaving DDL with row inserts.
+invocations (e.g., a deploy step racing a local ops run) serialise
+instead of interleaving DDL with row inserts.
 
-The lock is automatically released when the process exits. To look up
-a stuck run: `SELECT * FROM pg_locks WHERE locktype = 'advisory';`
+**Bounded wait (ADR 0003):** lock acquisition must not block forever.
+Default timeout is **30s** (`MIGRATION_ADVISORY_LOCK_TIMEOUT` may override).
+On timeout the migrate process fails closed. Logs may include lock key and
+read-only holder diagnostics (pid / state / age / application_name) without
+credentials. Operators—not the migrator—decide whether to terminate a holder.
+
+Manual lookup if needed:
+
+```sql
+SELECT * FROM pg_locks WHERE locktype = 'advisory';
+```
 
 ## 3. How to verify production state
 

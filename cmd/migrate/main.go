@@ -3,15 +3,16 @@
 // MoneraDigital Go migration runner. Replaces the previous dead state where
 // the binary was excluded via //go:build ignore. Run from repo root:
 //
-//   DATABASE_URL=... go run ./cmd/migrate                  # apply all pending
-//   DATABASE_URL=... go run ./cmd/migrate -dry-run        # status only
-//   DATABASE_URL=... go run ./cmd/migrate -rollback       # roll back last
-//   EXPECTED_MIGRATION_CEILING=050 DATABASE_URL=... \
-//     go run ./cmd/migrate -exact-version 050             # apply only 050
+//   MIGRATION_DATABASE_URL=... go run ./cmd/migrate       # preferred on stage/prod (direct)
+//   DATABASE_URL=... go run ./cmd/migrate                 # local fallback if direct
+//   ... go run ./cmd/migrate -dry-run
+//   ... go run ./cmd/migrate -rollback
+//   EXPECTED_MIGRATION_CEILING=050 MIGRATION_DATABASE_URL=... \
+//     go run ./cmd/migrate -exact-version 050
 //
-// In production the binary is intended to be invoked as a one-shot step
-// in the deployment pipeline, not at server boot. See
-// docs/security/MIGRATION-NOTES.md for the operational model.
+// Stage/production require MIGRATION_DATABASE_URL (direct/unpooled). Pooler
+// hosts are rejected. Advisory lock wait is bounded (default 30s).
+// See docs/security/MIGRATION-NOTES.md and ADR 0003.
 
 package main
 
@@ -71,14 +72,22 @@ func main() {
 		log.Fatal("Invalid migration selection:", err)
 	}
 
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		log.Fatal("DATABASE_URL environment variable is required")
+	dbURL, err := migration.ResolveMigrationDSN(migration.ResolveMigrationDSNInput{
+		AppEnv:               os.Getenv("APP_ENV"),
+		MigrationDatabaseURL: os.Getenv("MIGRATION_DATABASE_URL"),
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+	})
+	if err != nil {
+		log.Fatal("Migration database URL:", err)
+	}
+	lockTimeout, err := migration.ParseAdvisoryLockTimeout(os.Getenv("MIGRATION_ADVISORY_LOCK_TIMEOUT"))
+	if err != nil {
+		log.Fatal("Migration lock timeout:", err)
 	}
 
 	provenanceURL, err := buildinfo.DatabaseURL(dbURL, version, os.Getenv("INVOCATION_ID"))
 	if err != nil {
-		log.Fatal("Invalid DATABASE_URL:", err)
+		log.Fatal("Invalid migration database URL:", err)
 	}
 	db, err := sql.Open("pgx", provenanceURL)
 	if err != nil {
@@ -87,6 +96,7 @@ func main() {
 	defer db.Close()
 
 	m := migration.NewMigrator(db)
+	m.SetAdvisoryLockTimeout(lockTimeout)
 	// Register in version order. Order matters: each migration is
 	// recorded in the `migrations` tracking table with its version, and
 	// the runner refuses to re-apply an already-recorded version.

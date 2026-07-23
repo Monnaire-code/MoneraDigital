@@ -38,7 +38,7 @@ func TestPinnedRollbackCoversEverySessionAndMutationBoundary(t *testing.T) {
 		}},
 		{name: "lock", want: "acquire migration lock", wantErr: true, setup: func(_ *Migrator, mock sqlmock.Sqlmock, _ *int) {
 			mock.ExpectExec("CREATE TABLE IF NOT EXISTS public.migrations").WillReturnResult(sqlmock.NewResult(0, 0))
-			mock.ExpectExec(regexp.QuoteMeta(`SELECT pg_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnError(sql.ErrConnDone)
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnError(sql.ErrConnDone)
 		}},
 		{name: "applied", want: "query migrations", wantErr: true, setup: func(_ *Migrator, mock sqlmock.Sqlmock, _ *int) {
 			expectInitAndLock(mock)

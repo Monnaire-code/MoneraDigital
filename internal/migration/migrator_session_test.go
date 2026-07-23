@@ -280,15 +280,31 @@ func (conn *pinnedSessionConn) ExecContext(_ context.Context, query string, argu
 	return driver.RowsAffected(1), nil
 }
 
-func (conn *pinnedSessionConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+func (conn *pinnedSessionConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	conn.state.mu.Lock()
 	defer conn.state.mu.Unlock()
-	rows := [][]driver.Value{{int64(1), "052", "A", time.Unix(1, 0)}}
-	if conn.state.applied053 {
-		rows = append(rows, []driver.Value{int64(2), "053", "B", time.Unix(2, 0)})
+	switch {
+	case strings.Contains(query, "pg_try_advisory_lock"):
+		if conn.state.locked {
+			// Signal waiters that another session is blocked on the lock (mirrors
+			// the old blocking pg_advisory_lock path used by interleaving tests).
+			conn.state.waitOnce.Do(func() { close(conn.state.waitObserved) })
+			return &pinnedSessionRows{rows: [][]driver.Value{{false}}, cols: []string{"pg_try_advisory_lock"}}, nil
+		}
+		conn.state.locked = true
+		conn.state.events = append(conn.state.events, pinnedSessionEvent{session: conn.id, action: "lock"})
+		return &pinnedSessionRows{rows: [][]driver.Value{{true}}, cols: []string{"pg_try_advisory_lock"}}, nil
+	case strings.Contains(query, "pg_locks"):
+		// No holder metadata in the pinned fake — diagnostics path uses empty holders.
+		return &pinnedSessionRows{rows: nil, cols: []string{"pid", "state", "application_name", "age"}}, nil
+	default:
+		rows := [][]driver.Value{{int64(1), "052", "A", time.Unix(1, 0)}}
+		if conn.state.applied053 {
+			rows = append(rows, []driver.Value{int64(2), "053", "B", time.Unix(2, 0)})
+		}
+		conn.state.events = append(conn.state.events, pinnedSessionEvent{session: conn.id, action: "query-applied"})
+		return &pinnedSessionRows{rows: rows, cols: []string{"id", "version", "name", "executed_at"}}, nil
 	}
-	conn.state.events = append(conn.state.events, pinnedSessionEvent{session: conn.id, action: "query-applied"})
-	return &pinnedSessionRows{rows: rows}, nil
 }
 
 type pinnedSessionTx struct{ conn *pinnedSessionConn }
@@ -315,11 +331,17 @@ func (tx *pinnedSessionTx) Rollback() error {
 
 type pinnedSessionRows struct {
 	rows  [][]driver.Value
+	cols  []string
 	index int
 }
 
-func (*pinnedSessionRows) Columns() []string { return []string{"id", "version", "name", "executed_at"} }
-func (*pinnedSessionRows) Close() error      { return nil }
+func (rows *pinnedSessionRows) Columns() []string {
+	if len(rows.cols) > 0 {
+		return rows.cols
+	}
+	return []string{"id", "version", "name", "executed_at"}
+}
+func (*pinnedSessionRows) Close() error { return nil }
 func (rows *pinnedSessionRows) Next(destination []driver.Value) error {
 	if rows.index == len(rows.rows) {
 		return io.EOF

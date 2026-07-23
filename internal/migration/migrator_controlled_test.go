@@ -208,7 +208,7 @@ func TestPinnedMigrationRunnerFailsClosedAtEverySessionAndTransactionBoundary(t 
 		}},
 		{name: "lock", want: "acquire migration lock", setup: func(_ *Migrator, mock sqlmock.Sqlmock, _ *int) {
 			mock.ExpectExec("CREATE TABLE IF NOT EXISTS public.migrations").WillReturnResult(sqlmock.NewResult(0, 0))
-			mock.ExpectExec(regexp.QuoteMeta(`SELECT pg_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnError(sql.ErrConnDone)
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnError(sql.ErrConnDone)
 		}},
 		{name: "applied", want: "query migrations", setup: func(_ *Migrator, mock sqlmock.Sqlmock, _ *int) {
 			expectInitAndLock(mock)
@@ -364,7 +364,7 @@ func TestGetAppliedMigrationsRejectsScanError(t *testing.T) {
 
 func expectInitAndLock(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS public.migrations").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(`SELECT pg_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
 }
 
 func expectUnlock(mock sqlmock.Sqlmock, failure error) {
@@ -378,7 +378,7 @@ func expectUnlock(mock sqlmock.Sqlmock, failure error) {
 
 func expectMigratorStart(mock sqlmock.Sqlmock, applied []MigrationRecord) {
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS public.migrations").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(`SELECT pg_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1)`)).WithArgs(int64(8675309)).WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
 	rows := sqlmock.NewRows([]string{"id", "version", "name", "executed_at"})
 	for _, record := range applied {
 		rows.AddRow(record.ID, record.Version, record.Name, record.ExecutedAt)
