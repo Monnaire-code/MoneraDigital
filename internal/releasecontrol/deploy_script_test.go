@@ -241,14 +241,14 @@ func TestDeployRemoteLoadsEnvFileBeforeMigration(t *testing.T) {
 		{
 			name: "plain_dsn",
 			envBody: "DATABASE_URL=postgresql://test@localhost/test\n" +
-				"MIGRATION_DATABASE_URL=postgresql://migrator:secret@ep-direct.neon.tech/neondb?sslmode=require\n" +
+				"MIGRATION_DATABASE_URL=postgresql://migrator:secret@ep-direct.example.com/neondb?sslmode=require\n" +
 				"APP_ENV=test\n",
-			wantSub: "ep-direct.neon.tech",
+			wantSub: "ep-direct.example.com",
 		},
 		{
 			name: "dsn_with_ampersand_query",
 			envBody: "DATABASE_URL=postgresql://test@localhost/test\n" +
-				"MIGRATION_DATABASE_URL=postgresql://neondb_owner:secret@ep-dawn-surf.neon.tech/neondb?sslmode=require&channel_binding=require\n" +
+				"MIGRATION_DATABASE_URL=postgresql://neondb_owner:secret@ep-dawn-surf.example.com/neondb?sslmode=require&channel_binding=require\n" +
 				"APP_ENV=test\n",
 			wantSub: "channel_binding=require",
 		},

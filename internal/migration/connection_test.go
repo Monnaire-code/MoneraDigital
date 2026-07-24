@@ -9,13 +9,13 @@ import (
 func TestResolveMigrationDSN_PreferMigrationURL(t *testing.T) {
 	got, err := ResolveMigrationDSN(ResolveMigrationDSNInput{
 		AppEnv:               "local",
-		MigrationDatabaseURL: "postgresql://u:p@ep-direct.neon.tech/db?sslmode=require",
-		DatabaseURL:          "postgresql://u:p@ep-other-pooler.neon.tech/db?sslmode=require",
+		MigrationDatabaseURL: "postgresql://u:p@ep-direct.example.com/db?sslmode=require",
+		DatabaseURL:          "postgresql://u:p@ep-other-pooler.example.com/db?sslmode=require",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, "ep-direct.neon.tech") {
+	if !strings.Contains(got, "ep-direct.example.com") {
 		t.Fatalf("expected dedicated URL, got %q", got)
 	}
 }
@@ -23,7 +23,7 @@ func TestResolveMigrationDSN_PreferMigrationURL(t *testing.T) {
 func TestResolveMigrationDSN_StageRequiresDedicated(t *testing.T) {
 	_, err := ResolveMigrationDSN(ResolveMigrationDSNInput{
 		AppEnv:      "stage",
-		DatabaseURL: "postgresql://u:secret@ep-direct.neon.tech/db",
+		DatabaseURL: "postgresql://u:secret@ep-direct.example.com/db",
 	})
 	if err == nil {
 		t.Fatal("expected fail closed without MIGRATION_DATABASE_URL on stage")
@@ -74,15 +74,15 @@ func TestResolveMigrationDSN_RejectPoolerEverywhere(t *testing.T) {
 	cases := []ResolveMigrationDSNInput{
 		{
 			AppEnv:               "local",
-			MigrationDatabaseURL: "postgresql://u:hunter2@ep-foo-pooler.c-2.us-east-1.aws.neon.tech/db",
+			MigrationDatabaseURL: "postgresql://u:hunter2@ep-foo-pooler.c-2.us-east-1.aws.example.com/db",
 		},
 		{
 			AppEnv:      "development",
-			DatabaseURL: "postgresql://u:hunter2@EP-FOO-POOLER.example/db",
+			DatabaseURL: "postgresql://u:hunter2@EP-FOO-POOLER.test.local/db",
 		},
 		{
 			AppEnv:               "production",
-			MigrationDatabaseURL: "postgresql://u:hunter2@ep-x-pooler.neon.tech/db",
+			MigrationDatabaseURL: "postgresql://u:hunter2@ep-x-pooler.example.com/db",
 		},
 	}
 	for _, in := range cases {
@@ -102,12 +102,12 @@ func TestResolveMigrationDSN_RejectPoolerEverywhere(t *testing.T) {
 func TestResolveMigrationDSN_AcceptDirectNeon(t *testing.T) {
 	got, err := ResolveMigrationDSN(ResolveMigrationDSNInput{
 		AppEnv:               "production",
-		MigrationDatabaseURL: "postgresql://u:p@ep-foo.us-east-1.aws.neon.tech/neondb?sslmode=require",
+		MigrationDatabaseURL: "postgresql://u:p@ep-foo.us-east-1.aws.example.com/neondb?sslmode=require",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, "ep-foo.us-east-1.aws.neon.tech") {
+	if !strings.Contains(got, "ep-foo.us-east-1.aws.example.com") {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -120,13 +120,13 @@ func TestResolveMigrationDSN_MissingBothLocal(t *testing.T) {
 }
 
 func TestIsPoolerHostname(t *testing.T) {
-	if !IsPoolerHostname("ep-x-pooler.neon.tech") {
+	if !IsPoolerHostname("ep-x-pooler.example.com") {
 		t.Fatal("expected pooler")
 	}
-	if !IsPoolerHostname("EP-X-POOLER.neon.tech:5432") {
+	if !IsPoolerHostname("EP-X-POOLER.example.com:5432") {
 		t.Fatal("expected pooler with port")
 	}
-	if IsPoolerHostname("ep-x.neon.tech") {
+	if IsPoolerHostname("ep-x.example.com") {
 		t.Fatal("direct should not match")
 	}
 	if IsPoolerHostname("localhost") {
