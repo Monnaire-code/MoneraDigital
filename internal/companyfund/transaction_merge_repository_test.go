@@ -204,7 +204,7 @@ func TestUpsertCompanyFundTransaction_QuarantinesStoredChannelOrAlgorithmMismatc
 		name              string
 		storedChannel     string
 		storedAlgorithm   string
-		incomingChannel   Channel
+		incomingChannel   TransactionSource
 		incomingAlgorithm string
 	}{
 		{"cross channel", "AIRWALLEX", MovementIdentityAlgorithmVersion, ChannelSafeheron, MovementIdentityAlgorithmVersion},

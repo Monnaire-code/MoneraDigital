@@ -314,7 +314,7 @@ func scanFinanceTransactionDetail(rows *sql.Rows) (FinanceTransactionDetail, err
 	); err != nil {
 		return FinanceTransactionDetail{}, fmt.Errorf("scan company-fund finance transaction detail: %w", err)
 	}
-	detail.Channel = Channel(channel)
+	detail.Channel = TransactionSource(channel)
 	detail.Direction = Direction(direction)
 	detail.TransferMode = TransferMode(transferMode)
 	detail.MovementKind = MovementKind(movementKind)

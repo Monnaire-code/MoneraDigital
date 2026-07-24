@@ -13,7 +13,7 @@ func TestCanonicalizeFinanceTransactionFilter_PublicContractAndValidation(t *tes
 	canonical, err := CanonicalizeFinanceTransactionFilter(FinanceTransactionFilter{
 		DateFrom:                 &from,
 		DateTo:                   &to,
-		Channels:                 []Channel{ChannelSafeheron, ChannelAirwallex, ChannelSafeheron},
+		Channels:                 []TransactionSource{ChannelSafeheron, ChannelAirwallex, ChannelSafeheron},
 		AccountIDs:               []int64{9, 3, 9},
 		Directions:               []Direction{DirectionOutflow, DirectionInflow, DirectionOutflow},
 		Currencies:               []string{" usdt ", "USD", "USDT"},
@@ -41,7 +41,7 @@ func TestCanonicalizeFinanceTransactionFilter_PublicContractAndValidation(t *tes
 		filter FinanceTransactionFilter
 	}{
 		{"non-increasing dates", FinanceTransactionFilter{DateFrom: &from, DateTo: &from}},
-		{"unknown channel", FinanceTransactionFilter{Channels: []Channel{"UNKNOWN"}}},
+		{"unknown channel", FinanceTransactionFilter{Channels: []TransactionSource{"UNKNOWN"}}},
 		{"unknown direction", FinanceTransactionFilter{Directions: []Direction{"UNKNOWN"}}},
 		{"empty currency", FinanceTransactionFilter{Currencies: []string{" "}}},
 		{"invalid utf8 currency", FinanceTransactionFilter{Currencies: []string{invalidUTF8}}},
@@ -70,7 +70,7 @@ func TestCanonicalizeFinanceTransactionDetailRequest_PaginationAndNestedFilter(t
 		{Limit: -1},
 		{Limit: maxFinanceDetailLimit + 1},
 		{Limit: 1, Offset: -1},
-		{Filter: FinanceTransactionFilter{Channels: []Channel{"INVALID"}}},
+		{Filter: FinanceTransactionFilter{Channels: []TransactionSource{"INVALID"}}},
 	} {
 		if _, err := CanonicalizeFinanceTransactionDetailRequest(request); err == nil {
 			t.Fatalf("CanonicalizeFinanceTransactionDetailRequest(%#v) = nil, want validation error", request)

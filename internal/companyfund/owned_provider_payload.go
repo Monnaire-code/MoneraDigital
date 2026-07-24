@@ -43,7 +43,7 @@ type providerEventWriter interface {
 // captured by a company-owned API integration. It cannot reference Safeheron's
 // deposit-owned raw webhook record.
 type OwnedProviderPayloadInput struct {
-	Channel         Channel
+	Channel         TransactionSource
 	ProviderEventID string
 	EventType       string
 	// ProviderEventVersion carries the provider-side API or Webhook contract

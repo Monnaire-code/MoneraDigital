@@ -93,7 +93,7 @@ const (
 // Webhooks reference their already-verified raw event by INTEGER ID; provider
 // API/Airwallex payloads use bounded encrypted bytes owned by this feature.
 type ProviderEventInput struct {
-	Channel                          Channel
+	Channel                          TransactionSource
 	ProviderEventID                  string
 	EventType                        string
 	ProviderEventVersion             string
@@ -119,7 +119,7 @@ type ProviderEventInsertResult struct {
 
 type ProviderEventLease struct {
 	ID                               int64
-	Channel                          Channel
+	Channel                          TransactionSource
 	ProviderEventID                  string
 	EventType                        string
 	ProviderEventVersion             string
@@ -672,7 +672,7 @@ func scanProviderEventLease(row *sql.Row) (*ProviderEventLease, error) {
 	); err != nil {
 		return nil, err
 	}
-	lease.Channel = Channel(channel)
+	lease.Channel = TransactionSource(channel)
 	lease.SourceKind = ProviderEventSource(sourceKind)
 	if rawEventID.Valid {
 		value := int(rawEventID.Int64)
@@ -845,7 +845,7 @@ const (
 // so webhook/reconciliation processing cannot overwrite them.
 type TransactionUpsertInput struct {
 	MovementKey                        string
-	Channel                            Channel
+	Channel                            TransactionSource
 	IdentityAlgorithmVersion           string
 	ProviderOccurrenceKey              string
 	ProviderOccurrenceAlgorithmVersion string
@@ -1246,7 +1246,7 @@ func alignSafeheronIncomingRecognitionSnapshot(
 type persistedCompanyFundTransaction struct {
 	ID                                 int64
 	MovementKey                        string
-	Channel                            Channel
+	Channel                            TransactionSource
 	IdentityAlgorithmVersion           string
 	ProviderOccurrenceKey              string
 	ProviderOccurrenceAlgorithmVersion string
@@ -1345,7 +1345,7 @@ func loadCompanyFundTransactionForUpdate(ctx context.Context, tx *sql.Tx, moveme
 		}
 		return persistedCompanyFundTransaction{}, false, fmt.Errorf("lock company-fund transaction: %w", err)
 	}
-	persisted.Channel = Channel(channel)
+	persisted.Channel = TransactionSource(channel)
 	persisted.Provenance.RawSnapshotDigest = rawSnapshotDigest
 	if providerFactID.Valid {
 		value := providerFactID.Int64
@@ -1480,7 +1480,7 @@ func scanSafeheronPersistedCompanyFundTransaction(scanner companyFundTransaction
 	); err != nil {
 		return persistedCompanyFundTransaction{}, fmt.Errorf("scan locked Safeheron company-fund transaction: %w", err)
 	}
-	persisted.Channel = Channel(channel)
+	persisted.Channel = TransactionSource(channel)
 	persisted.Provenance.RawSnapshotDigest = rawSnapshotDigest
 	if providerFactID.Valid {
 		value := providerFactID.Int64
@@ -1728,7 +1728,7 @@ func (input TransactionUpsertInput) providerFields() ProviderOwnedFields {
 	return provider
 }
 
-func effectiveTransactionStatusRank(channel Channel, existingRank, incomingRank int, status *LifecycleStatus) int {
+func effectiveTransactionStatusRank(channel TransactionSource, existingRank, incomingRank int, status *LifecycleStatus) int {
 	rank := existingRank
 	if incomingRank > rank {
 		rank = incomingRank

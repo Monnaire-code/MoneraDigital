@@ -397,7 +397,7 @@ func scanCompanyFundSyncRun(row *sql.Row) (CompanyFundSyncRun, error) {
 	if err != nil {
 		return CompanyFundSyncRun{}, fmt.Errorf("scan company-fund sync-run checkpoint: %w", err)
 	}
-	run.Channel = Channel(channel)
+	run.Channel = TransactionSource(channel)
 	run.Status = CompanyFundSyncRunStatus(status)
 	run.Checkpoint = checkpoint
 	if leaseOwner.Valid {

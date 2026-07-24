@@ -44,7 +44,7 @@ func TestAirwallexLifecycle_UsesExplicitTransitions(t *testing.T) {
 	if _, err := LifecyclePolicyFor(ChannelSafeheron); err != nil {
 		t.Fatalf("LifecyclePolicyFor(SAFEHERON): %v", err)
 	}
-	if _, err := LifecyclePolicyFor(Channel("OTHER")); err == nil {
+	if _, err := LifecyclePolicyFor(TransactionSource("OTHER")); err == nil {
 		t.Fatal("unknown channel must not select a lifecycle policy")
 	}
 }

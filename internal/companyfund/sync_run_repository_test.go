@@ -166,7 +166,7 @@ func TestCompanyFundSyncRunValidationAndSQLContracts(t *testing.T) {
 	if err := (CompanyFundSyncRunProgressUpdate{CandidatesSeenDelta: -1}).validate(); err == nil {
 		t.Fatal("negative progress delta must be rejected")
 	}
-	if _, err := NewDBRepository(nil).ClaimNextCompanyFundSyncRun(context.Background(), CompanyFundSyncRunClaimScope{Channel: Channel("OTHER"), SyncKind: "DAILY_RECONCILIATION"}, "sync-worker-a", time.Minute); err == nil {
+	if _, err := NewDBRepository(nil).ClaimNextCompanyFundSyncRun(context.Background(), CompanyFundSyncRunClaimScope{Channel: TransactionSource("OTHER"), SyncKind: "DAILY_RECONCILIATION"}, "sync-worker-a", time.Minute); err == nil {
 		t.Fatal("invalid sync-run claim scope must be rejected before database use")
 	}
 	for _, required := range []string{

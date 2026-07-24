@@ -53,7 +53,7 @@ RETURNING attempt_count, lease_expires_at`
 // queue claim to substitute another account/window for the requested work.
 type CompanyFundSyncRunExactClaimInput struct {
 	RunID       int64
-	Channel     Channel
+	Channel     TransactionSource
 	SyncKind    string
 	WindowKey   string
 	WindowStart time.Time

@@ -190,7 +190,7 @@ func (schedule *ReconciliationDailySchedule) NextTriggerAt(now time.Time) (time.
 // input accepted by CompanyFundSyncRunStore. Safeheron and Airwallex callers
 // use distinct SyncKind values, while each channel/day remains independently
 // idempotent under the database unique key.
-func (schedule *ReconciliationDailySchedule) SyncRunInputs(now time.Time, channel Channel, syncKind string) ([]CompanyFundSyncRunInput, error) {
+func (schedule *ReconciliationDailySchedule) SyncRunInputs(now time.Time, channel TransactionSource, syncKind string) ([]CompanyFundSyncRunInput, error) {
 	if !channel.Valid() {
 		return nil, fmt.Errorf("unsupported reconciliation channel %q", channel)
 	}

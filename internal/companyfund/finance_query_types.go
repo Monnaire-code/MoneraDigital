@@ -23,16 +23,16 @@ const (
 // when the finance-owned override is false or, absent an override, the durable
 // automatic exclusion snapshot is true.
 type FinanceTransactionFilter struct {
-	DateFrom                 *time.Time  `json:"dateFrom,omitempty"`
-	DateTo                   *time.Time  `json:"dateTo,omitempty"`
-	Channels                 []Channel   `json:"channels,omitempty"`
-	AccountIDs               []int64     `json:"accountIds,omitempty"`
-	Directions               []Direction `json:"directions,omitempty"`
-	Currencies               []string    `json:"currencies,omitempty"`
-	FinanceCategoryLevel1IDs []int64     `json:"financeCategoryLevel1Ids,omitempty"`
-	FinanceCategoryLevel2IDs []int64     `json:"financeCategoryLevel2Ids,omitempty"`
-	OperatingIncomeExpense   *bool       `json:"operatingIncomeExpense,omitempty"`
-	IncludeSummaryExcluded   bool        `json:"includeSummaryExcluded"`
+	DateFrom                 *time.Time          `json:"dateFrom,omitempty"`
+	DateTo                   *time.Time          `json:"dateTo,omitempty"`
+	Channels                 []TransactionSource `json:"channels,omitempty"`
+	AccountIDs               []int64             `json:"accountIds,omitempty"`
+	Directions               []Direction         `json:"directions,omitempty"`
+	Currencies               []string            `json:"currencies,omitempty"`
+	FinanceCategoryLevel1IDs []int64             `json:"financeCategoryLevel1Ids,omitempty"`
+	FinanceCategoryLevel2IDs []int64             `json:"financeCategoryLevel2Ids,omitempty"`
+	OperatingIncomeExpense   *bool               `json:"operatingIncomeExpense,omitempty"`
+	IncludeSummaryExcluded   bool                `json:"includeSummaryExcluded"`
 }
 
 // CanonicalizeFinanceTransactionFilter validates and normalizes the shared
@@ -55,8 +55,8 @@ func (filter FinanceTransactionFilter) canonical() (FinanceTransactionFilter, er
 		return FinanceTransactionFilter{}, fmt.Errorf("finance filter date end must be after date start")
 	}
 
-	channels := make([]Channel, 0, len(filter.Channels))
-	seenChannels := make(map[Channel]struct{}, len(filter.Channels))
+	channels := make([]TransactionSource, 0, len(filter.Channels))
+	seenChannels := make(map[TransactionSource]struct{}, len(filter.Channels))
 	for _, channel := range filter.Channels {
 		if !channel.Valid() {
 			return FinanceTransactionFilter{}, fmt.Errorf("unsupported finance filter channel %q", channel)
@@ -185,14 +185,14 @@ func (request FinanceTransactionDetailRequest) canonical() (FinanceTransactionDe
 // values are strings so no float conversion can alter the stored amount, USD
 // value, or fee value.
 type FinanceTransactionDetail struct {
-	ID              int64     `json:"id"`
-	Date            time.Time `json:"date"`
-	Channel         Channel   `json:"channel"`
-	CompanyEntity   string    `json:"companyEntity"`
-	FundAccountName string    `json:"fundAccountName"`
-	SubAccountName  string    `json:"subAccountName"`
-	AccountType     string    `json:"accountType"`
-	Direction       Direction `json:"direction"`
+	ID              int64             `json:"id"`
+	Date            time.Time         `json:"date"`
+	Channel         TransactionSource `json:"channel"`
+	CompanyEntity   string            `json:"companyEntity"`
+	FundAccountName string            `json:"fundAccountName"`
+	SubAccountName  string            `json:"subAccountName"`
+	AccountType     string            `json:"accountType"`
+	Direction       Direction         `json:"direction"`
 	// TransferMode distinguishes provider-normal single transfers from batches.
 	// DirectionInternalTransfer remains the authoritative internal-transfer
 	// marker, so the finance API does not invent a redundant stored type.

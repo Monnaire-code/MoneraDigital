@@ -78,7 +78,7 @@ type SafeheronTransactionHistoryReconcileInput struct {
 // generic sync-run schema without the reconciler assuming nullable webhook
 // account fields exist.
 type SafeheronTransactionHistorySyncRunInput struct {
-	Channel              Channel
+	Channel              TransactionSource
 	SyncKind             string
 	WindowKey            string
 	CompanyFundAccountID int64

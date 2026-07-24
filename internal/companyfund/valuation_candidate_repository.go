@@ -229,7 +229,7 @@ func scanCompanyFundTransactionValuationCandidate(scanner companyFundValuationCa
 		return CompanyFundTransactionValuationCandidate{}, fmt.Errorf("parse company-fund valuation candidate amount: %w", err)
 	}
 	candidate.Amount = amount
-	candidate.Channel = Channel(channel)
+	candidate.Channel = TransactionSource(channel)
 	candidate.MovementKind = MovementKind(movementKind)
 	candidate.Direction = Direction(direction)
 	candidate.Asset.Currency = candidate.Currency

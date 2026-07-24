@@ -8,7 +8,7 @@ import (
 )
 
 func TestDomainEnumAndIdentityValidation(t *testing.T) {
-	if Channel("UNSUPPORTED").Valid() || TransferMode("STREAM").Valid() || MovementKind("HOLD").Valid() || Direction("NEUTRAL").Valid() || ConversionLeg("MIDDLE").Valid() || ConversionGroupState("PENDING").Valid() {
+	if TransactionSource("UNSUPPORTED").Valid() || TransferMode("STREAM").Valid() || MovementKind("HOLD").Valid() || Direction("NEUTRAL").Valid() || ConversionLeg("MIDDLE").Valid() || ConversionGroupState("PENDING").Valid() {
 		t.Fatal("unsupported enum values must be rejected")
 	}
 
@@ -20,7 +20,7 @@ func TestDomainEnumAndIdentityValidation(t *testing.T) {
 		Amount:           decimal.NewFromInt(1),
 	}
 	invalid := []MovementIdentityInput{
-		func() MovementIdentityInput { value := base; value.Channel = Channel("OTHER"); return value }(),
+		func() MovementIdentityInput { value := base; value.Channel = TransactionSource("OTHER"); return value }(),
 		func() MovementIdentityInput { value := base; value.MovementKind = MovementKind("HOLD"); return value }(),
 		func() MovementIdentityInput { value := base; value.Amount = decimal.NewFromInt(-1); return value }(),
 		func() MovementIdentityInput { value := base; value.ProviderParentID = " "; return value }(),
@@ -152,7 +152,7 @@ func TestRiskAndValuationErrorAndUnpricedPaths(t *testing.T) {
 	if _, err := PolicySubjectAccountID(Direction("OTHER"), nil, nil); err == nil {
 		t.Fatal("unknown direction must fail policy subject selection")
 	}
-	if _, err := EvaluateRisk(RiskInput{Channel: Channel("OTHER"), Direction: DirectionInflow}); err == nil {
+	if _, err := EvaluateRisk(RiskInput{Channel: TransactionSource("OTHER"), Direction: DirectionInflow}); err == nil {
 		t.Fatal("unknown risk channel must fail")
 	}
 	if _, err := EvaluateRisk(RiskInput{Channel: ChannelSafeheron, Direction: Direction("OTHER")}); err == nil {
@@ -167,7 +167,7 @@ func TestRiskAndValuationErrorAndUnpricedPaths(t *testing.T) {
 	}
 
 	amount := decimal.NewFromInt(1)
-	if _, err := EvaluateUSDValue(USDValuationInput{Channel: Channel("OTHER"), Amount: amount}); err == nil {
+	if _, err := EvaluateUSDValue(USDValuationInput{Channel: TransactionSource("OTHER"), Amount: amount}); err == nil {
 		t.Fatal("unknown valuation channel must fail")
 	}
 	if _, err := EvaluateUSDValue(USDValuationInput{Channel: ChannelSafeheron, Amount: decimal.NewFromInt(-1)}); err == nil {

@@ -42,7 +42,7 @@ type CompanyFundValuationCandidateStore interface {
 // Finance-owned fields are deliberately absent.
 type CompanyFundTransactionValuationCandidate struct {
 	ID                        int64
-	Channel                   Channel
+	Channel                   TransactionSource
 	MovementKind              MovementKind
 	Direction                 Direction
 	Currency                  string

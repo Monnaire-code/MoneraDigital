@@ -48,7 +48,7 @@ const (
 // channel/sync-kind/window-key tuple makes every local calendar day
 // independently idempotent across scheduler replicas.
 type CompanyFundSyncRunInput struct {
-	Channel     Channel
+	Channel     TransactionSource
 	SyncKind    string
 	WindowKey   string
 	WindowStart time.Time
@@ -61,7 +61,7 @@ type CompanyFundSyncRunInput struct {
 // are database facts; callers must not derive lease expiry from local time.
 type CompanyFundSyncRun struct {
 	ID                   int64
-	Channel              Channel
+	Channel              TransactionSource
 	SyncKind             string
 	WindowKey            string
 	WindowStart          time.Time
@@ -91,7 +91,7 @@ type CompanyFundSyncRunCreateResult struct {
 // CompanyFundSyncRunClaimScope prevents a channel-specific reconciler from
 // claiming another provider's window when several replicas share one queue.
 type CompanyFundSyncRunClaimScope struct {
-	Channel  Channel
+	Channel  TransactionSource
 	SyncKind string
 }
 

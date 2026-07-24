@@ -28,7 +28,7 @@ const (
 // group fact. Complete provider messages remain owned by provider events; this
 // input accepts only allowlisted audit fields that survive payload retention.
 type ProviderTransactionFactInput struct {
-	Channel                   Channel
+	Channel                   TransactionSource
 	ProviderAccountKey        string
 	ProviderTransactionID     string
 	ProviderGroupID           string
@@ -209,7 +209,7 @@ func (r *DBRepository) InsertProviderTransactionFact(ctx context.Context, input 
 
 // GetProviderTransactionFact reads a durable normalized fact by its immutable
 // identity/version. It does not load a provider event's retained bytes.
-func (r *DBRepository) GetProviderTransactionFact(ctx context.Context, channel Channel, factIdentityKey string, factVersion int) (ProviderTransactionFact, error) {
+func (r *DBRepository) GetProviderTransactionFact(ctx context.Context, channel TransactionSource, factIdentityKey string, factVersion int) (ProviderTransactionFact, error) {
 	if !channel.Valid() {
 		return ProviderTransactionFact{}, fmt.Errorf("unsupported provider transaction fact channel %q", channel)
 	}
@@ -242,7 +242,7 @@ func verifyProviderEventForFact(ctx context.Context, tx *sql.Tx, input ProviderT
 		}
 		return fmt.Errorf("read source provider event provenance: %w", err)
 	}
-	if Channel(eventChannel) != input.Channel {
+	if TransactionSource(eventChannel) != input.Channel {
 		return fmt.Errorf("source provider event channel %q does not match fact channel %q", eventChannel, input.Channel)
 	}
 	if eventDigest != input.SourcePayloadDigest {
@@ -522,10 +522,10 @@ func scanProviderTransactionFact(row providerTransactionFactScanner) (ProviderTr
 	); err != nil {
 		return ProviderTransactionFact{}, err
 	}
-	if !Channel(channel).Valid() {
+	if !TransactionSource(channel).Valid() {
 		return ProviderTransactionFact{}, fmt.Errorf("stored provider transaction fact has unsupported channel %q", channel)
 	}
-	fact.Channel = Channel(channel)
+	fact.Channel = TransactionSource(channel)
 	fact.ProviderAccountKey = providerAccountKey.String
 	fact.ProviderTransactionID = providerTransactionID.String
 	fact.ProviderGroupID = providerGroupID.String

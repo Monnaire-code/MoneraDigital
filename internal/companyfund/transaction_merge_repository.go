@@ -65,7 +65,7 @@ func (r *DBRepository) resolveIncomingTransactionProvenance(ctx context.Context,
 		}
 		return transactionProviderProvenance{}, fmt.Errorf("read latest provider event provenance: %w", err)
 	}
-	if Channel(providerEventChannel) != input.Channel {
+	if TransactionSource(providerEventChannel) != input.Channel {
 		return transactionProviderProvenance{}, fmt.Errorf("latest provider event channel %q does not match transaction channel %q", providerEventChannel, input.Channel)
 	}
 	if providerEventDigest != provenance.RawSnapshotDigest {
@@ -74,7 +74,7 @@ func (r *DBRepository) resolveIncomingTransactionProvenance(ctx context.Context,
 	return provenance, nil
 }
 
-func (r *DBRepository) validateProviderTransactionFactOwnership(ctx context.Context, tx *sql.Tx, transactionChannel Channel, stableProviderAccountKey, stableProviderTransactionID string, providerTransactionFactID *int64) error {
+func (r *DBRepository) validateProviderTransactionFactOwnership(ctx context.Context, tx *sql.Tx, transactionChannel TransactionSource, stableProviderAccountKey, stableProviderTransactionID string, providerTransactionFactID *int64) error {
 	if providerTransactionFactID == nil {
 		return nil
 	}
@@ -90,7 +90,7 @@ func (r *DBRepository) validateProviderTransactionFactOwnership(ctx context.Cont
 		}
 		return fmt.Errorf("read provider transaction fact ownership: %w", err)
 	}
-	if Channel(factChannel) != transactionChannel {
+	if TransactionSource(factChannel) != transactionChannel {
 		return fmt.Errorf("provider transaction fact channel %q does not match transaction channel %q", factChannel, transactionChannel)
 	}
 	if stableProviderAccountKey == "" || !factProviderAccountKey.Valid || factProviderAccountKey.String == "" || factProviderAccountKey.String != stableProviderAccountKey {

@@ -296,7 +296,7 @@ func finalizeCompanyFundRuntime(c *Container) {
 	safeNormalizer, safeHistoryClient := newCompanyFundSafeheronNormalizer(c, config.SafeheronCoinCatalogRefreshInterval)
 	airBundle, airwallexConfig := newCompanyFundAirwallexRuntimeBundle(c.CompanyFundAccountRegistry, config)
 
-	normalizers := make(map[companyfund.Channel]companyfund.ProviderEventNormalizer, 2)
+	normalizers := make(map[companyfund.TransactionSource]companyfund.ProviderEventNormalizer, 2)
 	if safeNormalizer != nil {
 		normalizers[companyfund.ChannelSafeheron] = safeNormalizer
 	}

@@ -86,7 +86,7 @@ func parseCompanyFundFinanceFilter(c *gin.Context) (companyfund.FinanceTransacti
 		OperatingIncomeExpense:   operating,
 	}
 	for _, value := range companyFundQueryValues(values, "channel") {
-		filter.Channels = append(filter.Channels, companyfund.Channel(value))
+		filter.Channels = append(filter.Channels, companyfund.TransactionSource(value))
 	}
 	for _, value := range companyFundQueryValues(values, "direction") {
 		filter.Directions = append(filter.Directions, companyfund.Direction(value))

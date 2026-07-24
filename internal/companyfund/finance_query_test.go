@@ -20,7 +20,7 @@ func TestFinanceFilter_BuildsOneCanonicalInclusionContractForDashboardAndDrilldo
 	filter, err := (FinanceTransactionFilter{
 		DateFrom:                 &from,
 		DateTo:                   &to,
-		Channels:                 []Channel{ChannelSafeheron, ChannelAirwallex, ChannelSafeheron},
+		Channels:                 []TransactionSource{ChannelSafeheron, ChannelAirwallex, ChannelSafeheron},
 		AccountIDs:               []int64{9, 3, 9},
 		Directions:               []Direction{DirectionOutflow, DirectionInflow},
 		Currencies:               []string{"usdt", "USD", "USDT"},

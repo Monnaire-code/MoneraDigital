@@ -211,7 +211,7 @@ func (r *DBRepository) resolveCompanyFundTransactionLinkTarget(
 	ctx context.Context,
 	tx *sql.Tx,
 	transactionID int64,
-	channel Channel,
+	channel TransactionSource,
 	movementKey string,
 	label string,
 	targetMovementKey string,
@@ -235,7 +235,7 @@ func (r *DBRepository) resolveCompanyFundTransactionLinkTarget(
 	if targetID == transactionID {
 		return nil, fmt.Errorf("%s movement link cannot reference itself", label)
 	}
-	if Channel(targetChannel) != channel {
+	if TransactionSource(targetChannel) != channel {
 		return nil, fmt.Errorf("%s movement target channel %q does not match transaction channel %q", label, targetChannel, channel)
 	}
 	return &targetID, nil

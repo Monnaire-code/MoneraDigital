@@ -10,7 +10,7 @@ import (
 func TestManualChannelIsAValidValuationCandidate(t *testing.T) {
 	candidate := CompanyFundTransactionValuationCandidate{
 		ID:           101,
-		Channel:      Channel("MANUAL"),
+		Channel:      TransactionSource("MANUAL"),
 		MovementKind: MovementKindAdjustment,
 		Direction:    DirectionInflow,
 		Currency:     "USDT",

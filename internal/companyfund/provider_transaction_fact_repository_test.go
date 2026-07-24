@@ -221,7 +221,7 @@ func TestInsertProviderTransactionFact_RejectsInvalidInputBeforeDatabaseUse(t *t
 func TestInsertProviderTransactionFact_RejectsSourceEventChannelOrDigestMismatch(t *testing.T) {
 	for _, testCase := range []struct {
 		name         string
-		eventChannel Channel
+		eventChannel TransactionSource
 		eventDigest  string
 	}{
 		{name: "channel", eventChannel: ChannelAirwallex},

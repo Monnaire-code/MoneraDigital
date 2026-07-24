@@ -54,7 +54,6 @@ test-artifacts/
 openspec/
 main
 .gstack/
-/omx_wiki/
 
 # Go binaries
 /migrate
@@ -71,3 +70,7 @@ coverage.out
 /playwright-report/
 monera-digital
 docs/月度基金报告文稿.xlsx
+
+# wiki
+graphify-out/
+.graphifyignore

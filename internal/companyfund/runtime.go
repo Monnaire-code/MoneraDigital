@@ -885,7 +885,7 @@ func (runtime *CompanyFundRuntime) finalizeAirwallexFailure(ctx context.Context,
 	return result, errors.Join(providerErr, finalizeErr)
 }
 
-func (runtime *CompanyFundRuntime) finalizeReconciliationFailure(parent context.Context, channel Channel, runID int64, attempt int, partial bool) error {
+func (runtime *CompanyFundRuntime) finalizeReconciliationFailure(parent context.Context, channel TransactionSource, runID int64, attempt int, partial bool) error {
 	if attempt <= 0 {
 		attempt = 1
 	}

@@ -89,7 +89,7 @@ type AirwallexFinancialTransactionsReconcileInput struct {
 // all parser/API pins, and page size, so a changed request contract never
 // silently reuses an older run.
 type AirwallexFinancialTransactionsSyncRunInput struct {
-	Channel              Channel
+	Channel              TransactionSource
 	SyncKind             string
 	WindowKey            string
 	CompanyFundAccountID int64

@@ -21,7 +21,7 @@ func TestProviderEventWorker_ProcessNextWritesAllMovementsBeforeFinalizing(t *te
 		validProviderEventWorkerMovement("movement-2"),
 	}}}
 	now := time.Date(2026, time.July, 10, 5, 0, 0, 0, time.UTC)
-	worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[Channel]ProviderEventNormalizer{
+	worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: normalizer,
 	}, now)
 
@@ -59,7 +59,7 @@ func TestProviderEventWorker_ProcessNextInvokesOptionalValuatorAfterSuccessfulUp
 	repository := &providerEventWorkerRepositoryStub{lease: &lease}
 	valuator := &providerEventWorkerValuatorStub{result: CompanyFundValuationProcessResult{Err: errors.New("temporary valuation cache failure")}}
 	movementWakeCount := 0
-	worker, err := NewProviderEventWorker(repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"payment"}`)}, map[Channel]ProviderEventNormalizer{
+	worker, err := NewProviderEventWorker(repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"payment"}`)}, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: &providerEventNormalizerStub{result: ProviderEventNormalizationResult{Movements: []TransactionUpsertInput{
 			validProviderEventWorkerMovement("valuation-hook"),
 		}}},
@@ -95,7 +95,7 @@ func TestProviderEventWorker_ProcessNextContainsOptionalValuatorPanicAfterLedger
 	lease := validProviderEventWorkerLease()
 	repository := &providerEventWorkerRepositoryStub{lease: &lease}
 	valuator := &providerEventWorkerValuatorStub{panicValue: "valuation must not affect provider event"}
-	worker, err := NewProviderEventWorker(repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"payment"}`)}, map[Channel]ProviderEventNormalizer{
+	worker, err := NewProviderEventWorker(repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"payment"}`)}, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: &providerEventNormalizerStub{result: ProviderEventNormalizationResult{Movements: []TransactionUpsertInput{
 			validProviderEventWorkerMovement("valuation-panic-hook"),
 		}}},
@@ -122,7 +122,7 @@ func TestProviderEventWorker_ProcessNextDeadLettersPermanentNormalizationFailure
 	repository := &providerEventWorkerRepositoryStub{lease: &lease}
 	payloadReader := &providerEventPayloadReaderStub{payload: []byte(`{"schema":"unknown"}`)}
 	normalizer := &providerEventNormalizerStub{err: NewPermanentProviderEventError(errors.New("unsupported payload schema version"))}
-	worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[Channel]ProviderEventNormalizer{
+	worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: normalizer,
 	}, time.Now().UTC())
 
@@ -147,7 +147,7 @@ func TestProviderEventWorker_ProcessNextSchedulesRetryForTransientFailure(t *tes
 	repository := &providerEventWorkerRepositoryStub{lease: &lease}
 	payloadReader := &providerEventPayloadReaderStub{err: errors.New("temporary provider payload read failure")}
 	now := time.Date(2026, time.July, 10, 6, 0, 0, 0, time.UTC)
-	worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[Channel]ProviderEventNormalizer{
+	worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: &providerEventNormalizerStub{},
 	}, now)
 
@@ -179,7 +179,7 @@ func TestProviderEventWorker_ProcessNextDoesNotLogProviderFailureDetailWhenRetry
 	}
 	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{
 		err: errors.New(sensitiveDetail),
-	}, map[Channel]ProviderEventNormalizer{
+	}, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: &providerEventNormalizerStub{},
 	}, time.Date(2026, time.July, 10, 6, 0, 0, 0, time.UTC))
 
@@ -203,7 +203,7 @@ func TestProviderEventWorker_ProcessNextDoesNotLogProviderFailureDetailWhenRetry
 func TestProviderEventWorker_ProcessNextIgnoresSupportedNonMovementEvent(t *testing.T) {
 	lease := validProviderEventWorkerLease()
 	repository := &providerEventWorkerRepositoryStub{lease: &lease}
-	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{}`)}, map[Channel]ProviderEventNormalizer{
+	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{}`)}, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: &providerEventNormalizerStub{result: ProviderEventNormalizationResult{Ignored: true}},
 	}, time.Now().UTC())
 
@@ -239,7 +239,7 @@ func TestProviderEventWorker_ProcessNextPersistsFactsBeforeBindingsWithoutCopyin
 			{MovementKey: childOne.MovementKey, FactReference: "child-direct"},
 		},
 	}}
-	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"batch"}`)}, map[Channel]ProviderEventNormalizer{
+	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"batch"}`)}, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: normalizer,
 	}, time.Now().UTC())
 
@@ -283,7 +283,7 @@ func TestProviderEventWorker_ProcessNextDeadLettersInvalidUnprovenParentTotalBin
 			{MovementKey: movement.MovementKey, FactReference: "parent-total"},
 		},
 	}}
-	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"batch"}`)}, map[Channel]ProviderEventNormalizer{
+	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"batch"}`)}, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: normalizer,
 	}, time.Now().UTC())
 
@@ -307,7 +307,7 @@ func TestProviderEventWorker_ProcessNextRetriesProviderFactInsertFailure(t *test
 		Movements:    []TransactionUpsertInput{movement},
 		FactBindings: []ProviderEventMovementFactBinding{{MovementKey: movement.MovementKey, FactReference: "direct"}},
 	}}
-	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"payment"}`)}, map[Channel]ProviderEventNormalizer{
+	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{"event":"payment"}`)}, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: normalizer,
 	}, time.Now().UTC())
 
@@ -323,7 +323,7 @@ func TestProviderEventWorker_ProcessNextRetriesProviderFactInsertFailure(t *test
 func TestProviderEventWorker_ProcessNextDoesNotFinalizeAfterLeaseRenewalLoss(t *testing.T) {
 	lease := validProviderEventWorkerLease()
 	repository := &providerEventWorkerRepositoryStub{lease: &lease, renewErr: ErrProviderEventLeaseNotOwned}
-	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{}`)}, map[Channel]ProviderEventNormalizer{
+	worker := newProviderEventWorkerForTest(t, repository, &providerEventPayloadReaderStub{payload: []byte(`{}`)}, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: &providerEventNormalizerStub{},
 	}, time.Now().UTC())
 
@@ -370,7 +370,7 @@ func TestProviderEventWorker_ProcessNextRecoversPayloadNormalizerAndUpsertPanics
 				validProviderEventWorkerMovement("movement-panic"),
 			}}}
 			test.setup(repository, payloadReader, normalizer)
-			worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[Channel]ProviderEventNormalizer{
+			worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[TransactionSource]ProviderEventNormalizer{
 				ChannelAirwallex: normalizer,
 			}, time.Now().UTC())
 
@@ -396,7 +396,7 @@ func TestProviderEventWorker_ProcessNextReturnsNoWorkWithoutCallingDependencies(
 	repository := &providerEventWorkerRepositoryStub{}
 	payloadReader := &providerEventPayloadReaderStub{}
 	normalizer := &providerEventNormalizerStub{}
-	worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[Channel]ProviderEventNormalizer{
+	worker := newProviderEventWorkerForTest(t, repository, payloadReader, map[TransactionSource]ProviderEventNormalizer{
 		ChannelAirwallex: normalizer,
 	}, time.Now().UTC())
 
@@ -441,7 +441,7 @@ func newProviderEventWorkerForTest(
 	t *testing.T,
 	repository ProviderEventWorkerRepository,
 	payloadReader ProviderEventPayloadReader,
-	normalizers map[Channel]ProviderEventNormalizer,
+	normalizers map[TransactionSource]ProviderEventNormalizer,
 	now time.Time,
 ) *ProviderEventWorker {
 	t.Helper()
