@@ -9,8 +9,8 @@ import (
 func TestResolveMigrationDSN_PreferMigrationURL(t *testing.T) {
 	got, err := ResolveMigrationDSN(ResolveMigrationDSNInput{
 		AppEnv:               "local",
-		MigrationDatabaseURL: "postgresql://u:p@ep-direct.example.com/db?sslmode=require",
-		DatabaseURL:          "postgresql://u:p@ep-other-pooler.example.com/db?sslmode=require",
+		MigrationDatabaseURL: "postgresql://user:p@ep-direct.example.com/db?sslmode=require",
+		DatabaseURL:          "postgresql://user:p@ep-other-pooler.example.com/db?sslmode=require",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestResolveMigrationDSN_PreferMigrationURL(t *testing.T) {
 func TestResolveMigrationDSN_StageRequiresDedicated(t *testing.T) {
 	_, err := ResolveMigrationDSN(ResolveMigrationDSNInput{
 		AppEnv:      "stage",
-		DatabaseURL: "postgresql://u:secret@ep-direct.example.com/db",
+		DatabaseURL: "postgresql://user:secret@ep-direct.example.com/db",
 	})
 	if err == nil {
 		t.Fatal("expected fail closed without MIGRATION_DATABASE_URL on stage")
@@ -40,7 +40,7 @@ func TestResolveMigrationDSN_StageRequiresDedicated(t *testing.T) {
 func TestResolveMigrationDSN_ProductionRequiresDedicated(t *testing.T) {
 	_, err := ResolveMigrationDSN(ResolveMigrationDSNInput{
 		AppEnv:      "production",
-		DatabaseURL: "postgresql://u:p@localhost:5432/db",
+		DatabaseURL: "postgresql://user:p@localhost:5432/db",
 	})
 	if err == nil {
 		t.Fatal("expected fail closed on production")
@@ -50,7 +50,7 @@ func TestResolveMigrationDSN_ProductionRequiresDedicated(t *testing.T) {
 func TestResolveMigrationDSN_UnknownAppEnvRequiresDedicated(t *testing.T) {
 	_, err := ResolveMigrationDSN(ResolveMigrationDSNInput{
 		AppEnv:      "staging",
-		DatabaseURL: "postgresql://u:p@localhost:5432/db",
+		DatabaseURL: "postgresql://user:p@localhost:5432/db",
 	})
 	if err == nil {
 		t.Fatal("expected fail closed on staging")
@@ -60,7 +60,7 @@ func TestResolveMigrationDSN_UnknownAppEnvRequiresDedicated(t *testing.T) {
 func TestResolveMigrationDSN_LocalFallbackDirect(t *testing.T) {
 	got, err := ResolveMigrationDSN(ResolveMigrationDSNInput{
 		AppEnv:      "local",
-		DatabaseURL: "postgresql://u:p@localhost:5432/monera",
+		DatabaseURL: "postgresql://user:p@localhost:5432/monera",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,15 +74,15 @@ func TestResolveMigrationDSN_RejectPoolerEverywhere(t *testing.T) {
 	cases := []ResolveMigrationDSNInput{
 		{
 			AppEnv:               "local",
-			MigrationDatabaseURL: "postgresql://u:hunter2@ep-foo-pooler.c-2.us-east-1.aws.example.com/db",
+			MigrationDatabaseURL: "postgresql://user:hunter2@ep-foo-pooler.c-2.us-east-1.aws.example.com/db",
 		},
 		{
 			AppEnv:      "development",
-			DatabaseURL: "postgresql://u:hunter2@EP-FOO-POOLER.test.local/db",
+			DatabaseURL: "postgresql://user:hunter2@EP-FOO-POOLER.test.local/db",
 		},
 		{
 			AppEnv:               "production",
-			MigrationDatabaseURL: "postgresql://u:hunter2@ep-x-pooler.example.com/db",
+			MigrationDatabaseURL: "postgresql://user:hunter2@ep-x-pooler.example.com/db",
 		},
 	}
 	for _, in := range cases {
@@ -102,7 +102,7 @@ func TestResolveMigrationDSN_RejectPoolerEverywhere(t *testing.T) {
 func TestResolveMigrationDSN_AcceptDirectNeon(t *testing.T) {
 	got, err := ResolveMigrationDSN(ResolveMigrationDSNInput{
 		AppEnv:               "production",
-		MigrationDatabaseURL: "postgresql://u:p@ep-foo.us-east-1.aws.example.com/neondb?sslmode=require",
+		MigrationDatabaseURL: "postgresql://user:p@ep-foo.us-east-1.aws.example.com/neondb?sslmode=require",
 	})
 	if err != nil {
 		t.Fatal(err)

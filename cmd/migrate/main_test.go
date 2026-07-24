@@ -297,7 +297,7 @@ func TestMigrateCLI_RejectsPoolerMigrationURL(t *testing.T) {
 	cmd := exec.Command("go", "run", ".", "-dry-run")
 	cmd.Env = append(os.Environ(),
 		"APP_ENV=production",
-		"MIGRATION_DATABASE_URL=postgresql://u:secret-pass@ep-foo-pooler.example.com/db?sslmode=require",
+		"MIGRATION_DATABASE_URL=postgresql://user:secret-pass@ep-foo-pooler.example.com/db?sslmode=require",
 		"DATABASE_URL=",
 		"EXPECTED_MIGRATION_CEILING=",
 	)
@@ -320,7 +320,7 @@ func TestMigrateCLI_RequiresDedicatedURLOnProduction(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"APP_ENV=production",
 		"MIGRATION_DATABASE_URL=",
-		"DATABASE_URL=postgresql://u:p@localhost:5432/db",
+		"DATABASE_URL=postgresql://user:p@localhost:5432/db",
 		"EXPECTED_MIGRATION_CEILING=",
 	)
 	out, err := cmd.CombinedOutput()
